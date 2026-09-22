@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val ariaVersionName = "0.2.8-alpha"
+
 android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -35,7 +37,8 @@ android {
         minSdk = 33
         targetSdk = 35
         versionCode = 10
-        versionName = "0.2.8-alpha"
+        versionName = ariaVersionName
+        resValue("string", "app_name", "ARIA Mobile $ariaVersionName")
     }
 }
 

@@ -85,9 +85,19 @@ jobs:
         shell: bash
         run: bash scripts/verify-apk.sh
 
+      - name: Name versioned APK
+        id: apk-name
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json; print(json.load(open("app/build/outputs/apk/debug/output-metadata.json"))["elements"][0]["versionName"])')"
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/ARIA-Mobile-${version}.apk"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Upload ARIA APK
         uses: actions/upload-artifact@v4
         with:
-          name: ARIA-Mobile-Alpha
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: ARIA-Mobile-${{ steps.apk-name.outputs.version }}
+          path: dist/ARIA-Mobile-*.apk
           if-no-files-found: error
