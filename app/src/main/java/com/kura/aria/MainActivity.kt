@@ -42,7 +42,7 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 40, 32, 32) }
         val title = TextView(this).apply { text = "ARIA"; textSize = 30f; gravity = Gravity.CENTER }
-        val subtitle = TextView(this).apply { text = "Mobile Alpha 0.2.3 • IA local"; textSize = 14f; gravity = Gravity.CENTER }
+        val subtitle = TextView(this).apply { text = "Mobile Alpha 0.2.5 • IA local"; textSize = 14f; gravity = Gravity.CENTER }
         status = TextView(this).apply { text = "Inicializando ARIA…"; textSize = 14f; gravity = Gravity.CENTER; setPadding(0, 12, 0, 12) }
         loadBrain = Button(this).apply { text = "CAMBIAR CEREBRO 🧠"; isEnabled = false; setOnClickListener { chooseModel() } }
         conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 20, 0, 20) }
@@ -57,7 +57,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(root)
 
         chatHistory = ChatHistory(applicationContext)
-        val savedMessages = withContext(Dispatchers.IO) { chatHistory.readAll() }
+        val savedMessages = chatHistory.readAll()
         if (savedMessages.isEmpty()) aria(AriaPersonality.welcome)
         else savedMessages.forEach { addMessage(it.role, it.text) }
         send.setOnClickListener { sendMessage() }
@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity() {
                         engine.setSystemPrompt(AriaPersonality.systemPrompt)
                         modelLoaded = true
                         status.text = "Cerebro local: LISTO 🧠 • restaurado"
-                        aria(AriaPersonality.restored)
+                        if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.restored)
                     }
                 }
                 is InferenceEngine.State.Error -> {
@@ -201,7 +201,7 @@ class MainActivity : AppCompatActivity() {
             rememberModel(model)
             modelLoaded = true
             status.text = "Cerebro local: LISTO 🧠"
-            aria(AriaPersonality.ready)
+            if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.ready)
         } catch (e: TimeoutCancellationException) {
             status.text = "El motor no respondió a tiempo; reinicia ARIA."
         } catch (e: CancellationException) {
