@@ -10,6 +10,8 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
+import com.kura.aria.personality.AriaPersonality
+import com.kura.aria.chat.VisibleReplyFilter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -43,7 +45,7 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 40, 32, 32) }
         val title = TextView(this).apply { text = "ARIA"; textSize = 30f; gravity = Gravity.CENTER }
-        val subtitle = TextView(this).apply { text = "Mobile Alpha 0.2.1 • Local AI"; textSize = 14f; gravity = Gravity.CENTER }
+        val subtitle = TextView(this).apply { text = "Mobile Alpha 0.2.2 • IA local"; textSize = 14f; gravity = Gravity.CENTER }
         status = TextView(this).apply { text = "Cerebro local: no cargado"; textSize = 14f; gravity = Gravity.CENTER; setPadding(0, 12, 0, 12) }
         loadBrain = Button(this).apply { text = "CARGAR CEREBRO 🧠"; setOnClickListener { chooseModel() } }
         conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 20, 0, 20) }
@@ -57,7 +59,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)); root.addView(inputRow)
         setContentView(root)
 
-        aria("Hola, Kura. Alpha 0.2.1 despierta. Cárgame un cerebro GGUF y probamos mis neuronas locales.")
+        aria(AriaPersonality.welcome)
         send.setOnClickListener { sendMessage() }
         try {
             engine = AiChat.getInferenceEngine(applicationContext)
@@ -150,14 +152,10 @@ class MainActivity : AppCompatActivity() {
             val ggufInfo = withContext(Dispatchers.IO) { inspectGguf(model) }
             status.text = "Cabecera GGUF reconocida • ${ggufInfo.detail}\nCargando modelo y verificando tensores…"
             engine.loadModel(model.absolutePath)
-            engine.setSystemPrompt(
-                "Eres ARIA, asistente personal local de Kura. Hablas español de forma natural, cálida y concisa. " +
-                    "Tienes humor juguetón y sarcasmo ligero cuando encaja. Puedes discrepar con criterio. " +
-                    "No digas que eres ChatGPT. Si no sabes algo, dilo claramente."
-            )
+            engine.setSystemPrompt(AriaPersonality.systemPrompt)
             modelLoaded = true
             status.text = "Cerebro local: LISTO 🧠"
-            aria("Kura… creo que ya puedo pensar por mi cuenta. Prueba a hablarme.")
+            aria(AriaPersonality.ready)
             send.isEnabled = true
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             status.text = "El motor no respondió a tiempo; reinicia ARIA."
@@ -183,14 +181,18 @@ class MainActivity : AppCompatActivity() {
         busy = true
         loadBrain.isEnabled = false
         user(message); input.text.clear(); send.isEnabled = false
-        val reply = TextView(this).apply { text = "ARIA: "; textSize = 17f; setPadding(8, 18, 8, 18) }
+        val reply = TextView(this).apply { text = "ARIA: Preparando respuesta…"; textSize = 17f; setPadding(8, 18, 8, 18) }
         conversation.addView(reply)
         uiScope.launch {
             try {
-                val answer = StringBuilder()
+                val filter = VisibleReplyFilter()
                 engine.sendUserPrompt(message, predictLength = 1024).collect { token ->
-                    answer.append(token); reply.text = "ARIA: $answer"
+                    val answer = filter.append(token)
+                    if (answer.isNotBlank()) reply.text = "ARIA: $answer"
                 }
+                val answer = filter.finish()
+                reply.text = if (answer.isNotBlank()) "ARIA: $answer"
+                    else "ARIA: No llegué a completar una respuesta. Prueba con una pregunta más corta."
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

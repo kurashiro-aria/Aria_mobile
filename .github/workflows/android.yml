@@ -47,6 +47,9 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Test chat response filtering
+        run: gradle :app:testDebugUnitTest --stacktrace --console=plain
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace --console=plain
 

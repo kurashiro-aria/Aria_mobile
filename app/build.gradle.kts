@@ -19,12 +19,13 @@ android {
         applicationId = "com.kura.aria"
         minSdk = 33
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.2.1-alpha"
+        versionCode = 4
+        versionName = "0.2.2-alpha"
     }
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation(project(":llama"))
