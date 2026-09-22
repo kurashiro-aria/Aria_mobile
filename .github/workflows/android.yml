@@ -36,6 +36,24 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Hosted runners otherwise create a different debug certificate on every run.
+      # Keeping this keystore stable makes consecutive Alpha APKs valid Android updates.
+      - name: Restore stable ARIA debug signing key
+        id: signing-key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: aria-mobile-alpha-debug-signing-v1
+
+      - name: Create ARIA debug signing key
+        if: steps.signing-key.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.android
+          keytool -genkeypair -v             -keystore ~/.android/debug.keystore             -storepass android             -alias androiddebugkey             -keypass android             -dname "CN=ARIA Alpha,O=Kura,C=CL"             -keyalg RSA -keysize 2048 -validity 10000
+
+      - name: Verify signing identity
+        run: keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep -E "Alias name:|SHA256:"
+
       - name: Accept Android SDK licenses
         run: yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
 
