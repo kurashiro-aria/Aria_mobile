@@ -12,6 +12,7 @@ import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.kura.aria.personality.AriaPersonality
 import com.kura.aria.chat.VisibleReplyFilter
+import com.kura.aria.chat.ChatHistory
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -25,6 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var input: EditText
     private lateinit var send: Button
     private lateinit var engine: InferenceEngine
+    private lateinit var chatHistory: ChatHistory
     private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var modelLoaded = false
     private var busy = false
@@ -54,7 +56,10 @@ class MainActivity : AppCompatActivity() {
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)); root.addView(inputRow)
         setContentView(root)
 
-        aria(AriaPersonality.welcome)
+        chatHistory = ChatHistory(applicationContext)
+        val savedMessages = withContext(Dispatchers.IO) { chatHistory.readAll() }
+        if (savedMessages.isEmpty()) aria(AriaPersonality.welcome)
+        else savedMessages.forEach { addMessage(it.role, it.text) }
         send.setOnClickListener { sendMessage() }
         try {
             engine = AiChat.getInferenceEngine(applicationContext)
@@ -220,7 +225,9 @@ class MainActivity : AppCompatActivity() {
         if (message.isEmpty() || !modelLoaded || busy) return
         busy = true
         loadBrain.isEnabled = false
-        user(message); input.text.clear(); send.isEnabled = false
+        user(message)
+        uiScope.launch(Dispatchers.IO) { chatHistory.append("Kura", message) }
+        input.text.clear(); send.isEnabled = false
         val reply = TextView(this).apply { text = "ARIA: Preparando respuesta…"; textSize = 17f; setPadding(8, 18, 8, 18) }
         conversation.addView(reply)
         uiScope.launch {
@@ -231,8 +238,12 @@ class MainActivity : AppCompatActivity() {
                     if (answer.isNotBlank()) reply.text = "ARIA: $answer"
                 }
                 val answer = filter.finish()
-                reply.text = if (answer.isNotBlank()) "ARIA: $answer"
-                    else "ARIA: No llegué a completar una respuesta. Prueba con una pregunta más corta."
+                if (answer.isNotBlank()) {
+                    reply.text = "ARIA: $answer"
+                    withContext(Dispatchers.IO) { chatHistory.append("ARIA", answer) }
+                } else {
+                    reply.text = "ARIA: No llegué a completar una respuesta. Prueba con una pregunta más corta."
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
