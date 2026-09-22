@@ -44,7 +44,15 @@ class MainActivity : AppCompatActivity() {
         val title = TextView(this).apply { text = "ARIA"; textSize = 30f; gravity = Gravity.CENTER }
         val subtitle = TextView(this).apply { text = "ARIA ${BuildConfig.VERSION_NAME} • IA local"; textSize = 14f; gravity = Gravity.CENTER }
         status = TextView(this).apply { text = "Inicializando ARIA…"; textSize = 14f; gravity = Gravity.CENTER; setPadding(0, 12, 0, 12) }
-        loadBrain = Button(this).apply { text = "CAMBIAR CEREBRO 🧠"; isEnabled = false; setOnClickListener { chooseModel() } }
+        loadBrain = Button(this).apply {
+            text = "CARGAR CEREBRO 🧠"
+            isEnabled = false
+            setOnClickListener {
+                if (!busy && savedModel() != null && !modelLoaded) {
+                    uiScope.launch { restoreBrainIfNeeded() }
+                } else chooseModel()
+            }
+        }
         conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 20, 0, 20) }
         val scroll = ScrollView(this).apply { addView(conversation) }
         val inputRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -81,32 +89,28 @@ class MainActivity : AppCompatActivity() {
                     it !is InferenceEngine.State.Uninitialized && it !is InferenceEngine.State.Initializing
                 }
             }
-            when (state) {
-                is InferenceEngine.State.ModelReady -> {
-                    modelLoaded = true
-                    status.text = "Cerebro local: LISTO 🧠 • sesión activa"
-                }
-                is InferenceEngine.State.Initialized -> {
-                    val model = savedModel()
-                    if (model == null) {
-                        modelLoaded = false
-                        status.text = "Cerebro local: no cargado"
-                    } else {
-                        status.text = "Reconectando cerebro local…"
-                        engine.loadModel(model.absolutePath)
-                        engine.setSystemPrompt(AriaPersonality.systemPrompt)
-                        modelLoaded = true
-                        status.text = "Cerebro local: LISTO 🧠 • restaurado"
-                        if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.restored)
-                    }
-                }
-                is InferenceEngine.State.Error -> {
-                    modelLoaded = false
-                    status.text = "Error del motor: ${state.exception.message ?: state.exception.javaClass.simpleName}"
-                }
-                else -> {
+            if (state is InferenceEngine.State.ModelReady) {
+                modelLoaded = true
+                status.text = "Cerebro local: LISTO 🧠 • sesión activa"
+            } else {
+                val model = savedModel()
+                if (model == null) {
                     modelLoaded = false
                     status.text = "Cerebro local: no cargado"
+                } else {
+                    if (state is InferenceEngine.State.Error) {
+                        status.text = "Reiniciando motor local…"
+                        withContext(Dispatchers.IO) { engine.cleanUp() }
+                    }
+                    check(engine.state.value is InferenceEngine.State.Initialized) {
+                        "Motor en estado ${engine.state.value.javaClass.simpleName}; reinicia ARIA."
+                    }
+                    status.text = "Reconectando cerebro local…"
+                    engine.loadModel(model.absolutePath)
+                    engine.setSystemPrompt(AriaPersonality.systemPrompt)
+                    modelLoaded = true
+                    status.text = "Cerebro local: LISTO 🧠 • restaurado"
+                    if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.restored)
                 }
             }
         } catch (e: TimeoutCancellationException) {
@@ -119,6 +123,8 @@ class MainActivity : AppCompatActivity() {
         } finally {
             busy = false
             loadBrain.isEnabled = ::engine.isInitialized
+            loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠"
+                else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
         }
     }
@@ -131,7 +137,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun rememberModel(model: File) {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(LAST_MODEL, model.name).apply()
+        check(getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putString(LAST_MODEL, model.name).commit()) { "No pude guardar el cerebro seleccionado." }
     }
 
     private fun chooseModel() {
@@ -196,9 +203,9 @@ class MainActivity : AppCompatActivity() {
             }
             val ggufInfo = withContext(Dispatchers.IO) { inspectGguf(model) }
             status.text = "Cabecera GGUF reconocida • ${ggufInfo.detail}\nCargando modelo y verificando tensores…"
+            rememberModel(model)
             engine.loadModel(model.absolutePath)
             engine.setSystemPrompt(AriaPersonality.systemPrompt)
-            rememberModel(model)
             modelLoaded = true
             status.text = "Cerebro local: LISTO 🧠"
             if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.ready)
@@ -216,6 +223,8 @@ class MainActivity : AppCompatActivity() {
             temporary?.delete()
             busy = false
             loadBrain.isEnabled = true
+            loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠"
+                else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
         }
     }
@@ -253,7 +262,10 @@ class MainActivity : AppCompatActivity() {
                 modelLoaded = engine.state.value is InferenceEngine.State.ModelReady
                 send.isEnabled = modelLoaded
                 loadBrain.isEnabled = true
-                if (!modelLoaded) status.text = "El motor requiere recargar el cerebro."
+                if (!modelLoaded) {
+                    status.text = "El motor requiere reconectar el cerebro."
+                    loadBrain.text = "RECONECTAR CEREBRO 🧠"
+                }
             }
         }
     }
