@@ -25,7 +25,7 @@ jobs:
           sed -i 's/alias(libs.plugins.android.library)/id("com.android.library")/' llama.cpp/examples/llama.android/lib/build.gradle.kts
           sed -i 's/alias(libs.plugins.jetbrains.kotlin.android)/id("org.jetbrains.kotlin.android")/' llama.cpp/examples/llama.android/lib/build.gradle.kts
           sed -i 's/compileSdk = 36/compileSdk = 35/' llama.cpp/examples/llama.android/lib/build.gradle.kts
-          sed -i 's/minSdk = 33/minSdk = 26/' llama.cpp/examples/llama.android/lib/build.gradle.kts
+          sed -i 's/minSdk = 33/minSdk = 33/' llama.cpp/examples/llama.android/lib/build.gradle.kts
           sed -i 's/libs.androidx.core.ktx/"androidx.core:core-ktx:1.15.0"/' llama.cpp/examples/llama.android/lib/build.gradle.kts
 
       - name: Set up Java 17
