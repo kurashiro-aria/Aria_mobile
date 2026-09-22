@@ -79,11 +79,12 @@ jobs:
           s = k.read_text()
           native_marker = "    private external fun systemInfo(): String\n"
           s = s.replace(native_marker, "    private external fun lastNativeLog(): String\n\n" + native_marker, 1)
-          old = """                load(pathToModel).let {
-                    // TODO-han.yin: find a better way to pass other error codes
-                    if (it != 0) throw UnsupportedArchitectureException()
-                }
-          """
+          old_start = "                load(pathToModel).let {\n"
+          old_end = "                prepare().let {\n"
+          start = s.find(old_start)
+          end = s.find(old_end, start)
+          if start < 0 or end < 0:
+              raise SystemExit("InferenceEngineImpl load block not found")
           new = """                load(pathToModel).let {
                     if (it != 0) {
                         val nativeDetail = lastNativeLog().trim().takeLast(6000)
@@ -93,10 +94,8 @@ jobs:
                         )
                     }
                 }
-          """
-          if old not in s:
-              raise SystemExit("InferenceEngineImpl load block not found")
-          s = s.replace(old, new, 1)
+"""
+          s = s[:start] + new + s[end:]
           k.write_text(s)
           PY
 
