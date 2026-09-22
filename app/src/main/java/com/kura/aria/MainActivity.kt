@@ -129,7 +129,7 @@ class MainActivity : AppCompatActivity() {
         uiScope.launch {
             try {
                 val answer = StringBuilder()
-                engine.sendUserPrompt(message, predictLength = 256).collect { token ->
+                engine.sendUserPrompt(message, predictLength = 1024).collect { token ->
                     answer.append(token); reply.text = "ARIA: $answer"
                 }
             } catch (e: Exception) {
