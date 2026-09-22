@@ -52,7 +52,16 @@ jobs:
           keytool -genkeypair -v             -keystore ~/.android/debug.keystore             -storepass android             -alias androiddebugkey             -keypass android             -dname "CN=ARIA Alpha,O=Kura,C=CL"             -keyalg RSA -keysize 2048 -validity 10000
 
       - name: Verify signing identity
-        run: keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep -E "Alias name:|SHA256:"
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA256="24:A8:3E:6C:AE:64:3A:11:B3:0E:11:02:16:6E:C4:F8:B4:CE:CD:D4:61:4F:7B:A5:A1:E7:CB:EB:C1:6C:DE:17"
+          ACTUAL_SHA256="$(keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | sed -n 's/^[[:space:]]*SHA256: //p' | head -n 1)"
+          echo "ARIA signing SHA256: $ACTUAL_SHA256"
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::ARIA signing certificate changed. Refusing to build an APK that cannot update the installed app."
+            exit 1
+          fi
 
       - name: Accept Android SDK licenses
         run: yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
