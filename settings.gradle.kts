@@ -14,3 +14,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "ARIA Mobile"
 include(":app")
+include(":llama")
+project(":llama").projectDir = file("llama.cpp/examples/llama.android/lib")
