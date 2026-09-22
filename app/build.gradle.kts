@@ -19,8 +19,8 @@ android {
         applicationId = "com.kura.aria"
         minSdk = 33
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.2-alpha"
+        versionCode = 5
+        versionName = "0.2.3-alpha"
     }
 }
 
