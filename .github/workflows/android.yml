@@ -31,6 +31,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Accept Android SDK licenses
+        run: yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+
+      - name: Install native Android toolchain
+        run: ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager "ndk;29.0.13113456" "cmake;3.31.6"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
