@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.RandomAccessFile
 
 class MainActivity : AppCompatActivity() {
     private lateinit var conversation: LinearLayout
@@ -86,14 +87,18 @@ class MainActivity : AppCompatActivity() {
                 }
                 target
             }
-            status.text = "Inicializando motor local…"
+            val ggufInfo = withContext(Dispatchers.IO) { inspectGguf(model) }
+            if (!ggufInfo.valid) {
+                throw IllegalArgumentException("GGUF inválido: ${ggufInfo.detail}")
+            }
+            status.text = "GGUF OK • ${ggufInfo.detail}\nInicializando motor local…"
             val readyState = engine.state.first {
                 it is InferenceEngine.State.Initialized || it is InferenceEngine.State.Error
             }
             if (readyState is InferenceEngine.State.Error) {
                 throw readyState.exception
             }
-            status.text = "Cargando cerebro local…"
+            status.text = "Cargando cerebro local… • ${ggufInfo.detail}"
             engine.loadModel(model.absolutePath)
             engine.setSystemPrompt(
                 "Eres ARIA, asistente personal local de Kura. Hablas español de forma natural, cálida y concisa. " +
@@ -106,8 +111,10 @@ class MainActivity : AppCompatActivity() {
             send.isEnabled = true
         } catch (e: Exception) {
             modelLoaded = false
-            status.text = "Error al cargar cerebro: ${e.javaClass.simpleName}"
-            aria("Mi trasplante falló: ${e.message ?: e.javaClass.simpleName}.")
+            val engineState = engine.state.value
+            val detail = e.message?.takeIf { it.isNotBlank() } ?: "(sin mensaje)"
+            status.text = "Error: ${e.javaClass.simpleName}\n${detail}\nEstado motor: ${engineState.javaClass.simpleName}"
+            aria("Mi trasplante falló: ${e.javaClass.simpleName}: ${detail}. Estado del motor: ${engineState.javaClass.simpleName}.")
         } finally {
             loadBrain.isEnabled = true
         }
@@ -128,6 +135,30 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 reply.text = "ARIA: Error al pensar: ${e.message ?: e.javaClass.simpleName}"
             } finally { send.isEnabled = modelLoaded }
+        }
+    }
+
+    private data class GgufInfo(val valid: Boolean, val detail: String)
+
+    private fun inspectGguf(file: File): GgufInfo {
+        if (!file.exists()) return GgufInfo(false, "archivo inexistente")
+        if (!file.canRead()) return GgufInfo(false, "archivo no legible")
+        if (file.length() < 8L) return GgufInfo(false, "archivo demasiado pequeño (${file.length()} bytes)")
+        return try {
+            RandomAccessFile(file, "r").use { raf ->
+                val magicBytes = ByteArray(4)
+                raf.readFully(magicBytes)
+                val magic = magicBytes.toString(Charsets.US_ASCII)
+                val version = Integer.reverseBytes(raf.readInt())
+                val sizeMiB = file.length() / (1024L * 1024L)
+                if (magic != "GGUF") {
+                    GgufInfo(false, "cabecera '$magic', esperada 'GGUF' • ${sizeMiB} MiB")
+                } else {
+                    GgufInfo(true, "GGUF v$version • ${sizeMiB} MiB")
+                }
+            }
+        } catch (t: Throwable) {
+            GgufInfo(false, "no pude inspeccionarlo: ${t.message ?: t.javaClass.simpleName}")
         }
     }
 
