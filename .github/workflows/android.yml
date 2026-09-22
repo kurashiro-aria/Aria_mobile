@@ -27,7 +27,7 @@ jobs:
           sed -i 's/compileSdk = 36/compileSdk = 35/' llama.cpp/examples/llama.android/lib/build.gradle.kts
           sed -i 's/minSdk = 33/minSdk = 33/' llama.cpp/examples/llama.android/lib/build.gradle.kts
           sed -i 's/libs.androidx.core.ktx/"androidx.core:core-ktx:1.15.0"/' llama.cpp/examples/llama.android/lib/build.gradle.kts
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
 
           p = Path("llama.cpp/examples/llama.android/lib/src/main/cpp/ai_chat.cpp")
@@ -35,25 +35,25 @@ jobs:
           s = s.replace("#include <string>\n", "#include <string>\n#include <mutex>\n")
           marker = "static llama_model                      * g_model;\n"
           diag = r'''static std::mutex                       g_diag_mutex;
-static std::string                      g_last_native_log;
+          static std::string                      g_last_native_log;
 
-static void aichat_diagnostic_log_callback(enum ggml_log_level level, const char * text, void * /*user_data*/) {
-    aichat_android_log_callback(level, text, nullptr);
-    if (!text) return;
-    std::lock_guard<std::mutex> lock(g_diag_mutex);
-    g_last_native_log += text;
-    constexpr size_t MAX_DIAG_CHARS = 12000;
-    if (g_last_native_log.size() > MAX_DIAG_CHARS) {
-        g_last_native_log.erase(0, g_last_native_log.size() - MAX_DIAG_CHARS);
-    }
-}
+          static void aichat_diagnostic_log_callback(enum ggml_log_level level, const char * text, void * /*user_data*/) {
+              aichat_android_log_callback(level, text, nullptr);
+              if (!text) return;
+              std::lock_guard<std::mutex> lock(g_diag_mutex);
+              g_last_native_log += text;
+              constexpr size_t MAX_DIAG_CHARS = 12000;
+              if (g_last_native_log.size() > MAX_DIAG_CHARS) {
+                  g_last_native_log.erase(0, g_last_native_log.size() - MAX_DIAG_CHARS);
+              }
+          }
 
-static void clear_last_native_log() {
-    std::lock_guard<std::mutex> lock(g_diag_mutex);
-    g_last_native_log.clear();
-}
+          static void clear_last_native_log() {
+              std::lock_guard<std::mutex> lock(g_diag_mutex);
+              g_last_native_log.clear();
+          }
 
-'''
+          '''
           if marker not in s:
               raise SystemExit("ai_chat.cpp marker not found")
           s = s.replace(marker, diag + marker, 1)
@@ -63,13 +63,13 @@ static void clear_last_native_log() {
           s = s.replace(load_marker, load_marker + "    clear_last_native_log();\n", 1)
           system_marker = 'extern "C"\nJNIEXPORT jstring JNICALL\nJava_com_arm_aichat_internal_InferenceEngineImpl_systemInfo'
           diagnostic_fn = r'''extern "C"
-JNIEXPORT jstring JNICALL
-Java_com_arm_aichat_internal_InferenceEngineImpl_lastNativeLog(JNIEnv *env, jobject /*unused*/) {
-    std::lock_guard<std::mutex> lock(g_diag_mutex);
-    return env->NewStringUTF(g_last_native_log.c_str());
-}
+          JNIEXPORT jstring JNICALL
+          Java_com_arm_aichat_internal_InferenceEngineImpl_lastNativeLog(JNIEnv *env, jobject /*unused*/) {
+              std::lock_guard<std::mutex> lock(g_diag_mutex);
+              return env->NewStringUTF(g_last_native_log.c_str());
+          }
 
-'''
+          '''
           if system_marker not in s:
               raise SystemExit("systemInfo marker not found")
           s = s.replace(system_marker, diagnostic_fn + system_marker, 1)
@@ -83,7 +83,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_lastNativeLog(JNIEnv *env, jobj
                     // TODO-han.yin: find a better way to pass other error codes
                     if (it != 0) throw UnsupportedArchitectureException()
                 }
-"""
+          """
           new = """                load(pathToModel).let {
                     if (it != 0) {
                         val nativeDetail = lastNativeLog().trim().takeLast(6000)
@@ -93,7 +93,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_lastNativeLog(JNIEnv *env, jobj
                         )
                     }
                 }
-"""
+          """
           if old not in s:
               raise SystemExit("InferenceEngineImpl load block not found")
           s = s.replace(old, new, 1)
