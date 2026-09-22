@@ -42,7 +42,7 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 40, 32, 32) }
         val title = TextView(this).apply { text = "ARIA"; textSize = 30f; gravity = Gravity.CENTER }
-        val subtitle = TextView(this).apply { text = "Mobile Alpha 0.2.5 • IA local"; textSize = 14f; gravity = Gravity.CENTER }
+        val subtitle = TextView(this).apply { text = "ARIA ${BuildConfig.VERSION_NAME} • IA local"; textSize = 14f; gravity = Gravity.CENTER }
         status = TextView(this).apply { text = "Inicializando ARIA…"; textSize = 14f; gravity = Gravity.CENTER; setPadding(0, 12, 0, 12) }
         loadBrain = Button(this).apply { text = "CAMBIAR CEREBRO 🧠"; isEnabled = false; setOnClickListener { chooseModel() } }
         conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 20, 0, 20) }

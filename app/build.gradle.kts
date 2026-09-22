@@ -9,18 +9,33 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    buildFeatures { buildConfig = true }
+
     namespace = "com.kura.aria"
     compileSdk = 35
 
     // llama.cpp discovers CPU backends by scanning applicationInfo.nativeLibraryDir.
     packaging { jniLibs { useLegacyPackaging = true } }
 
+    val ariaKeystore = System.getenv("ARIA_SIGNING_KEYSTORE")
+    check(System.getenv("GITHUB_ACTIONS") != "true" || !ariaKeystore.isNullOrBlank()) {
+        "CI requires the verified ARIA signing key; refusing an automatically generated debug key."
+    }
+    if (!ariaKeystore.isNullOrBlank()) {
+        signingConfigs.getByName("debug") {
+            storeFile = file(ariaKeystore)
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.kura.aria"
         minSdk = 33
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.2.6-alpha"
+        versionCode = 9
+        versionName = "0.2.7-alpha"
     }
 }
 

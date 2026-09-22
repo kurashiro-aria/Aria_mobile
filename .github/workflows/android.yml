@@ -36,32 +36,33 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Hosted runners otherwise create a different debug certificate on every run.
-      # Keeping this keystore stable makes consecutive Alpha APKs valid Android updates.
-      - name: Restore stable ARIA debug signing key
-        id: signing-key
-        uses: actions/cache@v4
+      - name: Restore existing ARIA signing key
+        uses: actions/cache/restore@v4
         with:
           path: ~/.android/debug.keystore
           key: aria-mobile-alpha-debug-signing-v1
 
-      - name: Create ARIA debug signing key
-        if: steps.signing-key.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/.android
-          keytool -genkeypair -v             -keystore ~/.android/debug.keystore             -storepass android             -alias androiddebugkey             -keypass android             -dname "CN=ARIA Alpha,O=Kura,C=CL"             -keyalg RSA -keysize 2048 -validity 10000
-
-      - name: Verify signing identity
+      - name: Prepare verified signing key
+        env:
+          ARIA_DEBUG_KEYSTORE_BASE64: ${{ secrets.ARIA_DEBUG_KEYSTORE_BASE64 }}
         shell: bash
         run: |
           set -euo pipefail
-          EXPECTED_SHA256="24:A8:3E:6C:AE:64:3A:11:B3:0E:11:02:16:6E:C4:F8:B4:CE:CD:D4:61:4F:7B:A5:A1:E7:CB:EB:C1:6C:DE:17"
-          ACTUAL_SHA256="$(keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | sed -n 's/^[[:space:]]*SHA256: //p' | head -n 1)"
-          echo "ARIA signing SHA256: $ACTUAL_SHA256"
-          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-            echo "::error::ARIA signing certificate changed. Refusing to build an APK that cannot update the installed app."
+          signing_path="$RUNNER_TEMP/aria-signing.keystore"
+          if [ -n "$ARIA_DEBUG_KEYSTORE_BASE64" ]; then
+            printf '%s' "$ARIA_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$signing_path"
+          elif [ -f "$HOME/.android/debug.keystore" ]; then
+            cp "$HOME/.android/debug.keystore" "$signing_path"
+          else
+            echo "::error::Existing signing key missing. Restore ARIA_DEBUG_KEYSTORE_BASE64; do not generate a new key."
             exit 1
           fi
+          chmod 600 "$signing_path"
+          expected="24A83E6CAE643A11B30E1102166EC4F8B4CECDD4614F7BA5A1E7CBEBC16CDE17"
+          actual="$(keytool -J-Duser.language=en -list -v -keystore "$signing_path" -storepass android -alias androiddebugkey | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':')"
+          test "$actual" = "$expected" || { echo "::error::Signing key fingerprint mismatch"; exit 1; }
+          echo "ARIA_SIGNING_KEYSTORE=$signing_path" >> "$GITHUB_ENV"
+          echo "ARIA signing SHA256: $actual"
 
       - name: Accept Android SDK licenses
         run: yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
@@ -79,6 +80,10 @@ jobs:
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace --console=plain
+
+      - name: Verify final APK certificate and version
+        shell: bash
+        run: bash scripts/verify-apk.sh
 
       - name: Upload ARIA APK
         uses: actions/upload-artifact@v4
