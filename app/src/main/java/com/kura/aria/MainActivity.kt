@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -84,6 +85,13 @@ class MainActivity : AppCompatActivity() {
                     target.outputStream().use { output -> input.copyTo(output) }
                 }
                 target
+            }
+            status.text = "Inicializando motor local…"
+            val readyState = engine.state.first {
+                it is InferenceEngine.State.Initialized || it is InferenceEngine.State.Error
+            }
+            if (readyState is InferenceEngine.State.Error) {
+                throw readyState.exception
             }
             status.text = "Cargando cerebro local…"
             engine.loadModel(model.absolutePath)
