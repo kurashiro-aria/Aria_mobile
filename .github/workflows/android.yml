@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - aria-alpha-0.2-local-ai
   workflow_dispatch:
 
 jobs:
@@ -11,25 +12,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Descargar proyecto
+      - name: Checkout ARIA
         uses: actions/checkout@v4
 
-      - name: Configurar Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Configurar Gradle
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Compilar ARIA
-        run: gradle :app:assembleDebug --stacktrace
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --stacktrace --console=plain
 
-      - name: Guardar APK
+      - name: Upload ARIA APK
         uses: actions/upload-artifact@v4
         with:
-          name: ARIA-Mobile-Alpha-0.1
+          name: ARIA-Mobile-Alpha
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
