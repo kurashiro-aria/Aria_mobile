@@ -1,0 +1,306 @@
+diff --git a/examples/llama.android/lib/src/main/cpp/ai_chat.cpp b/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
+index 03ab96cfd..c6d52750c 100644
+--- a/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
++++ b/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
+@@ -3,6 +3,7 @@
+ #include <iomanip>
+ #include <cmath>
+ #include <string>
++#include <mutex>
+ #include <unistd.h>
+ #include <sampling.h>
+ 
+@@ -39,11 +40,30 @@ static llama_batch                        g_batch;
+ static common_chat_templates_ptr          g_chat_templates;
+ static common_sampler                   * g_sampler;
+ 
++// Retain only warnings/errors, bounded and synchronized: llama may log from worker threads.
++static std::mutex native_error_mutex;
++static std::string native_error;
++static void aria_log_callback(enum ggml_log_level level, const char *text, void *user) {
++    aichat_android_log_callback(level, text, user);
++    if (text && (level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_WARN)) {
++        std::lock_guard<std::mutex> lock(native_error_mutex);
++        native_error += text;
++        if (native_error.size() > 4096) native_error.erase(0, native_error.size() - 4096);
++    }
++}
++
++extern "C"
++JNIEXPORT jstring JNICALL
++Java_com_arm_aichat_internal_InferenceEngineImpl_lastNativeError(JNIEnv *env, jobject) {
++    std::lock_guard<std::mutex> lock(native_error_mutex);
++    return env->NewStringUTF(native_error.empty() ? "Sin detalle nativo disponible" : native_error.c_str());
++}
++
+ extern "C"
+ JNIEXPORT void JNICALL
+ Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {
+     // Set llama log handler to Android
+-    llama_log_set(aichat_android_log_callback, nullptr);
++    llama_log_set(aria_log_callback, nullptr);
+ 
+     // Loading all CPU backend variants
+     const auto *path_to_backend = env->GetStringUTFChars(nativeLibDir, 0);
+@@ -51,6 +71,12 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unu
+     ggml_backend_load_all_from_path(path_to_backend);
+     env->ReleaseStringUTFChars(nativeLibDir, path_to_backend);
+ 
++    if (ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU) == nullptr) {
++        env->ThrowNew(env->FindClass("java/io/IOException"),
++                      "No se encontro un backend CPU. Revisar extraccion de bibliotecas nativas del APK.");
++        return;
++    }
++
+     // Initialize backends
+     llama_backend_init();
+     LOGi("Backend initiated; Log handler set.");
+@@ -59,6 +85,10 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unu
+ extern "C"
+ JNIEXPORT jint JNICALL
+ Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {
++    {
++        std::lock_guard<std::mutex> lock(native_error_mutex);
++        native_error.clear();
++    }
+     llama_model_params model_params = llama_model_default_params();
+ 
+     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
+@@ -265,7 +295,7 @@ static void reset_long_term_states(const bool clear_kv_cache = true) {
+     system_prompt_position = 0;
+     current_position = 0;
+ 
+-    if (clear_kv_cache)
++    if (clear_kv_cache && g_context)
+         llama_memory_clear(llama_get_memory(g_context), false);
+ }
+ 
+@@ -303,12 +333,12 @@ static std::string chat_add_and_format(const std::string &role, const std::strin
+  * - token chars caching
+  * - current assistant message being generated
+  */
+-static llama_pos stop_generation_position;
++static llama_pos remaining_generation_tokens;
+ static std::string cached_token_chars;
+ static std::ostringstream assistant_ss;
+ 
+ static void reset_short_term_states() {
+-    stop_generation_position = 0;
++    remaining_generation_tokens = 0;
+     cached_token_chars.clear();
+     assistant_ss.str("");
+ }
+@@ -317,25 +347,25 @@ static int decode_tokens_in_batches(
+         llama_context *context,
+         llama_batch &batch,
+         const llama_tokens &tokens,
+-        const llama_pos start_pos,
+         const bool compute_last_logit = false) {
+     // Process tokens in batches using the global batch
+-    LOGd("%s: Decode %d tokens starting at position %d", __func__, (int) tokens.size(), start_pos);
++    LOGd("%s: Decode %d tokens starting at position %d", __func__, (int) tokens.size(), current_position);
+     for (int i = 0; i < (int) tokens.size(); i += BATCH_SIZE) {
+         const int cur_batch_size = std::min((int) tokens.size() - i, BATCH_SIZE);
+         common_batch_clear(batch);
+         LOGv("%s: Preparing a batch size of %d starting at: %d", __func__, cur_batch_size, i);
+ 
+         // Shift context if current batch cannot fit into the context
+-        if (start_pos + i + cur_batch_size >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
++        while (current_position + cur_batch_size > DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+             LOGw("%s: Current batch won't fit into context! Shifting...", __func__);
++            if (current_position - system_prompt_position < 2) return 1;
+             shift_context();
+         }
+ 
+         // Add tokens to the batch with proper positions
+         for (int j = 0; j < cur_batch_size; j++) {
+             const llama_token token_id = tokens[i + j];
+-            const llama_pos position = start_pos + i + j;
++            const llama_pos position = current_position + j;
+             const bool want_logit = compute_last_logit && (i + j == tokens.size() - 1);
+             common_batch_add(batch, token_id, position, {0}, want_logit);
+         }
+@@ -346,6 +376,7 @@ static int decode_tokens_in_batches(
+             LOGe("%s: llama_decode failed w/ %d", __func__, decode_result);
+             return 1;
+         }
++        current_position += cur_batch_size;
+     }
+     return 0;
+ }
+@@ -389,7 +420,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
+     }
+ 
+     // Decode system tokens in batches
+-    if (decode_tokens_in_batches(g_context, g_batch, system_tokens, current_position)) {
++    if (decode_tokens_in_batches(g_context, g_batch, system_tokens)) {
+         LOGe("%s: llama_decode() failed!", __func__);
+         return 2;
+     }
+@@ -428,24 +459,21 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
+         LOGv("token: `%s`\t -> `%d`", common_token_to_piece(g_context, id).c_str(), id);
+     }
+ 
+-    // Ensure user prompt doesn't exceed the context size by truncating if necessary.
+-    const int user_prompt_size = (int) user_tokens.size();
+-    const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;
+-    if (user_prompt_size > max_batch_size) {
+-        const int skipped_tokens = user_prompt_size - max_batch_size;
+-        user_tokens.resize(max_batch_size);
+-        LOGw("%s: User prompt too long! Skipped %d tokens!", __func__, skipped_tokens);
++    // Reject oversized turns instead of silently truncating and corrupting positions.
++    const int max_user_tokens = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM - system_prompt_position - 1;
++    if (user_tokens.empty() || (int) user_tokens.size() > max_user_tokens || n_predict <= 0) {
++        if (has_chat_template) chat_msgs.pop_back();
++        return 1;
+     }
+ 
+     // Decode user tokens in batches
+-    if (decode_tokens_in_batches(g_context, g_batch, user_tokens, current_position, true)) {
++    if (decode_tokens_in_batches(g_context, g_batch, user_tokens, true)) {
+         LOGe("%s: llama_decode() failed!", __func__);
+         return 2;
+     }
+ 
+     // Update position
+-    current_position += user_prompt_size;
+-    stop_generation_position = current_position + user_prompt_size + n_predict;
++    remaining_generation_tokens = n_predict;
+     return 0;
+ }
+ 
+@@ -489,16 +517,17 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
+         JNIEnv *env,
+         jobject /*unused*/
+ ) {
+-    // Infinite text generation via context shifting
+-    if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+-        LOGw("%s: Context full! Shifting...", __func__);
+-        shift_context();
++    if (remaining_generation_tokens <= 0) {
++        chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
++        return nullptr;
+     }
+ 
+-    // Stop if reaching the marked position
+-    if (current_position >= stop_generation_position) {
+-        LOGw("%s: STOP: hitting stop position: %d", __func__, stop_generation_position);
+-        return nullptr;
++    if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
++        if (current_position - system_prompt_position < 2) {
++            env->ThrowNew(env->FindClass("java/io/IOException"), "No hay espacio para generar en el contexto");
++            return nullptr;
++        }
++        shift_context();
+     }
+ 
+     // Sample next token
+@@ -510,11 +539,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
+     common_batch_add(g_batch, new_token_id, current_position, {0}, true);
+     if (llama_decode(g_context, g_batch) != 0) {
+         LOGe("%s: llama_decode() failed for generated token", __func__);
++        env->ThrowNew(env->FindClass("java/io/IOException"), "Fallo nativo al generar un token");
+         return nullptr;
+     }
+ 
+     // Update position
+     current_position++;
++    remaining_generation_tokens--;
+ 
+     // Stop if next token is EOG
+     if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
+@@ -556,6 +587,10 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_unload(JNIEnv * /*unused*/, job
+     llama_batch_free(g_batch);
+     llama_free(g_context);
+     llama_model_free(g_model);
++    g_sampler = nullptr;
++    g_batch = {};
++    g_context = nullptr;
++    g_model = nullptr;
+ }
+ 
+ extern "C"
+diff --git a/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt b/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt
+index a293796f9..f935fbff8 100644
+--- a/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt
++++ b/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt
+@@ -3,7 +3,6 @@ package com.arm.aichat.internal
+ import android.content.Context
+ import android.util.Log
+ import com.arm.aichat.InferenceEngine
+-import com.arm.aichat.UnsupportedArchitectureException
+ import com.arm.aichat.internal.InferenceEngineImpl.Companion.getInstance
+ import dalvik.annotation.optimization.FastNative
+ import kotlinx.coroutines.CancellationException
+@@ -85,6 +84,9 @@ internal class InferenceEngineImpl private constructor(
+     @FastNative
+     private external fun load(modelPath: String): Int
+ 
++    @FastNative
++    private external fun lastNativeError(): String
++
+     @FastNative
+     private external fun prepare(): Int
+ 
+@@ -113,6 +115,7 @@ internal class InferenceEngineImpl private constructor(
+         MutableStateFlow<InferenceEngine.State>(InferenceEngine.State.Uninitialized)
+     override val state: StateFlow<InferenceEngine.State> = _state.asStateFlow()
+ 
++    private var nativeInitialized = false
+     private var _readyForSystemPrompt = false
+     @Volatile
+     private var _cancelGeneration = false
+@@ -134,12 +137,17 @@ internal class InferenceEngineImpl private constructor(
+                 Log.i(TAG, "Loading native library...")
+                 System.loadLibrary("ai-chat")
+                 init(nativeLibDir)
++                nativeInitialized = true
+                 _state.value = InferenceEngine.State.Initialized
+                 Log.i(TAG, "Native library loaded! System info: \n${systemInfo()}")
+ 
++            } catch (e: CancellationException) {
++                throw e
+             } catch (e: Exception) {
+                 Log.e(TAG, "Failed to load native library", e)
+-                throw e
++                _state.value = InferenceEngine.State.Error(e)
++            } catch (e: LinkageError) {
++                _state.value = InferenceEngine.State.Error(IOException("No se pudo iniciar la biblioteca nativa", e))
+             }
+         }
+     }
+@@ -166,10 +174,10 @@ internal class InferenceEngineImpl private constructor(
+                 _state.value = InferenceEngine.State.LoadingModel
+                 load(pathToModel).let {
+                     // TODO-han.yin: find a better way to pass other error codes
+-                    if (it != 0) throw UnsupportedArchitectureException()
++                    if (it != 0) throw IOException("Carga GGUF fallida (codigo $it): ${lastNativeError()}")
+                 }
+                 prepare().let {
+-                    if (it != 0) throw IOException("Failed to prepare resources")
++                    if (it != 0) throw IOException("No se pudo crear el contexto (codigo $it): ${lastNativeError()}")
+                 }
+                 Log.i(TAG, "Model loaded!")
+                 _readyForSystemPrompt = true
+@@ -230,8 +238,7 @@ internal class InferenceEngineImpl private constructor(
+ 
+             processUserPrompt(message, predictLength).let { result ->
+                 if (result != 0) {
+-                    Log.e(TAG, "Failed to process user prompt: $result")
+-                    return@flow
++                    throw IOException("No se pudo procesar el mensaje (codigo $result); puede exceder el contexto disponible.")
+                 }
+             }
+ 
+@@ -295,7 +302,10 @@ internal class InferenceEngineImpl private constructor(
+                 }
+ 
+                 is InferenceEngine.State.Error -> {
+-                    Log.i(TAG, "Resetting error states...")
++                    check(nativeInitialized) { "El motor no se inicializo; reinicia ARIA. ${state.exception.message}" }
++                    Log.i(TAG, "Resetting error states and freeing partial resources...")
++                    _readyForSystemPrompt = false
++                    unload()
+                     _state.value = InferenceEngine.State.Initialized
+                     Log.i(TAG, "States reset!")
+                     Unit

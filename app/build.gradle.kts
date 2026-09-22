@@ -12,12 +12,15 @@ android {
     namespace = "com.kura.aria"
     compileSdk = 35
 
+    // llama.cpp discovers CPU backends by scanning applicationInfo.nativeLibraryDir.
+    packaging { jniLibs { useLegacyPackaging = true } }
+
     defaultConfig {
         applicationId = "com.kura.aria"
         minSdk = 33
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0-alpha"
+        versionCode = 3
+        versionName = "0.2.1-alpha"
     }
 }
 
