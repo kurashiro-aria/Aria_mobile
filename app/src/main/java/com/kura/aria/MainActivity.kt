@@ -12,18 +12,9 @@ import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.kura.aria.personality.AriaPersonality
 import com.kura.aria.chat.VisibleReplyFilter
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.RandomAccessFile
 
@@ -38,16 +29,20 @@ class MainActivity : AppCompatActivity() {
     private var modelLoaded = false
     private var busy = false
 
-    companion object { private const val PICK_GGUF = 1001 }
+    companion object {
+        private const val PICK_GGUF = 1001
+        private const val PREFS = "aria_runtime"
+        private const val LAST_MODEL = "last_model"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 40, 32, 32) }
         val title = TextView(this).apply { text = "ARIA"; textSize = 30f; gravity = Gravity.CENTER }
-        val subtitle = TextView(this).apply { text = "Mobile Alpha 0.2.2 • IA local"; textSize = 14f; gravity = Gravity.CENTER }
-        status = TextView(this).apply { text = "Cerebro local: no cargado"; textSize = 14f; gravity = Gravity.CENTER; setPadding(0, 12, 0, 12) }
-        loadBrain = Button(this).apply { text = "CARGAR CEREBRO 🧠"; setOnClickListener { chooseModel() } }
+        val subtitle = TextView(this).apply { text = "Mobile Alpha 0.2.3 • IA local"; textSize = 14f; gravity = Gravity.CENTER }
+        status = TextView(this).apply { text = "Inicializando ARIA…"; textSize = 14f; gravity = Gravity.CENTER; setPadding(0, 12, 0, 12) }
+        loadBrain = Button(this).apply { text = "CAMBIAR CEREBRO 🧠"; isEnabled = false; setOnClickListener { chooseModel() } }
         conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 20, 0, 20) }
         val scroll = ScrollView(this).apply { addView(conversation) }
         val inputRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -63,30 +58,75 @@ class MainActivity : AppCompatActivity() {
         send.setOnClickListener { sendMessage() }
         try {
             engine = AiChat.getInferenceEngine(applicationContext)
-            uiScope.launch {
-                // The engine is a process singleton: an Activity may be recreated while it is ready.
-                try {
-                    val state = withTimeout(30_000) {
-                        engine.state.first {
-                            it !is InferenceEngine.State.Uninitialized && it !is InferenceEngine.State.Initializing
-                        }
-                    }
-                    modelLoaded = state is InferenceEngine.State.ModelReady
-                    send.isEnabled = modelLoaded && !busy
-                    if (modelLoaded) status.text = "Cerebro local: LISTO 🧠 • sesión activa"
-                    if (state is InferenceEngine.State.Error) status.text = "Error del motor: ${state.exception.message}"
-                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                    status.text = "El motor no terminó de iniciar; reinicia ARIA."
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    status.text = "No se pudo iniciar el motor: ${e.message}"
-                }
-            }
+            uiScope.launch { restoreBrainIfNeeded() }
         } catch (e: LinkageError) {
             status.text = "Biblioteca nativa incompatible: ${e.message}"
             loadBrain.isEnabled = false
         }
+    }
+
+    private suspend fun restoreBrainIfNeeded() {
+        if (busy) return
+        busy = true
+        loadBrain.isEnabled = false
+        send.isEnabled = false
+        try {
+            val state = withTimeout(30_000) {
+                engine.state.first {
+                    it !is InferenceEngine.State.Uninitialized && it !is InferenceEngine.State.Initializing
+                }
+            }
+            when (state) {
+                is InferenceEngine.State.ModelReady -> {
+                    modelLoaded = true
+                    status.text = "Cerebro local: LISTO 🧠 • sesión activa"
+                }
+                is InferenceEngine.State.Initialized -> {
+                    val model = savedModel()
+                    if (model == null) {
+                        modelLoaded = false
+                        status.text = "Cerebro local: no cargado"
+                    } else {
+                        status.text = "Reconectando cerebro local…"
+                        engine.loadModel(model.absolutePath)
+                        engine.setSystemPrompt(AriaPersonality.systemPrompt)
+                        modelLoaded = true
+                        status.text = "Cerebro local: LISTO 🧠 • restaurado"
+                        aria(AriaPersonality.restored)
+                    }
+                }
+                is InferenceEngine.State.Error -> {
+                    modelLoaded = false
+                    status.text = "Error del motor: ${state.exception.message ?: state.exception.javaClass.simpleName}"
+                }
+                else -> {
+                    modelLoaded = false
+                    status.text = "Cerebro local: no cargado"
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            status.text = "El motor no terminó de iniciar; reinicia ARIA."
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            modelLoaded = false
+            status.text = "No pude restaurar el cerebro: ${e.message ?: e.javaClass.simpleName}"
+        } finally {
+            busy = false
+            loadBrain.isEnabled = ::engine.isInitialized
+            send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
+        }
+    }
+
+    private fun savedModel(): File? {
+        val name = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null) ?: return null
+        if (name.contains('/') || name.contains('\\')) return null
+        val file = File(File(filesDir, "models"), name)
+        return file.takeIf { it.isFile && it.canRead() }
+    }
+
+    private fun rememberModel(model: File) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(LAST_MODEL, model.name).apply()
     }
 
     private fun chooseModel() {
@@ -122,7 +162,6 @@ class MainActivity : AppCompatActivity() {
                         it is InferenceEngine.State.Error
                 }
             }
-            // Unload before replacing a file which may still be memory-mapped by llama.cpp.
             if (engine.state.value !is InferenceEngine.State.Initialized) {
                 withContext(Dispatchers.IO) { engine.cleanUp() }
             }
@@ -146,6 +185,7 @@ class MainActivity : AppCompatActivity() {
                 val info = inspectGguf(partial)
                 require(info.valid) { "GGUF inválido: ${info.detail}" }
                 val target = File(dir, name)
+                if (target.exists()) check(target.delete()) { "No pude reemplazar el modelo anterior." }
                 check(partial.renameTo(target)) { "No pude guardar el modelo importado." }
                 target
             }
@@ -153,11 +193,11 @@ class MainActivity : AppCompatActivity() {
             status.text = "Cabecera GGUF reconocida • ${ggufInfo.detail}\nCargando modelo y verificando tensores…"
             engine.loadModel(model.absolutePath)
             engine.setSystemPrompt(AriaPersonality.systemPrompt)
+            rememberModel(model)
             modelLoaded = true
             status.text = "Cerebro local: LISTO 🧠"
             aria(AriaPersonality.ready)
-            send.isEnabled = true
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+        } catch (e: TimeoutCancellationException) {
             status.text = "El motor no respondió a tiempo; reinicia ARIA."
         } catch (e: CancellationException) {
             throw e
@@ -166,7 +206,7 @@ class MainActivity : AppCompatActivity() {
             val engineState = engine.state.value
             val detail = e.message?.takeIf { it.isNotBlank() } ?: "(sin mensaje)"
             status.text = "Error: ${e.javaClass.simpleName}\n${detail.take(240)}\nEstado motor: ${engineState.javaClass.simpleName}"
-            aria("Mi trasplante falló: ${e.javaClass.simpleName}: ${detail}. Estado del motor: ${engineState.javaClass.simpleName}.")
+            aria("Mi trasplante falló: ${e.javaClass.simpleName}: $detail. Estado del motor: ${engineState.javaClass.simpleName}.")
         } finally {
             temporary?.delete()
             busy = false
@@ -220,16 +260,14 @@ class MainActivity : AppCompatActivity() {
                 val magic = magicBytes.toString(Charsets.US_ASCII)
                 val version = Integer.reverseBytes(raf.readInt())
                 val sizeMiB = file.length() / (1024L * 1024L)
-                if (magic != "GGUF") {
-                    GgufInfo(false, "cabecera '$magic', esperada 'GGUF' • ${sizeMiB} MiB")
-                } else if (version !in 2..3) {
-                    GgufInfo(false, "versión GGUF no admitida: $version")
-                } else {
+                if (magic != "GGUF") GgufInfo(false, "cabecera '$magic', esperada 'GGUF' • $sizeMiB MiB")
+                else if (version !in 2..3) GgufInfo(false, "versión GGUF no admitida: $version")
+                else {
                     val tensors = java.lang.Long.reverseBytes(raf.readLong())
                     val metadata = java.lang.Long.reverseBytes(raf.readLong())
-                    if (tensors <= 0 || metadata <= 0 || tensors > file.length() / 24 || metadata > file.length() / 12) {
+                    if (tensors <= 0 || metadata <= 0 || tensors > file.length() / 24 || metadata > file.length() / 12)
                         GgufInfo(false, "conteos de tensores/metadatos imposibles o modelo vacío")
-                    } else GgufInfo(true, "GGUF v$version • ${sizeMiB} MiB (cabecera; tensores aún sin validar)")
+                    else GgufInfo(true, "GGUF v$version • $sizeMiB MiB (cabecera; tensores aún sin validar)")
                 }
             }
         } catch (t: Exception) {
