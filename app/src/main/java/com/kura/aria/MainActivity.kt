@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
         private const val PANEL = "#1A1523"
         private const val PANEL_2 = "#241B31"
         private const val PURPLE = "#A970FF"
+        private const val CHAT_PURPLE = "#6F3CC3"
         private const val TEXT = "#F5F1FA"
         private const val MUTED = "#AAA0B8"
     }
@@ -106,7 +107,7 @@ class MainActivity : AppCompatActivity() {
             hint = "Habla con ARIA..."; setHintTextColor(Color.parseColor(MUTED)); setTextColor(Color.parseColor(TEXT)); maxLines = 4
             background = rounded(PANEL, 22f, "#3A2A4C"); setPadding(dp(16), dp(11), dp(16), dp(11))
         }
-        send = Button(this).apply { text = "➤"; textSize = 20f; isEnabled = false; setTextColor(Color.WHITE); background = rounded("#6F3CC3", 22f) }
+        send = Button(this).apply { text = "➤"; textSize = 20f; isEnabled = false; setTextColor(Color.WHITE); background = rounded(CHAT_PURPLE, 22f) }
         inputRow.addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         inputRow.addView(send, LinearLayout.LayoutParams(dp(58), dp(52)).apply { marginStart = dp(8) })
         root.addView(inputRow)
@@ -411,8 +412,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun addMessage(who: String, message: String) { conversation.addView(messageView(who, message)); scrollToBottom() }
     private fun messageView(who: String, message: String) = TextView(this).apply {
-        text = message; textSize = 16f; setTextColor(Color.parseColor(TEXT)); setPadding(dp(14), dp(11), dp(14), dp(11))
-        background = rounded(if (who == "Kura") "#302047" else PANEL, 18f, if (who == "Kura") "#60408A" else "#30263B")
+        val isKura = who == "Kura"
+        text = message; textSize = 16f; setTextColor(Color.parseColor(if (isKura) BG else "#FFFFFF"))
+        setPadding(dp(14), dp(11), dp(14), dp(11))
+        background = rounded(if (isKura) "#FFFFFF" else CHAT_PURPLE, 18f)
         gravity = if (who == "Kura") Gravity.END else Gravity.START
         contentDescription = "$who: $message"
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
