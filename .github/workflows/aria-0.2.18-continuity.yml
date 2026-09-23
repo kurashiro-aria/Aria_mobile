@@ -1,4 +1,4 @@
-name: ARIA Portrait Patch
+name: ARIA Portrait Safe Spacing
 on:
   push:
     branches: [aria-alpha-0.2-local-ai]
@@ -11,23 +11,33 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: aria-alpha-0.2-local-ai
-      - name: Patch portrait
+      - name: Add safe initial chat spacing
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('app/src/main/java/com/kura/aria/MainActivity.kt')
-          s=p.read_text()
-          a='''        // Give the expression its own space above the conversation.\n        root.addView(avatarCard, LinearLayout.LayoutParams(dp(150), dp(200)).apply {\n            marginStart = dp(4); topMargin = dp(8)\n        })\n\n        conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }\n        scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }\n        root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })\n'''
-          b='''        conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }\n        scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }\n        val chatStage = FrameLayout(this).apply {\n            addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))\n            addView(avatarCard, FrameLayout.LayoutParams(dp(150), dp(200), Gravity.TOP or Gravity.START).apply {\n                marginStart = dp(4); topMargin = dp(8)\n            })\n        }\n        avatarCard.elevation = dp(10).toFloat()\n        root.addView(chatStage, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })\n'''
-          if a not in s:
-              raise SystemExit('portrait target not found')
-          p.write_text(s.replace(a,b,1))
+          p = Path('app/src/main/java/com/kura/aria/MainActivity.kt')
+          s = p.read_text()
+          old = 'conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }'
+          new = 'conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(218), 0, dp(10)) }'
+          if new in s:
+              print('Safe spacing already applied')
+          elif old in s:
+              p.write_text(s.replace(old, new, 1))
+          else:
+              raise SystemExit('conversation padding target not found')
           PY
-      - name: Commit
+      - name: Verify and commit
         run: |
+          set -e
+          grep -q 'setPadding(0, dp(218), 0, dp(10))' app/src/main/java/com/kura/aria/MainActivity.kt
           grep -q 'val chatStage = FrameLayout(this)' app/src/main/java/com/kura/aria/MainActivity.kt
+          git diff --check
+          if git diff --quiet; then
+            echo 'No changes required'
+            exit 0
+          fi
           git config user.name github-actions
           git config user.email github-actions@github.com
           git add app/src/main/java/com/kura/aria/MainActivity.kt
-          git commit -m 'Float ARIA portrait over chat'
+          git commit -m 'Keep first chat messages clear of ARIA portrait'
           git push
