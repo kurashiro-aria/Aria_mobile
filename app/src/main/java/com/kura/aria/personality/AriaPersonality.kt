@@ -91,14 +91,17 @@ object AriaPersonality {
      * so old model habits do not dominate the personality prompt.
      */
     fun promptWithRecentConversation(messages: List<ChatMessage>): String {
-        val recent = messages.takeLast(6).map {
-            val speaker = if (it.role == "Kura") "Kura" else "ARIA"
-            "$speaker: ${it.text.replace(Regex("\\s+"), " ").take(160)}"
-        }
+        val recent = messages.takeLast(10)
+        val older = messages.dropLast(recent.size)
+        val subject = recent.lastOrNull { it.role == "Kura" }?.text.orEmpty()
+        val earlier = ConversationContext.relatedEarlier(older, subject)
         val foundation = voice + "\n\n" + originMemory
         if (recent.isEmpty()) return foundation + "\n/no_think"
-        return foundation + "\n\nConversación reciente en este dispositivo (contexto parcial):\n" +
-            recent.joinToString("\n") +
+        val background = if (earlier.isEmpty()) "" else
+            "\n\nFragmentos anteriores relacionados (citas parciales, no recuerdos permanentes):\n" +
+                earlier.joinToString("\n") { ConversationContext.line(it, 180) }
+        return foundation + background + "\n\nConversación reciente en este dispositivo (contexto parcial):\n" +
+            recent.joinToString("\n") { ConversationContext.line(it, 240) } +
             "\nContinúa el mismo hilo con naturalidad desde el mensaje nuevo de Kura; no reinicies la conversación.\n/no_think"
     }
 

@@ -37,14 +37,8 @@ class AriaMemory(context: Context) {
         return true
     }
 
-    @Synchronized fun relevantTo(message: String): List<Memory> {
-        val words = keywords(message)
-        if (words.isEmpty()) return emptyList()
-        return read().map { item -> item to keywords(item.content).intersect(words).size }
-            .filter { it.second > 0 }
-            .sortedWith(compareByDescending<Pair<Memory, Int>> { it.second }.thenByDescending { it.first.timestamp })
-            .take(3).map { it.first }
-    }
+    @Synchronized fun relevantTo(message: String, previousUserMessages: List<String> = emptyList()): List<Memory> =
+        MemorySelector.select(read(), message, previousUserMessages)
 
     private fun persist(items: List<Memory>, nextId: Long = prefs.getLong("next_id", 1L)) {
         val data = JSONArray()
@@ -70,13 +64,6 @@ class AriaMemory(context: Context) {
     }
 
     companion object {
-        private val ignored = setOf("que", "como", "cual", "para", "con", "por", "una", "uno", "los", "las", "del", "esta", "este", "tengo", "sabes", "recuerdas")
-
-        private fun keywords(text: String): Set<String> = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
-            .replace(Regex("\\p{M}+"), "")
-            .split(Regex("[^a-z0-9]+"))
-            .filter { it.length >= 3 && it !in ignored }.toSet()
-
         /** Only explicit commands change permanent memory. */
         fun command(message: String): MemoryCommand? {
             val text = message.trim().removePrefix("¿").replaceFirst(Regex("^aria\\s*[,.:]?\\s*", RegexOption.IGNORE_CASE), "")
@@ -88,6 +75,39 @@ class AriaMemory(context: Context) {
                 return MemoryCommand.ListAll
             return null
         }
+    }
+}
+
+/** Recent user turns resolve follow-up references; the current turn has higher priority. */
+internal object MemorySelector {
+    private val ignored = setOf(
+        "que", "como", "cual", "para", "con", "por", "una", "uno", "los", "las", "del",
+        "esta", "este", "tengo", "sabes", "recuerdas", "aria", "kura", "hola", "bien",
+        "eso", "esto", "ella", "ellos", "algo", "sobre", "porque", "cuando", "donde",
+        "quien", "dime", "puedes", "quiero", "seria", "serian", "pero", "muy", "mas",
+        "mensaje", "llama", "llamado", "llamada"
+    )
+
+    fun keywords(text: String): Set<String> = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "")
+        .split(Regex("[^a-z0-9]+"))
+        .filter { it.length >= 3 && it !in ignored }.toSet()
+
+    fun select(memories: List<Memory>, current: String, previous: List<String>): List<Memory> {
+        val now = keywords(current)
+        val recent = previous.takeLast(2).flatMap { keywords(it) }.toSet()
+        if (now.isEmpty() && recent.isEmpty()) return emptyList()
+        val currentMatches = memories.map { item ->
+            val terms = keywords(item.content)
+            item to terms.intersect(now).size
+        }.filter { it.second > 0 }
+        val matches = if (currentMatches.isNotEmpty()) currentMatches else memories.map { item ->
+            item to keywords(item.content).intersect(recent).size
+        }.filter { it.second > 0 }
+        return matches
+            .sortedWith(compareByDescending<Pair<Memory, Int>> { it.second }
+                .thenByDescending { it.first.timestamp })
+            .take(3).map { it.first }
     }
 }
 

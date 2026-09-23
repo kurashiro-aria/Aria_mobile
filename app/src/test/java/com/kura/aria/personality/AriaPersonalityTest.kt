@@ -13,7 +13,7 @@ class AriaPersonalityTest {
         assertFalse(prompt.contains("Mensaje 3"))
         assertTrue(prompt.indexOf("Mensaje 4") < prompt.indexOf("Mensaje 9"))
         assertTrue(prompt.contains("Mensaje 9"))
-        assertFalse(prompt.contains("x".repeat(200)))
+        assertFalse(prompt.contains("x".repeat(250)))
     }
 
     @Test fun emptyHistoryDoesNotInventConversation() {
@@ -34,5 +34,18 @@ class AriaPersonalityTest {
         ))
         assertTrue(prompt.contains("¿Quién es Sol?"))
         assertTrue(prompt.contains("ARIA: Sol nos ayuda con el código"))
+    }
+
+    @Test fun relatedOlderExchangeSurvivesRestartWithoutUnrelatedHistory() {
+        val messages = listOf(
+            ChatMessage("Kura", "El proyecto del manga tiene una mazmorra", 1),
+            ChatMessage("ARIA", "Sora y Rika entran juntos.", 2),
+            ChatMessage("Kura", "Tengo que comprar pintura", 3),
+            ChatMessage("ARIA", "Anotado para esta charla.", 4)
+        ) + (5..14).map { ChatMessage("Kura", "Charla diaria $it", it.toLong()) } +
+            ChatMessage("Kura", "Volvamos al manga y la mazmorra", 15)
+        val prompt = AriaPersonality.promptWithRecentConversation(messages)
+        assertTrue(prompt.contains("Sora y Rika entran juntos"))
+        assertFalse(prompt.contains("Tengo que comprar pintura"))
     }
 }
