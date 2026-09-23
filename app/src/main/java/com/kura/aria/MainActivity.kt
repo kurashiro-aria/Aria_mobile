@@ -96,9 +96,18 @@ class MainActivity : AppCompatActivity() {
             clipToOutline = true
             contentDescription = "ARIA, expresión neutral"
         }
+        // Keep the portrait large while leaving room for the conversation on short screens.
+        val portraitSize = minOf(
+            dp(250),
+            resources.displayMetrics.widthPixels - dp(60),
+            (resources.displayMetrics.heightPixels * 0.34f).toInt()
+        ).coerceAtLeast(dp(160))
         stage.addView(stageHint, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        stage.addView(avatarCard, FrameLayout.LayoutParams(dp(118), dp(92), Gravity.TOP or Gravity.END))
-        root.addView(stage, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(116)).apply { topMargin = dp(12) })
+        stage.addView(avatarCard, FrameLayout.LayoutParams(portraitSize, portraitSize, Gravity.CENTER))
+        root.addView(stage, LinearLayout.LayoutParams(portraitSize + dp(24), portraitSize + dp(24)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(12)
+        })
 
         conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }
         scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }
