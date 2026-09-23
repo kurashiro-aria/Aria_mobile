@@ -32,6 +32,6 @@ enum class AriaEmotion(val tile: Int, val label: String) {
             return if (previous in setOf(ANNOYED, EMBARRASSED, SAD, AFFECTIONATE, PLAYFUL) && s.length < 180) previous else NEUTRAL
         }
 
-        private fun score(text: String, vararg cues: String): Int = cues.sumOf { cue -> if (text.contains(cue)) 2 else 0 }
+        private fun score(text: String, vararg cues: String): Int = cues.count { text.contains(it) } * 2
     }
 }
