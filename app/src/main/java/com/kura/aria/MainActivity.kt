@@ -48,6 +48,14 @@ class MainActivity : AppCompatActivity() {
     private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var modelLoaded = false
     private var busy = false
+    private var lastLoadMs: Long? = null
+    private var lastGeneration: GenerationStats? = null
+
+    private data class GenerationStats(val firstTokenMs: Long?, val firstVisibleMs: Long?, val totalMs: Long, val chunks: Int) {
+        val approximateTokensPerSecond: Double?
+            get() = if (firstTokenMs == null || totalMs <= firstTokenMs || chunks < 2) null
+                else (chunks - 1) * 1000.0 / (totalMs - firstTokenMs)
+    }
 
     companion object {
         private const val PICK_GGUF = 1001
@@ -145,6 +153,7 @@ class MainActivity : AppCompatActivity() {
             if (!modelLoaded && savedModel() != null) menu.add("Reconectar cerebro")
             menu.add("Cambiar / cargar cerebro")
             menu.add("Memoria")
+            menu.add("Rendimiento")
             menu.add("Personalidad")
             menu.add("Voz")
             menu.add("Interfaz")
@@ -155,6 +164,7 @@ class MainActivity : AppCompatActivity() {
                     "Cambiar / cargar cerebro" -> chooseModel()
                     "Reconectar cerebro" -> uiScope.launch { restoreBrainIfNeeded() }
                     "Memoria" -> showMemoryDialog()
+                    "Rendimiento" -> showPerformanceDialog()
                     "Personalidad" -> toast("ARIA Personality v2 activa")
                     "Voz" -> toast("Voz: próximamente")
                     "Interfaz" -> toast("Interfaz ARIA Character")
@@ -186,8 +196,10 @@ class MainActivity : AppCompatActivity() {
                     if (state is InferenceEngine.State.Error) { setStatus("○ Reiniciando motor", false); withContext(Dispatchers.IO) { engine.cleanUp() } }
                     check(engine.state.value is InferenceEngine.State.Initialized) { "Motor en estado ${engine.state.value.javaClass.simpleName}; reinicia ARIA." }
                     setStatus("○ Reconectando", false)
+                    val loadStarted = SystemClock.elapsedRealtime()
                     engine.loadModel(model.absolutePath)
                     engine.setSystemPrompt(AriaPersonality.systemPrompt())
+                    lastLoadMs = SystemClock.elapsedRealtime() - loadStarted
                     if (getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null) == null) rememberModel(model)
                     modelLoaded = true; setStatus("● Activa", true)
                     if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.restored)
@@ -276,8 +288,10 @@ class MainActivity : AppCompatActivity() {
                 target
             }
             setStatus("○ Cargando cerebro", false)
+            val loadStarted = SystemClock.elapsedRealtime()
             engine.loadModel(model.absolutePath)
             engine.setSystemPrompt(AriaPersonality.systemPrompt())
+            lastLoadMs = SystemClock.elapsedRealtime() - loadStarted
             rememberModel(model)
             modelCommitted = true
             replaced?.delete()
@@ -375,16 +389,42 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun collectVisibleReply(prompt: String, tokenLimit: Int, reply: TextView): String {
         val filter = VisibleReplyFilter()
+        val started = SystemClock.elapsedRealtime()
+        var firstTokenMs: Long? = null
+        var firstVisibleMs: Long? = null
+        var chunks = 0
         var lastRenderedAt = 0L
         engine.sendUserPrompt(prompt, predictLength = tokenLimit).flowOn(Dispatchers.IO).collect { token ->
+            chunks++
             val answer = filter.append(token)
             val now = SystemClock.uptimeMillis()
+            if (firstTokenMs == null) firstTokenMs = SystemClock.elapsedRealtime() - started
+            if (firstVisibleMs == null && answer.isNotBlank())
+                firstVisibleMs = SystemClock.elapsedRealtime() - started
             if (answer.isNotBlank() && (lastRenderedAt == 0L || now - lastRenderedAt >= 80L)) {
                 reply.text = answer
                 lastRenderedAt = now
             }
         }
+        lastGeneration = GenerationStats(firstTokenMs, firstVisibleMs, SystemClock.elapsedRealtime() - started, chunks)
         return filter.finish()
+    }
+
+    private fun showPerformanceDialog() {
+        val generation = lastGeneration
+        val details = buildString {
+            append("Carga del modelo y personalidad: ")
+            append(lastLoadMs?.let { "${it / 1000.0} s" } ?: "sin medir")
+            append("\nPrimera palabra visible: ")
+            append(generation?.firstVisibleMs?.let { "${it / 1000.0} s" } ?: "sin medir")
+            append("\nRespuesta completa: ")
+            append(generation?.let { "${it.totalMs / 1000.0} s" } ?: "sin medir")
+            append("\nVelocidad aproximada: ")
+            append(generation?.approximateTokensPerSecond?.let { String.format(java.util.Locale.US, "%.1f tokens/s", it) }
+                ?: "sin medir")
+        }
+        AlertDialog.Builder(this).setTitle("Rendimiento de ARIA")
+            .setMessage(details).setPositiveButton("Cerrar", null).show()
     }
 
     private data class GgufInfo(val valid: Boolean, val detail: String)

@@ -85,7 +85,8 @@ internal object MemorySelector {
         "esta", "este", "tengo", "sabes", "recuerdas", "aria", "kura", "hola", "bien",
         "eso", "esto", "ella", "ellos", "algo", "sobre", "porque", "cuando", "donde",
         "quien", "dime", "puedes", "quiero", "seria", "serian", "pero", "muy", "mas",
-        "mensaje", "llama", "llamado", "llamada", "estas", "estoy", "estamos"
+        "mensaje", "llama", "llamado", "llamada", "estas", "estoy", "estamos",
+        "gusta", "gustan", "hacer", "hago", "hablar", "hablemos", "ayudar", "sentir"
     )
 
     fun keywords(text: String): Set<String> = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
@@ -117,6 +118,7 @@ internal object MemorySelector {
             .replace(Regex("\\p{M}+"), "").trim()
         if (text.matches(Regex("^[¿?¡!\\s]*(?:hola|buenas|como estas|que tal|como te va)(?:\\s+aria)?[¿?¡!.\\s]*$"))) return false
         if (text.matches(Regex("^(?:si|no|vale|claro|exacto|eso mismo|por supuesto|ok|dale)[.!\\s]*$"))) return true
+        if (text.matches(Regex("^[¿?¡!\\s]*(?:por que|y por que|como asi|que quieres decir|cuentame mas)[¿?¡!.\\s]*$"))) return true
         return Regex("\\b(?:eso|esto|esa|ese|ella|ellos|se llama|su nombre|lo anterior|y entonces|y despues|y tu|y que opinas|cuentame mas|volvamos|retomemos|de eso)\\b")
             .containsMatchIn(text)
     }

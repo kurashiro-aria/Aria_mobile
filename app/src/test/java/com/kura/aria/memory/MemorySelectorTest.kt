@@ -28,4 +28,8 @@ class MemorySelectorTest {
         assertTrue(MemorySelector.select(coffee, "hola aria", listOf("Hablemos del café")).isEmpty())
         assertTrue(MemorySelector.select(coffee, "¿cómo estás?", listOf("Hablemos del café")).isEmpty())
     }
+
+    @Test fun genericPhrasesDoNotRetrieveUnrelatedMemories() {
+        assertTrue(MemorySelector.select(memories, "Me gusta hablar contigo", listOf("Mi gato")).isEmpty())
+    }
 }

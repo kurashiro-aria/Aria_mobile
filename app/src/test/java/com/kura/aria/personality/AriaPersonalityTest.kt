@@ -73,4 +73,13 @@ class AriaPersonalityTest {
         assertTrue(prompt.contains("ARIA: ¿Quieres probar otra pose para Sora?"))
         assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nsí"))
     }
+
+    @Test fun shortWhyQuestionKeepsPreviousAnswer() {
+        val history = listOf(
+            ChatMessage("Kura", "Dibujé a Sora", 1),
+            ChatMessage("ARIA", "La pose se ve rígida", 2)
+        )
+        val prompt = ConversationContext.turnPrompt(history, emptyList(), "¿por qué?")
+        assertTrue(prompt.contains("ARIA: La pose se ve rígida"))
+    }
 }

@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val ariaVersionName = "0.2.25-alpha"
+val ariaVersionName = "0.2.26-alpha"
 
 android {
     compileOptions {
@@ -36,7 +36,7 @@ android {
         applicationId = "com.kura.aria"
         minSdk = 33
         targetSdk = 35
-        versionCode = 27
+        versionCode = 28
         versionName = ariaVersionName
         resValue("string", "app_name", "ARIA Mobile $ariaVersionName")
     }
