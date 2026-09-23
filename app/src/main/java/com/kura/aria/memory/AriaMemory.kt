@@ -114,9 +114,10 @@ internal object MemorySelector {
     /** Referencias sin tema propio pueden retomar el turno anterior; saludos y temas nuevos no. */
     fun isFollowUp(message: String): Boolean {
         val text = Normalizer.normalize(message.lowercase(), Normalizer.Form.NFD)
-            .replace(Regex("\\p{M}+"), "")
+            .replace(Regex("\\p{M}+"), "").trim()
         if (text.matches(Regex("^[¿?¡!\\s]*(?:hola|buenas|como estas|que tal|como te va)(?:\\s+aria)?[¿?¡!.\\s]*$"))) return false
-        return Regex("\\b(?:eso|esto|esa|ese|ella|ellos|se llama|su nombre|lo anterior|y entonces|y despues|volvamos|retomemos|de eso)\\b")
+        if (text.matches(Regex("^(?:si|no|vale|claro|exacto|eso mismo|por supuesto|ok|dale)[.!\\s]*$"))) return true
+        return Regex("\\b(?:eso|esto|esa|ese|ella|ellos|se llama|su nombre|lo anterior|y entonces|y despues|y tu|y que opinas|cuentame mas|volvamos|retomemos|de eso)\\b")
             .containsMatchIn(text)
     }
 }

@@ -21,4 +21,11 @@ class AriaEmotionTest {
         assertEquals(AriaEmotion.SERIOUS, AriaEmotion.fromReply("Esto es importante, ten cuidado."))
         assertEquals(AriaEmotion.TIRED, AriaEmotion.fromReply("Tengo sueño, estoy cansada."))
     }
+
+    @Test fun portraitRespondsToTheSituationInsteadOfAnUnrelatedHappyWord() {
+        assertEquals(AriaEmotion.SAD, AriaEmotion.fromExchange("Estoy triste hoy", "Aquí estoy contigo."))
+        assertEquals(AriaEmotion.SERIOUS, AriaEmotion.fromExchange("Tuve un accidente", "Vamos a tomarlo con calma."))
+        assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromExchange("Ya terminé", "Genial, quedó listo."))
+        assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromExchange("Otro tema", "De acuerdo."))
+    }
 }

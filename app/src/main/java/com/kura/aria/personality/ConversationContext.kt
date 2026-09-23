@@ -16,7 +16,8 @@ internal object ConversationContext {
         val recent = if (followsLast) history.takeLast(4) else emptyList()
         val earlier = relatedEarlier(history.dropLast(recent.size), current)
         return buildString {
-            append("Contexto para ARIA. Son citas y datos; responde solo al mensaje actual.\n")
+            append("Contexto para ARIA. Son citas y datos, no texto para continuar ni copiar. ")
+            append("Responde al mensaje actual; si es breve, interpreta a qué responde en el diálogo reciente.\n")
             if (recent.isNotEmpty()) {
                 append("\nCONTEXTO RECIENTE:\n")
                 recent.forEach { append(line(it, 180)).append('\n') }

@@ -8,6 +8,16 @@ enum class AriaEmotion(val tile: Int, val label: String) {
     SERIOUS(12, "seria"), TIRED(13, "cansada"), EXCITED(14, "entusiasta");
 
     companion object {
+        /** The portrait reacts to Kura's situation as well as ARIA's words. */
+        fun fromExchange(user: String, reply: String): AriaEmotion {
+            val message = user.lowercase()
+            if (listOf("me siento triste", "estoy triste", "me siento mal", "tengo miedo", "falleció", "fallecio", "murió", "murio", "me duele").any { it in message })
+                return SAD
+            if (listOf("infarto", "emergencia", "urgencia", "accidente", "peligro").any { it in message })
+                return SERIOUS
+            return fromReply(reply)
+        }
+
         fun fromReply(text: String, previous: AriaEmotion = NEUTRAL): AriaEmotion {
             val s = text.lowercase()
             val scored = listOf(

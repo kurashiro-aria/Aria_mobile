@@ -330,7 +330,9 @@ class MainActivity : AppCompatActivity() {
         }
         busy = true; loadBrain.isEnabled = false; user(message)
         input.text.clear(); send.isEnabled = false; setStatus("● Pensando", true)
-        if (message.startsWith("¿") || message.endsWith("?")) showPortrait(AriaEmotion.THINKING)
+        val listeningEmotion = AriaEmotion.fromExchange(message, "")
+        if (listeningEmotion != AriaEmotion.NEUTRAL) showPortrait(listeningEmotion)
+        else if (message.startsWith("¿") || message.endsWith("?")) showPortrait(AriaEmotion.THINKING)
         val reply = messageView("ARIA", "Preparando respuesta…"); conversation.addView(reply); scrollToBottom()
         uiScope.launch {
             try {
@@ -355,7 +357,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (answer.isNotBlank()) {
                     reply.text = answer
-                    lastEmotion = AriaEmotion.fromReply(answer, lastEmotion)
+                    lastEmotion = AriaEmotion.fromExchange(message, answer)
                     showPortrait(lastEmotion)
                     withContext(Dispatchers.IO) { chatHistory.append("ARIA", answer) }
                 }
