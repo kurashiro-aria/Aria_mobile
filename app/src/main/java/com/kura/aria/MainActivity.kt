@@ -189,7 +189,6 @@ class MainActivity : AppCompatActivity() {
                     if (getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null) == null) rememberModel(model)
                     modelLoaded = true; setStatus("● Activa", true)
                     if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.restored)
-                    else maybeStartConversation()
                 }
             }
         } catch (e: TimeoutCancellationException) { setStatus("○ Motor sin responder", false) }
@@ -199,6 +198,7 @@ class MainActivity : AppCompatActivity() {
             busy = false; loadBrain.isEnabled = ::engine.isInitialized
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
+            if (send.isEnabled) maybeStartConversation()
         }
     }
 
@@ -207,6 +207,8 @@ class MainActivity : AppCompatActivity() {
         if (::engine.isInitialized && !busy && savedModel() != null &&
             (!modelLoaded || engine.state.value !is InferenceEngine.State.ModelReady)) {
             uiScope.launch { restoreBrainIfNeeded() }
+        } else if (::engine.isInitialized && modelLoaded && !busy) {
+            maybeStartConversation()
         }
     }
 
@@ -299,6 +301,7 @@ class MainActivity : AppCompatActivity() {
             temporary?.delete(); busy = false; loadBrain.isEnabled = true
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
+            if (send.isEnabled) maybeStartConversation()
         }
     }
 
@@ -310,13 +313,11 @@ class MainActivity : AppCompatActivity() {
         val now = System.currentTimeMillis()
         val last = prefs.getLong("last_aria_initiative", 0L)
         if (now - last < 6L * 60L * 60L * 1000L) return
-        prefs.edit().putLong("last_aria_initiative", now).apply()
         busy = true; send.isEnabled = false; setStatus("● Pensando", true)
         val reply = messageView("ARIA", "…")
         conversation.addView(reply); scrollToBottom()
         uiScope.launch {
             try {
-                engine.setSystemPrompt(AriaPersonality.promptWithRecentConversation(recent))
                 val filter = VisibleReplyFilter()
                 val opener = "Inicia tú la conversación con Kura de forma natural y breve. Retoma el hilo reciente si tiene sentido. No expliques esta instrucción y no conviertas el mensaje en un cuestionario."
                 engine.sendUserPrompt(opener, predictLength = 192).flowOn(Dispatchers.IO).collect { token ->
@@ -329,6 +330,7 @@ class MainActivity : AppCompatActivity() {
                     lastEmotion = AriaEmotion.fromReply(answer, lastEmotion)
                     showPortrait(lastEmotion)
                     withContext(Dispatchers.IO) { chatHistory.append("ARIA", answer) }
+                    prefs.edit().putLong("last_aria_initiative", System.currentTimeMillis()).apply()
                 } else conversation.removeView(reply)
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { conversation.removeView(reply) }
@@ -375,7 +377,6 @@ class MainActivity : AppCompatActivity() {
         uiScope.launch {
             try {
                 withContext(Dispatchers.IO) { chatHistory.append("Kura", message) }
-                engine.setSystemPrompt(AriaPersonality.promptWithRecentConversation(chatHistory.readAll()))
                 val filter = VisibleReplyFilter()
                 val modelMessage = withContext(Dispatchers.IO) {
                     val relevant = ariaMemory.relevantTo(message)
