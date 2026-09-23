@@ -3,6 +3,7 @@ package com.kura.aria
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -19,6 +20,7 @@ import com.kura.aria.chat.VisibleReplyFilter
 import com.kura.aria.chat.ChatHistory
 import com.kura.aria.memory.AriaMemory
 import com.kura.aria.memory.MemoryCommand
+import com.kura.aria.emotion.AriaEmotion
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -33,7 +35,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadBrain: Button
     private lateinit var input: EditText
     private lateinit var send: Button
-    private lateinit var avatarCard: TextView
+    private lateinit var avatarCard: ImageView
+    private var lastEmotion = AriaEmotion.NEUTRAL
     private lateinit var engine: InferenceEngine
     private lateinit var chatHistory: ChatHistory
     private lateinit var ariaMemory: AriaMemory
@@ -83,10 +86,11 @@ class MainActivity : AppCompatActivity() {
         val stageHint = TextView(this).apply {
             text = ""; setTextColor(Color.parseColor(MUTED)); textSize = 12f
         }
-        avatarCard = TextView(this).apply {
-            text = "ARIA\n◇"; gravity = Gravity.CENTER; textSize = 18f; setTextColor(Color.parseColor(TEXT))
+        avatarCard = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.MATRIX
             background = rounded(PANEL_2, 18f, PURPLE)
-            contentDescription = "Ventana visual de ARIA"
+            clipToOutline = true
+            contentDescription = "ARIA, expresión neutral"
         }
         stage.addView(stageHint, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         stage.addView(avatarCard, FrameLayout.LayoutParams(dp(118), dp(92), Gravity.TOP or Gravity.END))
@@ -112,11 +116,16 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(loadBrain)
         setContentView(root)
+        showPortrait(AriaEmotion.NEUTRAL)
 
         chatHistory = ChatHistory(applicationContext)
         ariaMemory = AriaMemory(applicationContext)
         val savedMessages = chatHistory.readAll()
         if (savedMessages.isEmpty()) aria(AriaPersonality.welcome) else savedMessages.forEach { addMessage(it.role, it.text) }
+        savedMessages.lastOrNull { it.role == "ARIA" }?.let {
+            lastEmotion = AriaEmotion.fromReply(it.text)
+            showPortrait(lastEmotion)
+        }
         send.setOnClickListener { sendMessage() }
         try {
             engine = AiChat.getInferenceEngine(applicationContext)
@@ -217,8 +226,13 @@ class MainActivity : AppCompatActivity() {
         if (busy) return
         busy = true; modelLoaded = false; loadBrain.isEnabled = false; send.isEnabled = false
         var temporary: File? = null
+        var imported: File? = null
+        var replaced: File? = null
+        var targetName = ""
+        var modelCommitted = false
         try {
             val name = displayName(uri).replace(Regex("[^A-Za-z0-9._-]"), "_").take(120).takeUnless { it.isBlank() || it == "." || it == ".." } ?: "modelo.gguf"
+            targetName = name
             setStatus("○ Importando cerebro", false)
             withTimeout(30_000) { engine.state.first { it is InferenceEngine.State.Initialized || it is InferenceEngine.State.ModelReady || it is InferenceEngine.State.Error } }
             if (engine.state.value !is InferenceEngine.State.Initialized) withContext(Dispatchers.IO) { engine.cleanUp() }
@@ -233,18 +247,38 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 val info = inspectGguf(partial); require(info.valid) { "GGUF inválido: ${info.detail}" }
-                val target = File(dir, name); if (target.exists()) check(target.delete()) { "No pude reemplazar el modelo anterior." }
-                check(partial.renameTo(target)) { "No pude guardar el modelo importado." }; target
+                val target = File(dir, name)
+                if (target.exists()) {
+                    val backup = File.createTempFile("backup-", ".gguf", dir)
+                    check(backup.delete() && target.renameTo(backup)) { "No pude preservar el modelo anterior." }
+                    replaced = backup
+                }
+                check(partial.renameTo(target)) { "No pude guardar el modelo importado." }
+                imported = target
+                target
             }
-            rememberModel(model); setStatus("○ Cargando cerebro", false)
+            setStatus("○ Cargando cerebro", false)
             engine.loadModel(model.absolutePath)
             engine.setSystemPrompt(AriaPersonality.promptWithRecentConversation(chatHistory.readAll()))
+            rememberModel(model)
+            modelCommitted = true
+            replaced?.delete()
+            replaced = null
             modelLoaded = true; setStatus("● Activa", true)
             if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.ready)
         } catch (e: TimeoutCancellationException) { setStatus("○ Motor sin responder", false) }
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { modelLoaded = false; setStatus("○ Error de cerebro", false); aria("Mi trasplante falló: ${e.javaClass.simpleName}: ${e.message ?: "sin detalle"}.") }
         finally {
+            var restoreFailed = false
+            if (!modelCommitted && (imported != null || replaced != null)) withContext(NonCancellable + Dispatchers.IO) {
+                imported?.delete()
+                replaced?.let { backup ->
+                    val original = File(File(filesDir, "models"), targetName)
+                    restoreFailed = !backup.renameTo(original)
+                }
+            }
+            if (restoreFailed) toast("No pude restaurar el cerebro anterior.")
             temporary?.delete(); busy = false; loadBrain.isEnabled = true
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
@@ -269,17 +303,21 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) { e.message ?: "No pude modificar la memoria local." }
             user(message); aria(answer)
+            lastEmotion = AriaEmotion.fromReply(answer, lastEmotion)
+            showPortrait(lastEmotion)
             uiScope.launch(Dispatchers.IO) {
                 chatHistory.append("Kura", message)
                 chatHistory.append("ARIA", answer)
             }
             return
         }
-        busy = true; loadBrain.isEnabled = false; user(message); uiScope.launch(Dispatchers.IO) { chatHistory.append("Kura", message) }
-        input.text.clear(); send.isEnabled = false; setStatus("● Pensando", true); avatarCard.text = "ARIA\n…"
+        busy = true; loadBrain.isEnabled = false; user(message)
+        input.text.clear(); send.isEnabled = false; setStatus("● Pensando", true)
+        if (message.startsWith("¿") || message.endsWith("?")) showPortrait(AriaEmotion.THINKING)
         val reply = messageView("ARIA", "Preparando respuesta…"); conversation.addView(reply); scrollToBottom()
         uiScope.launch {
             try {
+                withContext(Dispatchers.IO) { chatHistory.append("Kura", message) }
                 val filter = VisibleReplyFilter()
                 val modelMessage = withContext(Dispatchers.IO) {
                     val relevant = ariaMemory.relevantTo(message)
@@ -291,13 +329,18 @@ class MainActivity : AppCompatActivity() {
                     val answer = filter.append(token); if (answer.isNotBlank()) reply.text = answer
                 }
                 val answer = filter.finish()
-                if (answer.isNotBlank()) { reply.text = answer; withContext(Dispatchers.IO) { chatHistory.append("ARIA", answer) } }
-                else reply.text = "No llegué a completar una respuesta. Prueba con una pregunta más corta."
+                if (answer.isNotBlank()) {
+                    reply.text = answer
+                    lastEmotion = AriaEmotion.fromReply(answer, lastEmotion)
+                    showPortrait(lastEmotion)
+                    withContext(Dispatchers.IO) { chatHistory.append("ARIA", answer) }
+                }
+                else { reply.text = "No llegué a completar una respuesta. Prueba con una pregunta más corta."; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { reply.text = "Error al pensar: ${e.message ?: e.javaClass.simpleName}" }
+            catch (e: Exception) { reply.text = "Error al pensar: ${e.message ?: e.javaClass.simpleName}"; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
             finally {
                 busy = false; modelLoaded = engine.state.value is InferenceEngine.State.ModelReady; send.isEnabled = modelLoaded; loadBrain.isEnabled = true
-                avatarCard.text = "ARIA\n◇"; setStatus(if (modelLoaded) "● Activa" else "○ Cerebro desconectado", modelLoaded)
+                setStatus(if (modelLoaded) "● Activa" else "○ Cerebro desconectado", modelLoaded)
                 if (!modelLoaded) loadBrain.text = "RECONECTAR CEREBRO 🧠"; scrollToBottom()
             }
         }
@@ -340,6 +383,29 @@ class MainActivity : AppCompatActivity() {
     private fun aria(message: String) = addMessage("ARIA", message)
     private fun scrollToBottom() { scroll.post { scroll.fullScroll(View.FOCUS_DOWN) } }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    private fun showPortrait(emotion: AriaEmotion) {
+        val (drawable, label) = when (emotion) {
+            AriaEmotion.HAPPY, AriaEmotion.AFFECTIONATE -> R.drawable.aria_happy to "feliz"
+            AriaEmotion.EXCITED, AriaEmotion.AMUSED, AriaEmotion.SURPRISED, AriaEmotion.PLAYFUL ->
+                R.drawable.aria_excited to "entusiasta"
+            AriaEmotion.THINKING, AriaEmotion.CONFUSED -> R.drawable.aria_curious to "curiosa"
+            else -> R.drawable.aria_neutral to "neutral"
+        }
+        avatarCard.setImageResource(drawable)
+        avatarCard.contentDescription = "ARIA, expresión $label"
+        avatarCard.post {
+            val image = avatarCard.drawable ?: return@post
+            if (avatarCard.width == 0 || avatarCard.height == 0) return@post
+            val width = image.intrinsicWidth.toFloat()
+            val height = image.intrinsicHeight.toFloat()
+            val scale = maxOf(avatarCard.width / (width * 0.55f), avatarCard.height / (height * 0.55f))
+            avatarCard.imageMatrix = Matrix().apply {
+                setScale(scale, scale)
+                postTranslate(avatarCard.width / 2f - width * 0.58f * scale,
+                    avatarCard.height / 2f - height * 0.49f * scale)
+            }
+        }
+    }
     private fun showMemoryDialog() {
         val memories = try { ariaMemory.recallAll() } catch (e: Exception) { toast(e.message ?: "Memoria no disponible"); return }
         if (memories.isEmpty()) {

@@ -27,12 +27,12 @@ class AriaPersonalityTest {
         assertTrue(prompt.endsWith("/no_think"))
     }
 
-    @Test fun previousModelRepliesDoNotPrimeTheNextSession() {
+    @Test fun previousModelRepliesProvideConversationalContinuity() {
         val prompt = AriaPersonality.promptWithRecentConversation(listOf(
             ChatMessage("Kura", "¿Quién es Sol?", 1),
-            ChatMessage("ARIA", "Hablemos de algo interesante o simplemente charlemos", 2)
+            ChatMessage("ARIA", "Sol nos ayuda con el código de la aplicación.", 2)
         ))
         assertTrue(prompt.contains("¿Quién es Sol?"))
-        assertFalse(prompt.contains("Hablemos de algo interesante"))
+        assertTrue(prompt.contains("ARIA: Sol nos ayuda con el código"))
     }
 }
