@@ -22,4 +22,10 @@ class MemorySelectorTest {
     @Test fun noMatchingSubjectDoesNotInjectPersonalFacts() {
         assertTrue(MemorySelector.select(memories, "¿Qué hora es?", emptyList()).isEmpty())
     }
+
+    @Test fun greetingsDoNotRetrieveThePreviousTopic() {
+        val coffee = listOf(Memory(4, "No me gusta el café"))
+        assertTrue(MemorySelector.select(coffee, "hola aria", listOf("Hablemos del café")).isEmpty())
+        assertTrue(MemorySelector.select(coffee, "¿cómo estás?", listOf("Hablemos del café")).isEmpty())
+    }
 }

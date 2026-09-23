@@ -85,7 +85,7 @@ internal object MemorySelector {
         "esta", "este", "tengo", "sabes", "recuerdas", "aria", "kura", "hola", "bien",
         "eso", "esto", "ella", "ellos", "algo", "sobre", "porque", "cuando", "donde",
         "quien", "dime", "puedes", "quiero", "seria", "serian", "pero", "muy", "mas",
-        "mensaje", "llama", "llamado", "llamada"
+        "mensaje", "llama", "llamado", "llamada", "estas", "estoy", "estamos"
     )
 
     fun keywords(text: String): Set<String> = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
@@ -95,7 +95,8 @@ internal object MemorySelector {
 
     fun select(memories: List<Memory>, current: String, previous: List<String>): List<Memory> {
         val now = keywords(current)
-        val recent = previous.takeLast(2).flatMap { keywords(it) }.toSet()
+        val recent = if (isFollowUp(current)) previous.takeLast(2).flatMap { keywords(it) }.toSet()
+            else emptySet()
         if (now.isEmpty() && recent.isEmpty()) return emptyList()
         val currentMatches = memories.map { item ->
             val terms = keywords(item.content)
@@ -108,6 +109,15 @@ internal object MemorySelector {
             .sortedWith(compareByDescending<Pair<Memory, Int>> { it.second }
                 .thenByDescending { it.first.timestamp })
             .take(3).map { it.first }
+    }
+
+    /** Referencias sin tema propio pueden retomar el turno anterior; saludos y temas nuevos no. */
+    fun isFollowUp(message: String): Boolean {
+        val text = Normalizer.normalize(message.lowercase(), Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"), "")
+        if (text.matches(Regex("^[¿?¡!\\s]*(?:hola|buenas|como estas|que tal|como te va)(?:\\s+aria)?[¿?¡!.\\s]*$"))) return false
+        return Regex("\\b(?:eso|esto|esa|ese|ella|ellos|se llama|su nombre|lo anterior|y entonces|y despues|volvamos|retomemos|de eso)\\b")
+            .containsMatchIn(text)
     }
 }
 

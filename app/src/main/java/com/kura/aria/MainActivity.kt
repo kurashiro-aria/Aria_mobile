@@ -199,7 +199,6 @@ class MainActivity : AppCompatActivity() {
             busy = false; loadBrain.isEnabled = ::engine.isInitialized
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
-            if (send.isEnabled) maybeStartConversation()
         }
     }
 
@@ -208,8 +207,6 @@ class MainActivity : AppCompatActivity() {
         if (::engine.isInitialized && !busy && savedModel() != null &&
             (!modelLoaded || engine.state.value !is InferenceEngine.State.ModelReady)) {
             uiScope.launch { restoreBrainIfNeeded() }
-        } else if (::engine.isInitialized && modelLoaded && !busy) {
-            maybeStartConversation()
         }
     }
 
@@ -302,46 +299,6 @@ class MainActivity : AppCompatActivity() {
             temporary?.delete(); busy = false; loadBrain.isEnabled = true
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
-            if (send.isEnabled) maybeStartConversation()
-        }
-    }
-
-    private fun maybeStartConversation() {
-        if (!modelLoaded || busy) return
-        val recent = chatHistory.readAll()
-        if (recent.isEmpty()) return
-        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val now = System.currentTimeMillis()
-        val last = prefs.getLong("last_aria_initiative", 0L)
-        if (now - last < 6L * 60L * 60L * 1000L) return
-        busy = true; send.isEnabled = false; setStatus("● Pensando", true)
-        val reply = messageView("ARIA", "…")
-        conversation.addView(reply); scrollToBottom()
-        uiScope.launch {
-            try {
-                val filter = VisibleReplyFilter()
-                val opener = ConversationContext.initiativePrompt(recent)
-                engine.sendUserPrompt(AriaPersonality.directResponsePrompt(opener), predictLength = 256).flowOn(Dispatchers.IO).collect { token ->
-                    val text = filter.append(token)
-                    if (text.isNotBlank()) reply.text = text
-                }
-                val answer = filter.finish()
-                if (answer.isNotBlank()) {
-                    reply.text = answer
-                    lastEmotion = AriaEmotion.fromReply(answer, lastEmotion)
-                    showPortrait(lastEmotion)
-                    withContext(Dispatchers.IO) { chatHistory.append("ARIA", answer) }
-                    prefs.edit().putLong("last_aria_initiative", System.currentTimeMillis()).apply()
-                } else conversation.removeView(reply)
-            } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { conversation.removeView(reply) }
-            finally {
-                busy = false
-                modelLoaded = engine.state.value is InferenceEngine.State.ModelReady
-                send.isEnabled = modelLoaded
-                setStatus(if (modelLoaded) "● Activa" else "○ Cerebro desconectado", modelLoaded)
-                scrollToBottom()
-            }
         }
     }
 

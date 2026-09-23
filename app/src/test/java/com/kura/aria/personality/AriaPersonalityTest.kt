@@ -32,14 +32,15 @@ class AriaPersonalityTest {
         assertTrue(prompt.contains("ARIA: ¿Cómo se llama?"))
     }
 
-    @Test fun olderExchangeIsLabeledAsHistoryAndNeverAsSavedMemory() {
+    @Test fun olderUserFactIsLabeledAsHistoryWithoutRepeatingAria() {
         val history = listOf(
             ChatMessage("Kura", "Hablemos del manga de Sora", 1),
             ChatMessage("ARIA", "Sora entra a la mazmorra", 2)
         ) + (3..10).map { ChatMessage("Kura", "Tema cotidiano $it", it.toLong()) }
         val prompt = ConversationContext.turnPrompt(history, emptyList(), "Volvamos al manga")
         assertTrue(prompt.contains("Fragmentos anteriores del historial (no guardados)"))
-        assertTrue(prompt.contains("Sora entra a la mazmorra"))
+        assertTrue(prompt.contains("Hablemos del manga de Sora"))
+        assertFalse(prompt.contains("Sora entra a la mazmorra"))
         assertFalse(prompt.contains("Guardado por Kura"))
     }
 
@@ -47,9 +48,19 @@ class AriaPersonalityTest {
         val history = (1..14).map { ChatMessage("Kura", "Mensaje $it " + "x".repeat(250), it.toLong()) }
         val prompt = ConversationContext.turnPrompt(history, emptyList(), "Otra cosa")
         assertFalse(prompt.contains("Mensaje 8 "))
-        assertTrue(prompt.contains("Mensaje 9 "))
-        assertTrue(prompt.contains("Mensaje 14 "))
+        assertFalse(prompt.contains("Mensaje 9 "))
+        assertFalse(prompt.contains("Mensaje 14 "))
         assertFalse(prompt.contains("x".repeat(250)))
         assertFalse(prompt.contains("ayer hablamos"))
+    }
+
+    @Test fun greetingAfterUnrelatedTopicDoesNotPrimeOldAnswer() {
+        val history = listOf(
+            ChatMessage("Kura", "No me gusta el café", 1),
+            ChatMessage("ARIA", "¿Te gustaría tomar café en un lugar tranquilo?", 2)
+        )
+        val prompt = ConversationContext.turnPrompt(history, emptyList(), "hola aria")
+        assertFalse(prompt.contains("café"))
+        assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nhola aria"))
     }
 }
