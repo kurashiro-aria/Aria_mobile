@@ -10,8 +10,8 @@ class AriaPersonalityTest {
         val messages = (1..9).map { ChatMessage("Kura", "Mensaje $it " + "x".repeat(250), it.toLong()) }
         val prompt = AriaPersonality.promptWithRecentConversation(messages)
 
-        assertFalse(prompt.contains("Mensaje 5"))
-        assertTrue(prompt.indexOf("Mensaje 6") < prompt.indexOf("Mensaje 9"))
+        assertFalse(prompt.contains("Mensaje 3"))
+        assertTrue(prompt.indexOf("Mensaje 4") < prompt.indexOf("Mensaje 9"))
         assertTrue(prompt.contains("Mensaje 9"))
         assertFalse(prompt.contains("x".repeat(200)))
     }
