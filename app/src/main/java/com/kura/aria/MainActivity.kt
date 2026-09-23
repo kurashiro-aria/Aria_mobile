@@ -392,7 +392,7 @@ class MainActivity : AppCompatActivity() {
                 if (answer.isBlank()) {
                     reply.text = "Intentando responder directamente…"
                     answer = collectVisibleReply(
-                        AriaPersonality.directResponsePrompt("Responde directamente al último mensaje de Kura en español, sin razonamiento previo."),
+                        AriaPersonality.directResponsePrompt("$modelMessage\nResponde directamente al mensaje actual de Kura en español, sin razonamiento previo."),
                         384, reply
                     )
                 }

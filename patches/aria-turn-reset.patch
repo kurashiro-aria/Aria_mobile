@@ -1,0 +1,56 @@
+--- a/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
++++ b/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
+@@ -322,8 +322,36 @@
+     common_chat_msg new_msg;
+     new_msg.role = role;
+     new_msg.content = content;
+-    auto formatted = common_chat_format_single(
+-            g_chat_templates.get(), chat_msgs, new_msg, role == ROLE_USER, /* use_jinja */ false);
++    char architecture[64] = {};
++    llama_model_meta_val_str(g_model, "general.architecture", architecture, sizeof(architecture));
++    std::string formatted;
++    if (std::string(architecture) == "qwen3") {
++        if (role == ROLE_ASSISTANT) {
++            chat_msgs.push_back(new_msg);
++            return "";
++        }
++        try {
++            common_chat_templates_inputs inputs;
++            inputs.use_jinja = true;
++            inputs.enable_thinking = false;
++            inputs.messages = chat_msgs;
++            const auto before = common_chat_templates_apply(g_chat_templates.get(), inputs).prompt;
++            inputs.messages.push_back(new_msg);
++            inputs.add_generation_prompt = role == ROLE_USER;
++            const auto after = common_chat_templates_apply(g_chat_templates.get(), inputs).prompt;
++            if (after.compare(0, before.size(), before) == 0) {
++                formatted = after.substr(before.size());
++            }
++        } catch (const std::exception & e) {
++            LOGw("Qwen3 Jinja template failed: %s", e.what());
++        }
++        if (formatted.empty()) {
++            formatted = common_chat_format_single(g_chat_templates.get(), chat_msgs, new_msg, role == ROLE_USER, false);
++        }
++    } else {
++        formatted = common_chat_format_single(
++                g_chat_templates.get(), chat_msgs, new_msg, role == ROLE_USER, /* use_jinja */ false);
++    }
+     chat_msgs.push_back(new_msg);
+     LOGi("%s: Formatted and added %s message: \n%s\n", __func__, role.c_str(), formatted.c_str());
+     return formatted;
+@@ -443,6 +471,14 @@
+     // Reset short-term states
+     reset_short_term_states();
+ 
++    // Each Android turn contains its own recent context. Keep the system prompt only.
++    if (!llama_memory_seq_rm(llama_get_memory(g_context), 0, system_prompt_position, -1)) {
++        return 2;
++    }
++    current_position = system_prompt_position;
++    if (!chat_msgs.empty()) chat_msgs.resize(1);
++    common_sampler_reset(g_sampler);
++
+     // Obtain and tokenize user prompt
+     const auto *const user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);
+     LOGd("%s: User prompt received: \n%s", __func__, user_prompt);
