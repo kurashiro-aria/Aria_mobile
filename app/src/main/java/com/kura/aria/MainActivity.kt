@@ -83,23 +83,20 @@ class MainActivity : AppCompatActivity() {
         header.addView(identity, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); header.addView(menu)
         root.addView(header)
 
-        val chatArea = FrameLayout(this)
         avatarCard = ImageView(this).apply {
             scaleType = ImageView.ScaleType.MATRIX
             background = rounded(PANEL_2, 18f, PURPLE)
             clipToOutline = true
-            alpha = 0.68f
             contentDescription = "ARIA, expresión neutral"
         }
-        // The portrait sits behind the scrolling chat, so it does not take space from messages.
-        chatArea.addView(avatarCard, FrameLayout.LayoutParams(dp(150), dp(200), Gravity.TOP or Gravity.START).apply {
-            leftMargin = dp(4); topMargin = dp(8)
+        // Give the expression its own space above the conversation.
+        root.addView(avatarCard, LinearLayout.LayoutParams(dp(150), dp(200)).apply {
+            marginStart = dp(4); topMargin = dp(8)
         })
 
         conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }
         scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }
-        chatArea.addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        root.addView(chatArea, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
+        root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
 
         val inputRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM or Gravity.CENTER_VERTICAL }
         input = EditText(this).apply {
