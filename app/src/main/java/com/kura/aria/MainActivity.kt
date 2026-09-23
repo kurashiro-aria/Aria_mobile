@@ -83,35 +83,23 @@ class MainActivity : AppCompatActivity() {
         header.addView(identity, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); header.addView(menu)
         root.addView(header)
 
-        val stage = FrameLayout(this).apply {
-            background = rounded(PANEL, 22f, "#332641")
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-        }
-        val stageHint = TextView(this).apply {
-            text = ""; setTextColor(Color.parseColor(MUTED)); textSize = 12f
-        }
+        val chatArea = FrameLayout(this)
         avatarCard = ImageView(this).apply {
             scaleType = ImageView.ScaleType.MATRIX
             background = rounded(PANEL_2, 18f, PURPLE)
             clipToOutline = true
+            alpha = 0.68f
             contentDescription = "ARIA, expresión neutral"
         }
-        // Keep the portrait large while leaving room for the conversation on short screens.
-        val portraitSize = minOf(
-            dp(250),
-            resources.displayMetrics.widthPixels - dp(60),
-            (resources.displayMetrics.heightPixels * 0.34f).toInt()
-        ).coerceAtLeast(dp(160))
-        stage.addView(stageHint, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        stage.addView(avatarCard, FrameLayout.LayoutParams(portraitSize, portraitSize, Gravity.CENTER))
-        root.addView(stage, LinearLayout.LayoutParams(portraitSize + dp(24), portraitSize + dp(24)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-            topMargin = dp(12)
+        // The portrait sits behind the scrolling chat, so it does not take space from messages.
+        chatArea.addView(avatarCard, FrameLayout.LayoutParams(dp(150), dp(200), Gravity.TOP or Gravity.START).apply {
+            leftMargin = dp(4); topMargin = dp(8)
         })
 
         conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }
         scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }
-        root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
+        chatArea.addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        root.addView(chatArea, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
 
         val inputRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM or Gravity.CENTER_VERTICAL }
         input = EditText(this).apply {
@@ -153,6 +141,7 @@ class MainActivity : AppCompatActivity() {
         PopupMenu(this, anchor).apply {
             menu.add("Estado de ARIA").isEnabled = false
             menu.add(if (modelLoaded) "Cerebro: conectado" else "Cerebro: desconectado").isEnabled = false
+            if (!modelLoaded && savedModel() != null) menu.add("Reconectar cerebro")
             menu.add("Cambiar / cargar cerebro")
             menu.add("Memoria")
             menu.add("Personalidad")
@@ -163,6 +152,7 @@ class MainActivity : AppCompatActivity() {
             setOnMenuItemClickListener {
                 when (it.title.toString()) {
                     "Cambiar / cargar cerebro" -> chooseModel()
+                    "Reconectar cerebro" -> uiScope.launch { restoreBrainIfNeeded() }
                     "Memoria" -> showMemoryDialog()
                     "Personalidad" -> toast("ARIA Personality v2 activa")
                     "Voz" -> toast("Voz: próximamente")
@@ -197,6 +187,7 @@ class MainActivity : AppCompatActivity() {
                     setStatus("○ Reconectando", false)
                     engine.loadModel(model.absolutePath)
                     engine.setSystemPrompt(AriaPersonality.promptWithRecentConversation(chatHistory.readAll()))
+                    if (getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null) == null) rememberModel(model)
                     modelLoaded = true; setStatus("● Activa", true)
                     if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.restored)
                 }
@@ -211,10 +202,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::engine.isInitialized && !busy && savedModel() != null &&
+            (!modelLoaded || engine.state.value !is InferenceEngine.State.ModelReady)) {
+            uiScope.launch { restoreBrainIfNeeded() }
+        }
+    }
+
     private fun savedModel(): File? {
-        val name = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null) ?: return null
+        val modelDir = File(filesDir, "models")
+        val name = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null)
+            ?: return modelDir.listFiles()?.filter {
+                it.isFile && it.canRead() && it.name.endsWith(".gguf", ignoreCase = true) && !it.name.startsWith("backup-")
+            }?.singleOrNull()
         if (name.contains('/') || name.contains('\\')) return null
-        val file = File(File(filesDir, "models"), name); return file.takeIf { it.isFile && it.canRead() }
+        val file = File(modelDir, name); return file.takeIf { it.isFile && it.canRead() }
     }
 
     private fun rememberModel(model: File) {
@@ -405,11 +408,21 @@ class MainActivity : AppCompatActivity() {
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     private fun showPortrait(emotion: AriaEmotion) {
         val (drawable, label) = when (emotion) {
-            AriaEmotion.HAPPY, AriaEmotion.AFFECTIONATE -> R.drawable.aria_happy to "feliz"
-            AriaEmotion.EXCITED, AriaEmotion.AMUSED, AriaEmotion.SURPRISED, AriaEmotion.PLAYFUL ->
-                R.drawable.aria_excited to "entusiasta"
-            AriaEmotion.THINKING, AriaEmotion.CONFUSED -> R.drawable.aria_curious to "curiosa"
-            else -> R.drawable.aria_neutral to "neutral"
+            AriaEmotion.NEUTRAL -> R.drawable.aria_neutral to emotion.label
+            AriaEmotion.HAPPY -> R.drawable.aria_happy to emotion.label
+            AriaEmotion.AMUSED -> R.drawable.aria_amused to emotion.label
+            AriaEmotion.THINKING -> R.drawable.aria_curious to emotion.label
+            AriaEmotion.SURPRISED -> R.drawable.aria_surprised to emotion.label
+            AriaEmotion.CONFUSED -> R.drawable.aria_confused to emotion.label
+            AriaEmotion.ANNOYED -> R.drawable.aria_annoyed to emotion.label
+            AriaEmotion.ANGRY -> R.drawable.aria_angry to emotion.label
+            AriaEmotion.EMBARRASSED -> R.drawable.aria_embarrassed to emotion.label
+            AriaEmotion.SAD -> R.drawable.aria_sad to emotion.label
+            AriaEmotion.AFFECTIONATE -> R.drawable.aria_affectionate to emotion.label
+            AriaEmotion.PLAYFUL -> R.drawable.aria_playful to emotion.label
+            AriaEmotion.SERIOUS -> R.drawable.aria_serious to emotion.label
+            AriaEmotion.TIRED -> R.drawable.aria_tired to emotion.label
+            AriaEmotion.EXCITED -> R.drawable.aria_excited to emotion.label
         }
         val portrait = portraits[drawable] ?: BitmapFactory.decodeResource(resources, drawable,
             BitmapFactory.Options().apply { inSampleSize = 2 })?.also { portraits[drawable] = it }
