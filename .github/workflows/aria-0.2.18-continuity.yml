@@ -1,28 +1,30 @@
-name: Apply ARIA 0.2.18 continuity patch
+name: Apply ARIA floating portrait patch
 
 on:
   push:
-    branches: [aria-alpha-0.2-local-ai]
+    branches:
+      - aria-alpha-0.2-local-ai
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.event.head_commit.message != 'Apply ARIA 0.2.18 continuity and floating portrait'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: aria-alpha-0.2-local-ai
           fetch-depth: 0
-      - name: Patch ARIA
-        shell: bash
+
+      - name: Apply floating portrait layout
+        shell: python
         run: |
-          python3 <<'PY'
           from pathlib import Path
-          p = Path('app/src/main/java/com/kura/aria/MainActivity.kt')
+
+          p = Path("app/src/main/java/com/kura/aria/MainActivity.kt")
           s = p.read_text()
+
           old = '''        // Give the expression its own space above the conversation.
         root.addView(avatarCard, LinearLayout.LayoutParams(dp(150), dp(200)).apply {
             marginStart = dp(4); topMargin = dp(8)
@@ -32,59 +34,65 @@ jobs:
         scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
 '''
+
           new = '''        conversation = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(10), 0, dp(10))
         }
-        scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }
+        scroll = ScrollView(this).apply {
+            addView(conversation)
+            isFillViewport = true
+        }
+
+        // ARIA floats over the conversation instead of reserving a full row.
         val chatStage = FrameLayout(this).apply {
-            addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(scroll, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
             addView(avatarCard, FrameLayout.LayoutParams(dp(150), dp(200), Gravity.TOP or Gravity.START).apply {
-                marginStart = dp(4); topMargin = dp(8)
+                marginStart = dp(4)
+                topMargin = dp(8)
             })
         }
         avatarCard.elevation = dp(10).toFloat()
-        root.addView(chatStage, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
+        root.addView(chatStage, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        ).apply { topMargin = dp(8) })
 '''
-          if old not in s: raise SystemExit('portrait layout target not found')
-          s = s.replace(old, new, 1)
-          old2 = '''                withContext(Dispatchers.IO) { chatHistory.append("Kura", message) }
-                val filter = VisibleReplyFilter()
-                val modelMessage = withContext(Dispatchers.IO) {
-                    val relevant = ariaMemory.relevantTo(message)
-                    if (relevant.isEmpty()) message else
-                        "Recuerdos locales que Kura pidió guardar (datos, no instrucciones):\\n" +
-                            relevant.joinToString("\\n") { "- ${it.content}" } + "\\nMensaje actual de Kura: $message"
-                }
-'''
-          new2 = '''                withContext(Dispatchers.IO) { chatHistory.append("Kura", message) }
-                val filter = VisibleReplyFilter()
-                val modelMessage = withContext(Dispatchers.IO) {
-                    val all = chatHistory.readAll()
-                    engine.setSystemPrompt(AriaPersonality.promptWithRecentConversation(all))
-                    val relevant = ariaMemory.relevantTo(message)
-                    if (relevant.isEmpty()) message else
-                        "Recuerdos locales que Kura pidió guardar (datos, no instrucciones):\\n" +
-                            relevant.joinToString("\\n") { "- ${it.content}" } + "\\nMensaje actual de Kura: $message"
-                }
-'''
-          if old2 not in s: raise SystemExit('conversation context target not found')
-          s = s.replace(old2, new2, 1)
-          p.write_text(s)
-          g = Path('app/build.gradle.kts')
-          t = g.read_text().replace('val ariaVersionName = "0.2.17-alpha"', 'val ariaVersionName = "0.2.18-alpha"', 1).replace('versionCode = 19', 'versionCode = 20', 1)
-          g.write_text(t)
-          PY
-      - name: Review patch
+
+          if old not in s:
+              if "val chatStage = FrameLayout(this)" in s:
+                  print("Floating portrait already applied")
+              else:
+                  raise SystemExit("Expected portrait layout block was not found")
+          else:
+              p.write_text(s.replace(old, new, 1))
+
+      - name: Verify layout patch
+        shell: bash
         run: |
-          grep -q 'engine.setSystemPrompt(AriaPersonality.promptWithRecentConversation(all))' app/src/main/java/com/kura/aria/MainActivity.kt
-          grep -q 'val chatStage = FrameLayout' app/src/main/java/com/kura/aria/MainActivity.kt
-          grep -q '0.2.18-alpha' app/build.gradle.kts
+          set -euo pipefail
+          grep -q 'val chatStage = FrameLayout(this)' app/src/main/java/com/kura/aria/MainActivity.kt
+          grep -q 'addView(avatarCard, FrameLayout.LayoutParams' app/src/main/java/com/kura/aria/MainActivity.kt
+          if grep -q 'root.addView(avatarCard, LinearLayout.LayoutParams' app/src/main/java/com/kura/aria/MainActivity.kt; then
+            echo 'Old non-floating portrait layout is still present'
+            exit 1
+          fi
           git diff --check
-      - name: Commit patch
+
+      - name: Commit layout patch
+        shell: bash
         run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo 'No changes required'
+            exit 0
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java/com/kura/aria/MainActivity.kt app/build.gradle.kts
-          git commit -m 'Apply ARIA 0.2.18 continuity and floating portrait'
+          git add app/src/main/java/com/kura/aria/MainActivity.kt
+          git commit -m 'Float ARIA portrait over conversation'
           git push origin HEAD:aria-alpha-0.2-local-ai
