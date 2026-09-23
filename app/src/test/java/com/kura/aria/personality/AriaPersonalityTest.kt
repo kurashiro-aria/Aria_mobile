@@ -7,12 +7,12 @@ import org.junit.Test
 
 class AriaPersonalityTest {
     @Test fun recentConversationIsBoundedAndOrdered() {
-        val messages = (1..9).map { ChatMessage("Kura", "Mensaje $it " + "x".repeat(250), it.toLong()) }
+        val messages = (1..14).map { ChatMessage("Kura", "Mensaje $it " + "x".repeat(250), it.toLong()) }
         val prompt = AriaPersonality.promptWithRecentConversation(messages)
 
-        assertFalse(prompt.contains("Mensaje 3"))
-        assertTrue(prompt.indexOf("Mensaje 4") < prompt.indexOf("Mensaje 9"))
-        assertTrue(prompt.contains("Mensaje 9"))
+        assertFalse(prompt.contains("Mensaje 4 "))
+        assertTrue(prompt.indexOf("Mensaje 5 ") < prompt.indexOf("Mensaje 14 "))
+        assertTrue(prompt.contains("Mensaje 14 "))
         assertFalse(prompt.contains("x".repeat(250)))
     }
 
