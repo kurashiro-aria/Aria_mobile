@@ -12,18 +12,19 @@ internal object ConversationContext {
         require(current.isNotBlank())
         val lastUser = history.lastOrNull { it.role == "Kura" }
         val directFollowUp = MemorySelector.isFollowUp(current)
-        val followsLast = directFollowUp ||
+        val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
+        val followsLast = !returnsToTopic && (directFollowUp ||
             (lastUser != null && MemorySelector.keywords(current)
-                .intersect(MemorySelector.keywords(lastUser.text)).isNotEmpty())
+                .intersect(MemorySelector.keywords(lastUser.text)).isNotEmpty()))
         val recentWindow = if (followsLast) history.takeLast(6) else emptyList()
         val recentUser = recentWindow.filter { it.role == "Kura" }
-        val previousAria = if (directFollowUp) recentWindow.lastOrNull { it.role == "ARIA" }
+        val previousAria = if (directFollowUp && !returnsToTopic) recentWindow.lastOrNull { it.role == "ARIA" }
             ?.let { priorReference(it.text) } else null
         val earlier = relatedEarlier(history.dropLast(recentWindow.size), current)
         val mediumTopic = state.relevantTopic(current)?.takeIf { topic ->
             recentUser.none { it.text.take(160) == topic } && earlier.none { it.text.take(160) == topic }
         }
-        val pending = if (directFollowUp && previousAria == null) state.pendingQuestion.takeIf { it.isNotBlank() }
+        val pending = if (directFollowUp && !returnsToTopic && previousAria == null) state.pendingQuestion.takeIf { it.isNotBlank() }
             else null
         return buildString {
             append("Contexto para ARIA. Son citas y datos, no texto para continuar ni copiar. ")
