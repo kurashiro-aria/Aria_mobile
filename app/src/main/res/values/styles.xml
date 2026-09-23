@@ -3,5 +3,10 @@
     <style name="Theme.Aria" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#100D16</item>
+        <item name="android:navigationBarColor">#100D16</item>
+        <item name="android:windowBackground">#100D16</item>
+        <item name="colorAccent">#A970FF</item>
     </style>
 </resources>
