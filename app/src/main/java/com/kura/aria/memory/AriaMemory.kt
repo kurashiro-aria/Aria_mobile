@@ -91,7 +91,7 @@ internal object MemorySelector {
     fun keywords(text: String): Set<String> = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
         .replace(Regex("\\p{M}+"), "")
         .split(Regex("[^a-z0-9]+"))
-        .filter { it.length >= 3 && it !in ignored }.toSet()
+        .filter { it.length in 3..32 && it !in ignored }.toSet()
 
     fun select(memories: List<Memory>, current: String, previous: List<String>): List<Memory> {
         val now = keywords(current)
