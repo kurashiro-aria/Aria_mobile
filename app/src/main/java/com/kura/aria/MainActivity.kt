@@ -16,6 +16,7 @@ import com.kura.aria.chat.ChatHistory
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import java.io.File
 import java.io.RandomAccessFile
 
@@ -242,10 +243,11 @@ class MainActivity : AppCompatActivity() {
         uiScope.launch {
             try {
                 val filter = VisibleReplyFilter()
-                engine.sendUserPrompt(message, predictLength = 1024).collect { token ->
-                    val answer = filter.append(token)
-                    if (answer.isNotBlank()) reply.text = "ARIA: $answer"
-                }
+                engine.sendUserPrompt(message, predictLength = 1024)
+                    .flowOn(Dispatchers.IO).collect { token ->
+                        val answer = filter.append(token)
+                        if (answer.isNotBlank()) reply.text = "ARIA: $answer"
+                    }
                 val answer = filter.finish()
                 if (answer.isNotBlank()) {
                     reply.text = "ARIA: $answer"

@@ -1,5 +1,5 @@
 diff --git a/examples/llama.android/lib/src/main/cpp/ai_chat.cpp b/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
-index 03ab96cfd..c6d52750c 100644
+index 03ab96cfd..5d5485208 100644
 --- a/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
 +++ b/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
 @@ -3,6 +3,7 @@
@@ -10,6 +10,15 @@ index 03ab96cfd..c6d52750c 100644
  #include <unistd.h>
  #include <sampling.h>
  
+@@ -31,7 +32,7 @@ constexpr int   N_THREADS_HEADROOM      = 2;
+ constexpr int   DEFAULT_CONTEXT_SIZE    = 8192;
+ constexpr int   OVERFLOW_HEADROOM       = 4;
+ constexpr int   BATCH_SIZE              = 512;
+-constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;
++constexpr float DEFAULT_SAMPLER_TEMP    = 0.75f;
+ 
+ static llama_model                      * g_model;
+ static llama_context                    * g_context;
 @@ -39,11 +40,30 @@ static llama_batch                        g_batch;
  static common_chat_templates_ptr          g_chat_templates;
  static common_sampler                   * g_sampler;
@@ -66,7 +75,16 @@ index 03ab96cfd..c6d52750c 100644
      llama_model_params model_params = llama_model_default_params();
  
      const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
-@@ -265,7 +295,7 @@ static void reset_long_term_states(const bool clear_kv_cache = true) {
+@@ -107,6 +137,8 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
+ static common_sampler *new_sampler(float temp) {
+     common_params_sampling sparams;
+     sparams.temp = temp;
++    sparams.penalty_repeat = 1.12f;
++    sparams.penalty_last_n = 128;
+     return common_sampler_init(g_model, sparams);
+ }
+ 
+@@ -265,7 +297,7 @@ static void reset_long_term_states(const bool clear_kv_cache = true) {
      system_prompt_position = 0;
      current_position = 0;
  
@@ -75,7 +93,7 @@ index 03ab96cfd..c6d52750c 100644
          llama_memory_clear(llama_get_memory(g_context), false);
  }
  
-@@ -303,12 +333,12 @@ static std::string chat_add_and_format(const std::string &role, const std::strin
+@@ -303,12 +335,12 @@ static std::string chat_add_and_format(const std::string &role, const std::strin
   * - token chars caching
   * - current assistant message being generated
   */
@@ -90,7 +108,7 @@ index 03ab96cfd..c6d52750c 100644
      cached_token_chars.clear();
      assistant_ss.str("");
  }
-@@ -317,25 +347,25 @@ static int decode_tokens_in_batches(
+@@ -317,25 +349,25 @@ static int decode_tokens_in_batches(
          llama_context *context,
          llama_batch &batch,
          const llama_tokens &tokens,
@@ -120,7 +138,7 @@ index 03ab96cfd..c6d52750c 100644
              const bool want_logit = compute_last_logit && (i + j == tokens.size() - 1);
              common_batch_add(batch, token_id, position, {0}, want_logit);
          }
-@@ -346,6 +376,7 @@ static int decode_tokens_in_batches(
+@@ -346,6 +378,7 @@ static int decode_tokens_in_batches(
              LOGe("%s: llama_decode failed w/ %d", __func__, decode_result);
              return 1;
          }
@@ -128,7 +146,7 @@ index 03ab96cfd..c6d52750c 100644
      }
      return 0;
  }
-@@ -389,7 +420,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
+@@ -389,7 +422,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
      }
  
      // Decode system tokens in batches
@@ -137,7 +155,7 @@ index 03ab96cfd..c6d52750c 100644
          LOGe("%s: llama_decode() failed!", __func__);
          return 2;
      }
-@@ -428,24 +459,21 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
+@@ -428,24 +461,21 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
          LOGv("token: `%s`\t -> `%d`", common_token_to_piece(g_context, id).c_str(), id);
      }
  
@@ -169,7 +187,7 @@ index 03ab96cfd..c6d52750c 100644
      return 0;
  }
  
-@@ -489,16 +517,17 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
+@@ -489,16 +519,17 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
          JNIEnv *env,
          jobject /*unused*/
  ) {
@@ -195,7 +213,7 @@ index 03ab96cfd..c6d52750c 100644
      }
  
      // Sample next token
-@@ -510,11 +539,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
+@@ -510,11 +541,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
      common_batch_add(g_batch, new_token_id, current_position, {0}, true);
      if (llama_decode(g_context, g_batch) != 0) {
          LOGe("%s: llama_decode() failed for generated token", __func__);
@@ -209,7 +227,7 @@ index 03ab96cfd..c6d52750c 100644
  
      // Stop if next token is EOG
      if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
-@@ -556,6 +587,10 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_unload(JNIEnv * /*unused*/, job
+@@ -556,6 +589,10 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_unload(JNIEnv * /*unused*/, job
      llama_batch_free(g_batch);
      llama_free(g_context);
      llama_model_free(g_model);
