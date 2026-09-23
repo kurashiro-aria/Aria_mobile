@@ -89,14 +89,16 @@ class MainActivity : AppCompatActivity() {
             clipToOutline = true
             contentDescription = "ARIA, expresión neutral"
         }
-        // Give the expression its own space above the conversation.
-        root.addView(avatarCard, LinearLayout.LayoutParams(dp(150), dp(200)).apply {
-            marginStart = dp(4); topMargin = dp(8)
-        })
-
         conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }
         scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }
-        root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
+        val chatStage = FrameLayout(this).apply {
+            addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(avatarCard, FrameLayout.LayoutParams(dp(150), dp(200), Gravity.TOP or Gravity.START).apply {
+                marginStart = dp(4); topMargin = dp(8)
+            })
+        }
+        avatarCard.elevation = dp(10).toFloat()
+        root.addView(chatStage, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
 
         val inputRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM or Gravity.CENTER_VERTICAL }
         input = EditText(this).apply {
