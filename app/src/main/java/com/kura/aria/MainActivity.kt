@@ -89,7 +89,7 @@ class MainActivity : AppCompatActivity() {
             clipToOutline = true
             contentDescription = "ARIA, expresión neutral"
         }
-        conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }
+        conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(218), 0, dp(10)) }
         scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }
         val chatStage = FrameLayout(this).apply {
             addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
