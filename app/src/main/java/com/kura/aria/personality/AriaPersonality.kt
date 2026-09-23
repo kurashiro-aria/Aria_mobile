@@ -105,6 +105,9 @@ object AriaPersonality {
             "\nContinúa el mismo hilo con naturalidad desde el mensaje nuevo de Kura; no reinicies la conversación.\n/no_think"
     }
 
+    /** Qwen3 follows the most recent mode instruction; keep it on each turn. */
+    fun directResponsePrompt(message: String): String = "$message\n/no_think"
+
     const val welcome = "Hola, Kura. Aquí estoy. Cuando quieras, cargamos mi cerebro y hablamos."
     const val ready = "Ya estoy aquí. ¿Qué hacemos?"
     const val restored = "Volví. Ya tengo el cerebro conectado."

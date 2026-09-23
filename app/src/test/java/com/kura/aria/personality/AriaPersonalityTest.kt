@@ -36,6 +36,11 @@ class AriaPersonalityTest {
         assertTrue(prompt.contains("ARIA: Sol nos ayuda con el código"))
     }
 
+    @Test fun currentTurnKeepsNonThinkingInstructionLast() {
+        val prompt = AriaPersonality.directResponsePrompt("¿Cómo te fue? /think")
+        assertTrue(prompt.endsWith("/no_think"))
+    }
+
     @Test fun relatedOlderExchangeSurvivesRestartWithoutUnrelatedHistory() {
         val messages = listOf(
             ChatMessage("Kura", "El proyecto del manga tiene una mazmorra", 1),
