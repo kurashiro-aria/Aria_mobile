@@ -107,7 +107,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     status.text = "Reconectando cerebro local…"
                     engine.loadModel(model.absolutePath)
-                    engine.setSystemPrompt(AriaPersonality.systemPrompt)
+                    engine.setSystemPrompt(AriaPersonality.promptWithRecentConversation(chatHistory.readAll()))
                     modelLoaded = true
                     status.text = "Cerebro local: LISTO 🧠 • restaurado"
                     if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.restored)
@@ -205,7 +205,7 @@ class MainActivity : AppCompatActivity() {
             status.text = "Cabecera GGUF reconocida • ${ggufInfo.detail}\nCargando modelo y verificando tensores…"
             rememberModel(model)
             engine.loadModel(model.absolutePath)
-            engine.setSystemPrompt(AriaPersonality.systemPrompt)
+            engine.setSystemPrompt(AriaPersonality.promptWithRecentConversation(chatHistory.readAll()))
             modelLoaded = true
             status.text = "Cerebro local: LISTO 🧠"
             if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.ready)
