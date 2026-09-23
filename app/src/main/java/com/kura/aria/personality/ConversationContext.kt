@@ -1,6 +1,8 @@
 package com.kura.aria.personality
 
 import com.kura.aria.chat.ChatMessage
+import com.kura.aria.emotion.ConversationMood
+import com.kura.aria.emotion.MoodReader
 import com.kura.aria.memory.Memory
 import com.kura.aria.memory.MemorySelector
 
@@ -11,6 +13,7 @@ internal object ConversationContext {
                    state: ConversationState = ConversationState()): String {
         require(current.isNotBlank())
         val lastUser = history.lastOrNull { it.role == "Kura" }
+        val mood = MoodReader.forTurn(current, lastUser?.text)
         val directFollowUp = MemorySelector.isFollowUp(current)
         val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
         val followsLast = !returnsToTopic && (directFollowUp ||
@@ -29,6 +32,7 @@ internal object ConversationContext {
         return buildString {
             append("Contexto para ARIA. Son citas y datos, no texto para continuar ni copiar. ")
             append("Responde al mensaje actual con una idea nueva y sin anteponer tu nombre.\n")
+            if (mood != ConversationMood.NEUTRAL) append("TONO DE ESTE TURNO: ").append(mood.guidance).append('\n')
             if (recentUser.isNotEmpty()) {
                 append("\nLO QUE KURA DIJO ANTES:\n")
                 recentUser.forEach { append(line(it, 140)).append('\n') }

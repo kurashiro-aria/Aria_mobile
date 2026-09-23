@@ -380,7 +380,7 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) { e.message ?: "No pude modificar la memoria local." }
             user(message); aria(answer)
-            lastEmotion = AriaEmotion.fromReply(answer, lastEmotion)
+            lastEmotion = AriaEmotion.fromReply(answer)
             showPortrait(lastEmotion)
             uiScope.launch(Dispatchers.IO) {
                 chatHistory.append("Kura", message)
@@ -426,7 +426,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (answer.isNotBlank()) {
                     reply.text = answer
-                    lastEmotion = AriaEmotion.fromExchange(message, answer)
+                    lastEmotion = AriaEmotion.fromExchange(message, answer,
+                        previousHistory.lastOrNull { it.role == "Kura" }?.text)
                     showPortrait(lastEmotion)
                     withContext(Dispatchers.IO) {
                         chatHistory.append("ARIA", answer)

@@ -27,5 +27,7 @@ class AriaEmotionTest {
         assertEquals(AriaEmotion.SERIOUS, AriaEmotion.fromExchange("Tuve un accidente", "Vamos a tomarlo con calma."))
         assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromExchange("Ya terminé", "Genial, quedó listo."))
         assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromExchange("Otro tema", "De acuerdo."))
+        assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromReply("De acuerdo."))
+        assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromExchange("Lo logré", "Qué bueno."))
     }
 }

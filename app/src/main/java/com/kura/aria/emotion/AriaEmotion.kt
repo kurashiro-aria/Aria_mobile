@@ -9,16 +9,19 @@ enum class AriaEmotion(val tile: Int, val label: String) {
 
     companion object {
         /** The portrait reacts to Kura's situation as well as ARIA's words. */
-        fun fromExchange(user: String, reply: String): AriaEmotion {
-            val message = user.lowercase()
-            if (listOf("me siento triste", "estoy triste", "me siento mal", "tengo miedo", "falleció", "fallecio", "murió", "murio", "me duele").any { it in message })
-                return SAD
-            if (listOf("infarto", "emergencia", "urgencia", "accidente", "peligro").any { it in message })
-                return SERIOUS
-            return fromReply(reply)
+        fun fromExchange(user: String, reply: String, previousUser: String? = null): AriaEmotion {
+            val expressed = fromReply(reply)
+            return when (MoodReader.forTurn(user, previousUser)) {
+                ConversationMood.VULNERABLE -> SAD
+                ConversationMood.URGENT, ConversationMood.FRUSTRATED -> SERIOUS
+                ConversationMood.TIRED -> AFFECTIONATE
+                ConversationMood.JOYFUL -> if (expressed == EXCITED) EXCITED else HAPPY
+                ConversationMood.PLAYFUL -> if (expressed == AMUSED) AMUSED else PLAYFUL
+                ConversationMood.NEUTRAL -> expressed
+            }
         }
 
-        fun fromReply(text: String, previous: AriaEmotion = NEUTRAL): AriaEmotion {
+        fun fromReply(text: String): AriaEmotion {
             val s = text.lowercase()
             val scored = listOf(
                 EXCITED to score(s, "lo logramos", "¡vamos", "funcionó", "no me lo creo", "qué emoción"),
@@ -38,8 +41,7 @@ enum class AriaEmotion(val tile: Int, val label: String) {
             )
             val best = scored.maxByOrNull { it.second }
             if (best != null && best.second >= 2) return best.first
-            // Mild persistence: don't snap back to neutral after every ordinary sentence.
-            return if (previous in setOf(ANNOYED, EMBARRASSED, SAD, AFFECTIONATE, PLAYFUL) && s.length < 180) previous else NEUTRAL
+            return NEUTRAL
         }
 
         private fun score(text: String, vararg cues: String): Int = cues.count { text.contains(it) } * 2
