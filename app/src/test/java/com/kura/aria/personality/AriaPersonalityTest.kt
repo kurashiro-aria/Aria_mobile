@@ -29,7 +29,8 @@ class AriaPersonalityTest {
         assertTrue(prompt.indexOf("Kura: Tengo un gato") < prompt.indexOf("Guardado por Kura #7"))
         assertTrue(prompt.indexOf("Guardado por Kura #7") < prompt.indexOf("MENSAJE ACTUAL DE KURA:"))
         assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nSe llama Nube"))
-        assertTrue(prompt.contains("ARIA: ¿Cómo se llama?"))
+        assertTrue(prompt.contains("¿Cómo se llama?"))
+        assertFalse(prompt.contains("ARIA: ¿Cómo se llama?"))
     }
 
     @Test fun olderUserFactIsLabeledAsHistoryWithoutRepeatingAria() {
@@ -70,7 +71,8 @@ class AriaPersonalityTest {
             ChatMessage("ARIA", "¿Quieres probar otra pose para Sora?", 2)
         )
         val prompt = ConversationContext.turnPrompt(history, emptyList(), "sí")
-        assertTrue(prompt.contains("ARIA: ¿Quieres probar otra pose para Sora?"))
+        assertTrue(prompt.contains("¿Quieres probar otra pose para Sora?"))
+        assertFalse(prompt.contains("ARIA: ¿Quieres probar otra pose para Sora?"))
         assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nsí"))
     }
 
@@ -80,6 +82,27 @@ class AriaPersonalityTest {
             ChatMessage("ARIA", "La pose se ve rígida", 2)
         )
         val prompt = ConversationContext.turnPrompt(history, emptyList(), "¿por qué?")
-        assertTrue(prompt.contains("ARIA: La pose se ve rígida"))
+        assertTrue(prompt.contains("La pose se ve rígida"))
+        assertFalse(prompt.contains("ARIA: La pose se ve rígida"))
+    }
+
+    @Test fun topicContinuationDoesNotPasteThePriorAriaAnswer() {
+        val history = listOf(
+            ChatMessage("Kura", "Tengo mucho calor", 1),
+            ChatMessage("ARIA", "Si odias el calor, quizá necesitas un refugio fresco. ¿Cómo te sientes?", 2)
+        )
+        val prompt = ConversationContext.turnPrompt(history, emptyList(), "odio el calor jaja")
+        assertTrue(prompt.contains("Kura: Tengo mucho calor"))
+        assertFalse(prompt.contains("refugio fresco"))
+    }
+
+    @Test fun assentGetsOnlyTheLastQuestionNotTheOldAnswer() {
+        val history = listOf(
+            ChatMessage("Kura", "Tengo mucho calor", 1),
+            ChatMessage("ARIA", "Quizá necesitas un refugio más fresco. ¿Te gustaría que fuéramos a un lugar tranquilo?", 2)
+        )
+        val prompt = ConversationContext.turnPrompt(history, emptyList(), "sí")
+        assertTrue(prompt.contains("¿Te gustaría que fuéramos a un lugar tranquilo?"))
+        assertFalse(prompt.contains("Quizá necesitas un refugio"))
     }
 }

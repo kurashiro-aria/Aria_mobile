@@ -48,4 +48,12 @@ class VisibleReplyFilterTest {
         VisibleReplyFilter().append("<think>unfinished")
         assertEquals("Nueva respuesta", VisibleReplyFilter().append("Nueva respuesta"))
     }
+
+    @Test fun doesNotShowRoleLabelAsPartOfTheReply() {
+        val filter = VisibleReplyFilter()
+        filter.append("AR")
+        filter.append("IA: ")
+        assertEquals("Vale, sigamos.", filter.append("Vale, sigamos."))
+        assertEquals("Vale, sigamos.", filter.finish())
+    }
 }

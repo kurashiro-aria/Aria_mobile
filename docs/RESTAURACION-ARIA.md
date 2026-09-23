@@ -6,6 +6,7 @@ Antes de probar ajustes de conversación de 0.2.26-alpha:
 | --- | --- | --- |
 | 0.2.24-alpha, versión que Kura reportó funcional | `aria-restore-0.2.24-working` | `faf75f902a8b04c16c44b90eff2661af79ffcd28` |
 | 0.2.25-alpha con nuevas expresiones y colores de burbujas, antes de ajustar el motor | `aria-restore-before-conversation-tuning-20260923` | `d0e31b066e09963176204331023d788affcd65ae` |
+| 0.2.26-alpha, antes de corregir la repetición vista en el teléfono | `aria-restore-0.2.26-before-repeat-fix` | `b5fda90efc15d3dd92d24948a83a3b3030e992e2` |
 
 El APK 0.2.24-alpha que pasó las comprobaciones del workflow sigue disponible en
 [la ejecución 35891568373](https://github.com/kurashiro-aria/Aria_mobile/actions/runs/35891568373/artifacts/10765876814).

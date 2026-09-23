@@ -11,14 +11,20 @@ class VisibleReplyFilter {
     fun append(chunk: String): String {
         pending.append(chunk)
         drain()
-        return visible.toString().trim()
+        return cleaned()
     }
 
     fun finish(): String {
         drain()
         // Any pending suffix is an incomplete tag. Never reveal an unfinished block.
         pending.clear()
-        return visible.toString().trim()
+        return cleaned()
+    }
+
+    private fun cleaned(): String {
+        val raw = visible.toString().trim()
+        if ("aria:".startsWith(raw.lowercase()) || raw.matches(Regex("^aria\\s*$", RegexOption.IGNORE_CASE))) return ""
+        return raw.replaceFirst(Regex("^(?:ARIA\\s*:\\s*)+", RegexOption.IGNORE_CASE), "").trim()
     }
 
     private fun drain() {

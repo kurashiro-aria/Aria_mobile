@@ -22,6 +22,7 @@ import com.kura.aria.personality.AriaPersonality
 import com.kura.aria.personality.ConversationContext
 import com.kura.aria.chat.VisibleReplyFilter
 import com.kura.aria.chat.ChatHistory
+import com.kura.aria.chat.ReplyQuality
 import com.kura.aria.memory.AriaMemory
 import com.kura.aria.memory.MemoryCommand
 import com.kura.aria.emotion.AriaEmotion
@@ -363,12 +364,14 @@ class MainActivity : AppCompatActivity() {
                     ConversationContext.turnPrompt(previousHistory, relevant, message)
                 }
                 var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), 768, reply)
-                if (answer.isBlank()) {
-                    reply.text = "Intentando responder directamente…"
+                val previousAria = previousHistory.lastOrNull { it.role == "ARIA" }?.text
+                if (answer.isBlank() || ReplyQuality.repeats(previousAria, answer)) {
+                    reply.text = "Ajustando respuesta…"
                     answer = collectVisibleReply(
-                        AriaPersonality.directResponsePrompt("$modelMessage\nResponde directamente al mensaje actual de Kura en español, sin razonamiento previo."),
-                        384, reply
+                        AriaPersonality.directResponsePrompt(ReplyQuality.retryPrompt(previousHistory, message)),
+                        256, reply
                     )
+                    if (ReplyQuality.repeats(previousAria, answer)) answer = ReplyQuality.fallback(message)
                 }
                 if (answer.isNotBlank()) {
                     reply.text = answer

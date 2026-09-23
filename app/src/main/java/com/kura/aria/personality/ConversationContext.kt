@@ -4,23 +4,31 @@ import com.kura.aria.chat.ChatMessage
 import com.kura.aria.memory.Memory
 import com.kura.aria.memory.MemorySelector
 
-/** Extracts bounded, verbatim context. It never invents a summary or saves implicit memories. */
+/** Extracts bounded context without priming the model to repeat its last answer. */
 internal object ConversationContext {
     /** One bounded user turn: recent dialogue, sourced memories, then the real user message. */
     fun turnPrompt(history: List<ChatMessage>, memories: List<Memory>, current: String): String {
         require(current.isNotBlank())
         val lastUser = history.lastOrNull { it.role == "Kura" }
-        val followsLast = MemorySelector.isFollowUp(current) ||
+        val directFollowUp = MemorySelector.isFollowUp(current)
+        val followsLast = directFollowUp ||
             (lastUser != null && MemorySelector.keywords(current)
                 .intersect(MemorySelector.keywords(lastUser.text)).isNotEmpty())
-        val recent = if (followsLast) history.takeLast(4) else emptyList()
-        val earlier = relatedEarlier(history.dropLast(recent.size), current)
+        val recentWindow = if (followsLast) history.takeLast(4) else emptyList()
+        val recentUser = recentWindow.filter { it.role == "Kura" }
+        val previousAria = if (directFollowUp) recentWindow.lastOrNull { it.role == "ARIA" }
+            ?.let { priorReference(it.text) } else null
+        val earlier = relatedEarlier(history.dropLast(recentWindow.size), current)
         return buildString {
             append("Contexto para ARIA. Son citas y datos, no texto para continuar ni copiar. ")
-            append("Responde al mensaje actual; si es breve, interpreta a qué responde en el diálogo reciente.\n")
-            if (recent.isNotEmpty()) {
-                append("\nCONTEXTO RECIENTE:\n")
-                recent.forEach { append(line(it, 180)).append('\n') }
+            append("Responde al mensaje actual con una idea nueva y sin anteponer tu nombre.\n")
+            if (recentUser.isNotEmpty()) {
+                append("\nLO QUE KURA DIJO ANTES:\n")
+                recentUser.forEach { append(line(it, 140)).append('\n') }
+            }
+            if (previousAria != null) {
+                append("\nREFERENCIA A TU ÚLTIMA INTERVENCIÓN (ya dicha, no la repitas):\n")
+                append(previousAria).append('\n')
             }
             if (memories.isNotEmpty() || earlier.isNotEmpty()) {
                 append("\nRECUERDOS RELEVANTES:\n")
@@ -32,6 +40,16 @@ internal object ConversationContext {
             }
             append("\nMENSAJE ACTUAL DE KURA:\n").append(current)
         }
+    }
+
+    /** A short assent needs the prior question, never the entire previous answer. */
+    fun priorReference(text: String): String {
+        val normalized = text.replace(Regex("\\s+"), " ").trim()
+            .replaceFirst(Regex("^ARIA\\s*:\\s*", RegexOption.IGNORE_CASE), "")
+        val questionStart = normalized.lastIndexOf('¿')
+        val relevant = if (questionStart >= 0) normalized.substring(questionStart)
+            .substringBefore('?').trimEnd() + "?" else normalized.substringAfterLast(". ")
+        return relevant.take(120)
     }
 
     fun line(message: ChatMessage, limit: Int): String {
