@@ -7,18 +7,24 @@ import com.kura.aria.memory.MemorySelector
 /** Extracts bounded context without priming the model to repeat its last answer. */
 internal object ConversationContext {
     /** One bounded user turn: recent dialogue, sourced memories, then the real user message. */
-    fun turnPrompt(history: List<ChatMessage>, memories: List<Memory>, current: String): String {
+    fun turnPrompt(history: List<ChatMessage>, memories: List<Memory>, current: String,
+                   state: ConversationState = ConversationState()): String {
         require(current.isNotBlank())
         val lastUser = history.lastOrNull { it.role == "Kura" }
         val directFollowUp = MemorySelector.isFollowUp(current)
         val followsLast = directFollowUp ||
             (lastUser != null && MemorySelector.keywords(current)
                 .intersect(MemorySelector.keywords(lastUser.text)).isNotEmpty())
-        val recentWindow = if (followsLast) history.takeLast(4) else emptyList()
+        val recentWindow = if (followsLast) history.takeLast(6) else emptyList()
         val recentUser = recentWindow.filter { it.role == "Kura" }
         val previousAria = if (directFollowUp) recentWindow.lastOrNull { it.role == "ARIA" }
             ?.let { priorReference(it.text) } else null
         val earlier = relatedEarlier(history.dropLast(recentWindow.size), current)
+        val mediumTopic = state.relevantTopic(current)?.takeIf { topic ->
+            recentUser.none { it.text.take(160) == topic } && earlier.none { it.text.take(160) == topic }
+        }
+        val pending = if (directFollowUp && previousAria == null) state.pendingQuestion.takeIf { it.isNotBlank() }
+            else null
         return buildString {
             append("Contexto para ARIA. Son citas y datos, no texto para continuar ni copiar. ")
             append("Responde al mensaje actual con una idea nueva y sin anteponer tu nombre.\n")
@@ -29,10 +35,17 @@ internal object ConversationContext {
             if (previousAria != null) {
                 append("\nREFERENCIA A TU ÚLTIMA INTERVENCIÓN (ya dicha, no la repitas):\n")
                 append(previousAria).append('\n')
+            } else if (pending != null) {
+                append("\nPREGUNTA PENDIENTE DE ARIA (ya dicha, no la repitas):\n")
+                append(pending).append('\n')
+            }
+            if (mediumTopic != null) {
+                append("\nTEMA ANTERIOR MENCIONADO POR KURA (resumen literal, no respuesta):\n")
+                append(mediumTopic).append('\n')
             }
             if (memories.isNotEmpty() || earlier.isNotEmpty()) {
                 append("\nRECUERDOS RELEVANTES:\n")
-                memories.take(3).forEach { append("• Guardado por Kura #${it.id}: ${it.content}\n") }
+                memories.take(5).forEach { append("• Guardado por Kura #${it.id}: ${it.content.take(240)}\n") }
                 if (earlier.isNotEmpty()) {
                     append("• Fragmentos anteriores del historial (no guardados):\n")
                     earlier.forEach { append("  ").append(line(it, 120)).append('\n') }
@@ -51,6 +64,12 @@ internal object ConversationContext {
             .substringBefore('?').trimEnd() + "?" else normalized.substringAfterLast(". ")
         return relevant.take(120)
     }
+
+    fun priorQuestion(text: String): String? = text.replace(Regex("\\s+"), " ").trim()
+        .lastIndexOf('¿').takeIf { it >= 0 }?.let { index ->
+            text.replace(Regex("\\s+"), " ").substring(index).substringBefore('?').trimEnd()
+                .take(119).plus("?")
+        }
 
     fun line(message: ChatMessage, limit: Int): String {
         val speaker = if (message.role == "Kura") "Kura" else "ARIA"

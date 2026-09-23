@@ -11,7 +11,10 @@ data class Memory(
     val category: String = "personal",
     val importance: Int = 1,
     val timestamp: Long = System.currentTimeMillis(),
-    val source: String = "Kura"
+    val source: String = "Kura",
+    val tags: List<String> = emptyList(),
+    val updatedAt: Long = timestamp,
+    val active: Boolean = true
 )
 
 /** Explicit, private on-device memories. Conversation history remains separate. */
@@ -25,9 +28,21 @@ class AriaMemory(context: Context) {
         require(content.length in 3..240) { "El recuerdo debe tener entre 3 y 240 caracteres." }
         val current = read()
         require(current.size < 50) { "Llegué al límite de 50 recuerdos. Borra uno antes de añadir otro." }
-        val item = Memory(prefs.getLong("next_id", 1L), content)
+        val item = Memory(prefs.getLong("next_id", 1L), content,
+            tags = MemorySelector.keywords(content).take(8))
         persist(current + item, item.id + 1)
         return item
+    }
+
+    @Synchronized fun correct(id: Long, text: String): Memory? {
+        val content = text.trim().replace(Regex("\\s+"), " ")
+        require(content.length in 3..240) { "El recuerdo debe tener entre 3 y 240 caracteres." }
+        val current = read()
+        val old = current.firstOrNull { it.id == id } ?: return null
+        val changed = old.copy(content = content, tags = MemorySelector.keywords(content).take(8),
+            updatedAt = System.currentTimeMillis(), active = true)
+        persist(current.map { if (it.id == id) changed else it })
+        return changed
     }
 
     @Synchronized fun forget(id: Long): Boolean {
@@ -44,7 +59,8 @@ class AriaMemory(context: Context) {
         val data = JSONArray()
         items.forEach { data.put(JSONObject().put("id", it.id).put("content", it.content)
             .put("category", it.category).put("importance", it.importance)
-            .put("timestamp", it.timestamp).put("source", it.source)) }
+            .put("timestamp", it.timestamp).put("source", it.source)
+            .put("tags", JSONArray(it.tags)).put("updatedAt", it.updatedAt).put("active", it.active)) }
         check(prefs.edit().putString("items", data.toString()).putLong("next_id", nextId).commit()) {
             "No pude guardar la memoria local."
         }
@@ -57,9 +73,12 @@ class AriaMemory(context: Context) {
             val obj = data.optJSONObject(index) ?: return@mapNotNull null
             val id = obj.optLong("id")
             val content = obj.optString("content")
+            val tags = obj.optJSONArray("tags") ?: JSONArray()
             if (id <= 0 || content.isBlank()) null else Memory(id, content,
                 obj.optString("category", "personal"), obj.optInt("importance", 1),
-                obj.optLong("timestamp"), obj.optString("source", "Kura"))
+                obj.optLong("timestamp"), obj.optString("source", "Kura"),
+                (0 until tags.length()).map { tags.optString(it) },
+                obj.optLong("updatedAt", obj.optLong("timestamp")), obj.optBoolean("active", true))
         }
     }
 
@@ -71,6 +90,9 @@ class AriaMemory(context: Context) {
                 .matchEntire(text)?.let { return MemoryCommand.Save(it.groupValues[1].trim()) }
             Regex("^olvida\\s+(?:el\\s+)?recuerdo\\s+#?(\\d+)\\s*[.!]?$", RegexOption.IGNORE_CASE)
                 .matchEntire(text)?.let { return MemoryCommand.Delete(it.groupValues[1].toLongOrNull() ?: return null) }
+            Regex("^corrige\\s+(?:el\\s+)?recuerdo\\s+#?(\\d+)\\s*[:：]\\s*(.+)$", RegexOption.IGNORE_CASE)
+                .matchEntire(text)?.let { return MemoryCommand.Correct(it.groupValues[1].toLongOrNull() ?: return null,
+                    it.groupValues[2].trim()) }
             if (text.matches(Regex("^(?:que|qué)\\s+recuerdas(?:\\s+de\\s+mi|\\s+de\\s+mí)?\\s*\\??$", RegexOption.IGNORE_CASE)))
                 return MemoryCommand.ListAll
             return null
@@ -99,17 +121,18 @@ internal object MemorySelector {
         val recent = if (isFollowUp(current)) previous.takeLast(2).flatMap { keywords(it) }.toSet()
             else emptySet()
         if (now.isEmpty() && recent.isEmpty()) return emptyList()
-        val currentMatches = memories.map { item ->
-            val terms = keywords(item.content)
+        val active = memories.filter { it.active }
+        val currentMatches = active.map { item ->
+            val terms = item.tags.takeIf { it.isNotEmpty() }?.toSet() ?: keywords(item.content)
             item to terms.intersect(now).size
         }.filter { it.second > 0 }
-        val matches = if (currentMatches.isNotEmpty()) currentMatches else memories.map { item ->
+        val matches = if (currentMatches.isNotEmpty()) currentMatches else active.map { item ->
             item to keywords(item.content).intersect(recent).size
         }.filter { it.second > 0 }
         return matches
             .sortedWith(compareByDescending<Pair<Memory, Int>> { it.second }
-                .thenByDescending { it.first.timestamp })
-            .take(3).map { it.first }
+                .thenByDescending { it.first.importance }.thenByDescending { it.first.updatedAt })
+            .take(5).map { it.first }
     }
 
     /** Referencias sin tema propio pueden retomar el turno anterior; saludos y temas nuevos no. */
@@ -127,5 +150,6 @@ internal object MemorySelector {
 sealed class MemoryCommand {
     data class Save(val text: String) : MemoryCommand()
     data class Delete(val id: Long) : MemoryCommand()
+    data class Correct(val id: Long, val text: String) : MemoryCommand()
     data object ListAll : MemoryCommand()
 }

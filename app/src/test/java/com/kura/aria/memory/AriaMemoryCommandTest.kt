@@ -11,6 +11,8 @@ class AriaMemoryCommandTest {
         assertEquals(MemoryCommand.Save("hoy probamos tu cerebro"),
             AriaMemory.command("recuerda esto: hoy probamos tu cerebro"))
         assertEquals(MemoryCommand.Delete(7), AriaMemory.command("olvida el recuerdo #7"))
+        assertEquals(MemoryCommand.Correct(7, "mi gato se llama Sol"),
+            AriaMemory.command("ARIA, corrige el recuerdo #7: mi gato se llama Sol"))
         assertEquals(MemoryCommand.ListAll, AriaMemory.command("¿Qué recuerdas?"))
     }
 

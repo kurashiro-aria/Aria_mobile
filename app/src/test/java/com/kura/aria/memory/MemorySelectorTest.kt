@@ -32,4 +32,11 @@ class MemorySelectorTest {
     @Test fun genericPhrasesDoNotRetrieveUnrelatedMemories() {
         assertTrue(MemorySelector.select(memories, "Me gusta hablar contigo", listOf("Mi gato")).isEmpty())
     }
+
+    @Test fun obsoleteMemoriesAreNotRecoveredAndRelevantOnesAreBounded() {
+        val items = (1..9).map { Memory(it.toLong(), "Mi gato Nube tiene juguete $it", active = it != 1) }
+        val selected = MemorySelector.select(items, "¿Cómo está mi gato Nube?", emptyList())
+        assertEquals(5, selected.size)
+        assertTrue(selected.none { it.id == 1L })
+    }
 }

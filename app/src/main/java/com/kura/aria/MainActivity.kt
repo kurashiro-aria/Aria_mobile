@@ -20,6 +20,8 @@ import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.kura.aria.personality.AriaPersonality
 import com.kura.aria.personality.ConversationContext
+import com.kura.aria.personality.ConversationManager
+import com.kura.aria.personality.InitiativePolicy
 import com.kura.aria.chat.VisibleReplyFilter
 import com.kura.aria.chat.ChatHistory
 import com.kura.aria.chat.ReplyQuality
@@ -32,6 +34,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.Calendar
 
 class MainActivity : AppCompatActivity() {
     private lateinit var conversation: LinearLayout
@@ -46,11 +49,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var engine: InferenceEngine
     private lateinit var chatHistory: ChatHistory
     private lateinit var ariaMemory: AriaMemory
+    private lateinit var conversationManager: ConversationManager
     private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var modelLoaded = false
     private var busy = false
     private var lastLoadMs: Long? = null
     private var lastGeneration: GenerationStats? = null
+    private var lastContextChars = 0
+    private var lastMemoryCount = 0
+    private var repeatedReplies = 0
+    private var generationFailures = 0
+    private var initiativeJob: Job? = null
 
     private data class GenerationStats(val firstTokenMs: Long?, val firstVisibleMs: Long?, val totalMs: Long, val chunks: Int) {
         val approximateTokensPerSecond: Double?
@@ -62,6 +71,8 @@ class MainActivity : AppCompatActivity() {
         private const val PICK_GGUF = 1001
         private const val PREFS = "aria_runtime"
         private const val LAST_MODEL = "last_model"
+        private const val INITIATIVE_ENABLED = "initiative_enabled"
+        private const val LAST_INITIATIVE = "last_initiative"
         private const val BG = "#100D16"
         private const val PANEL = "#1A1523"
         private const val PANEL_2 = "#241B31"
@@ -131,6 +142,7 @@ class MainActivity : AppCompatActivity() {
 
         chatHistory = ChatHistory(applicationContext)
         ariaMemory = AriaMemory(applicationContext)
+        conversationManager = ConversationManager(applicationContext)
         val savedMessages = chatHistory.readAll()
         if (savedMessages.isEmpty()) aria(AriaPersonality.welcome) else savedMessages.forEach { addMessage(it.role, it.text) }
         savedMessages.lastOrNull { it.role == "ARIA" }?.let {
@@ -154,6 +166,7 @@ class MainActivity : AppCompatActivity() {
             if (!modelLoaded && savedModel() != null) menu.add("Reconectar cerebro")
             menu.add("Cambiar / cargar cerebro")
             menu.add("Memoria")
+            menu.add(if (initiativeEnabled()) "Iniciativa: activada" else "Iniciativa: desactivada")
             menu.add("Rendimiento")
             menu.add("Personalidad")
             menu.add("Voz")
@@ -165,6 +178,11 @@ class MainActivity : AppCompatActivity() {
                     "Cambiar / cargar cerebro" -> chooseModel()
                     "Reconectar cerebro" -> uiScope.launch { restoreBrainIfNeeded() }
                     "Memoria" -> showMemoryDialog()
+                    "Iniciativa: activada", "Iniciativa: desactivada" -> {
+                        val enabled = !initiativeEnabled()
+                        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(INITIATIVE_ENABLED, enabled).apply()
+                        toast(if (enabled) "ARIA podrá retomar asuntos pendientes al volver" else "Iniciativa desactivada")
+                    }
                     "Rendimiento" -> showPerformanceDialog()
                     "Personalidad" -> toast("ARIA Personality v2 activa")
                     "Voz" -> toast("Voz: próximamente")
@@ -213,6 +231,7 @@ class MainActivity : AppCompatActivity() {
             busy = false; loadBrain.isEnabled = ::engine.isInitialized
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
+            if (modelLoaded) scheduleInitiative()
         }
     }
 
@@ -221,6 +240,28 @@ class MainActivity : AppCompatActivity() {
         if (::engine.isInitialized && !busy && savedModel() != null &&
             (!modelLoaded || engine.state.value !is InferenceEngine.State.ModelReady)) {
             uiScope.launch { restoreBrainIfNeeded() }
+        } else if (::engine.isInitialized && modelLoaded) {
+            scheduleInitiative()
+        }
+    }
+
+    private fun initiativeEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE)
+        .getBoolean(INITIATIVE_ENABLED, false)
+
+    private fun scheduleInitiative() {
+        if (!initiativeEnabled()) return
+        initiativeJob?.cancel()
+        initiativeJob = uiScope.launch {
+            delay(3_000)
+            if (busy || !modelLoaded || !initiativeEnabled() ||
+                !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return@launch
+            val now = System.currentTimeMillis()
+            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            val suggestion = InitiativePolicy.suggestion(conversationManager.snapshot(), true, now,
+                prefs.getLong(LAST_INITIATIVE, 0L), Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) ?: return@launch
+            withContext(Dispatchers.IO) { chatHistory.append("ARIA", suggestion) }
+            prefs.edit().putLong(LAST_INITIATIVE, now).apply()
+            aria(suggestion)
         }
     }
 
@@ -330,6 +371,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     is MemoryCommand.Delete -> if (ariaMemory.forget(command.id))
                         "Olvidé el recuerdo #${command.id}." else "No encontré el recuerdo #${command.id}."
+                    is MemoryCommand.Correct -> ariaMemory.correct(command.id, command.text)
+                        ?.let { "Corregí el recuerdo #${it.id}: ${it.content}" }
+                        ?: "No encontré el recuerdo #${command.id}."
                     MemoryCommand.ListAll -> ariaMemory.recallAll().takeIf { it.isNotEmpty() }
                         ?.joinToString("\n") { "#${it.id}: ${it.content}" }
                         ?: "Todavía no tengo recuerdos que me hayas pedido guardar. Puedes decirme: «ARIA, recuerda que…»."
@@ -361,27 +405,37 @@ class MainActivity : AppCompatActivity() {
                     val recentUserMessages = previousHistory.filter { it.role == "Kura" }
                         .map { it.text }.takeLast(2)
                     val relevant = ariaMemory.relevantTo(message, recentUserMessages)
-                    ConversationContext.turnPrompt(previousHistory, relevant, message)
+                    lastMemoryCount = relevant.size
+                    ConversationContext.turnPrompt(previousHistory, relevant, message,
+                        conversationManager.snapshot())
                 }
+                lastContextChars = modelMessage.length
                 var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), 768, reply)
                 val previousAria = previousHistory.lastOrNull { it.role == "ARIA" }?.text
                 if (answer.isBlank() || ReplyQuality.repeats(previousAria, answer)) {
+                    if (ReplyQuality.repeats(previousAria, answer)) repeatedReplies++
                     reply.text = "Ajustando respuesta…"
                     answer = collectVisibleReply(
                         AriaPersonality.directResponsePrompt(ReplyQuality.retryPrompt(previousHistory, message)),
                         256, reply
                     )
-                    if (ReplyQuality.repeats(previousAria, answer)) answer = ReplyQuality.fallback(message)
+                    if (ReplyQuality.repeats(previousAria, answer)) {
+                        repeatedReplies++
+                        answer = ReplyQuality.fallback(message)
+                    }
                 }
                 if (answer.isNotBlank()) {
                     reply.text = answer
                     lastEmotion = AriaEmotion.fromExchange(message, answer)
                     showPortrait(lastEmotion)
-                    withContext(Dispatchers.IO) { chatHistory.append("ARIA", answer) }
+                    withContext(Dispatchers.IO) {
+                        chatHistory.append("ARIA", answer)
+                        conversationManager.record(message, answer)
+                    }
                 }
-                else { reply.text = "No llegué a completar una respuesta. Prueba con una pregunta más corta."; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
+                else { generationFailures++; reply.text = "No llegué a completar una respuesta. Prueba con una pregunta más corta."; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { reply.text = "Error al pensar: ${e.message ?: e.javaClass.simpleName}"; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
+            catch (e: Exception) { generationFailures++; reply.text = "Error al pensar: ${e.javaClass.simpleName}: ${e.message ?: "sin detalle"}"; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
             finally {
                 busy = false; modelLoaded = engine.state.value is InferenceEngine.State.ModelReady; send.isEnabled = modelLoaded; loadBrain.isEnabled = true
                 setStatus(if (modelLoaded) "● Activa" else "○ Cerebro desconectado", modelLoaded)
@@ -425,6 +479,11 @@ class MainActivity : AppCompatActivity() {
             append("\nVelocidad aproximada: ")
             append(generation?.approximateTokensPerSecond?.let { String.format(java.util.Locale.US, "%.1f tokens/s", it) }
                 ?: "sin medir")
+            append("\nCerebro: ").append(savedModel()?.name ?: "sin cargar")
+            append("\nContexto del último turno: ").append(lastContextChars).append(" caracteres")
+            append("\nRecuerdos recuperados: ").append(lastMemoryCount)
+            append("\nRepeticiones detectadas: ").append(repeatedReplies)
+            append("\nFallos de respuesta: ").append(generationFailures)
         }
         AlertDialog.Builder(this).setTitle("Rendimiento de ARIA")
             .setMessage(details).setPositiveButton("Cerrar", null).show()
