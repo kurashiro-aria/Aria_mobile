@@ -10,8 +10,8 @@ La rama `aria-alpha-0.2-local-ai` usa Kotlin y el ejemplo Android de llama.cpp f
 - Inferencia local; sin permiso de Internet en la aplicación.
 - Diagnóstico nativo y recuperación tras errores de carga.
 - Historial local persistente, recuerdos explícitos editables y retratos de expresiones. La voz sigue pendiente.
-- Al cargar el GGUF, ARIA retoma hasta diez mensajes recientes y hasta dos intercambios anteriores relacionados. El contexto anterior son extractos literales, no una síntesis generada.
-- En cada mensaje se inyectan hasta tres recuerdos explícitos relacionados. Si la pregunta es elíptica, se usa el tema de los últimos dos mensajes del usuario para encontrarlos; no se crean recuerdos permanentes automáticamente.
+- La personalidad de ARIA se carga con el GGUF. En cada turno, el mensaje enviado al modelo incorpora hasta seis mensajes recientes, hasta tres recuerdos explícitos relacionados, fragmentos anteriores del historial relacionados y al final el mensaje actual. Los fragmentos son citas parciales, no una síntesis generada ni recuerdos permanentes.
+- Si la pregunta es elíptica, la búsqueda de recuerdos usa el tema de los últimos dos mensajes del usuario. No se crean recuerdos permanentes automáticamente.
 - En Qwen3 se pide una respuesta directa en cada turno (`/no_think`). Si una generación solo produjo razonamiento oculto, ARIA intenta una vez más obtener una respuesta visible antes de mostrar el error.
 
 Consulta [la revisión estática](docs/REVISION-ALPHA-0.2.1.md) y [la personalidad](docs/PERSONALIDAD-ALPHA-0.2.2.md) para ver el desarrollo inicial. Los extractos de historial son limitados por tamaño y coincidencia de palabras; no equivalen a la comprensión ni la capacidad de memoria de un modelo remoto grande.

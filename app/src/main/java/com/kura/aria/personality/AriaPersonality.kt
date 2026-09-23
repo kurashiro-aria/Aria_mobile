@@ -1,7 +1,5 @@
 package com.kura.aria.personality
 
-import com.kura.aria.chat.ChatMessage
-
 /** ARIA Personality v2.1: natural conversational continuity, voice and verified origin facts. */
 object AriaPersonality {
     private val voice = """
@@ -85,25 +83,8 @@ object AriaPersonality {
         íntegra de aquel chat ni prueba de que recuerdes todo lo que se dijo.
     """.trimIndent()
 
-    /**
-     * Include both sides of the recent exchange so Qwen can continue a conversation
-     * instead of seeing Kura's messages as isolated questions. Keep the window small
-     * so old model habits do not dominate the personality prompt.
-     */
-    fun promptWithRecentConversation(messages: List<ChatMessage>): String {
-        val recent = messages.takeLast(10)
-        val older = messages.dropLast(recent.size)
-        val subject = recent.lastOrNull { it.role == "Kura" }?.text.orEmpty()
-        val earlier = ConversationContext.relatedEarlier(older, subject)
-        val foundation = voice + "\n\n" + originMemory
-        if (recent.isEmpty()) return foundation + "\n/no_think"
-        val background = if (earlier.isEmpty()) "" else
-            "\n\nFragmentos anteriores relacionados (citas parciales, no recuerdos permanentes):\n" +
-                earlier.joinToString("\n") { ConversationContext.line(it, 180) }
-        return foundation + background + "\n\nConversación reciente en este dispositivo (contexto parcial):\n" +
-            recent.joinToString("\n") { ConversationContext.line(it, 240) } +
-            "\nContinúa el mismo hilo con naturalidad desde el mensaje nuevo de Kura; no reinicies la conversación.\n/no_think"
-    }
+    /** Fixed identity, loaded once. Conversation and user memories are supplied per turn. */
+    fun systemPrompt(): String = voice + "\n\n" + originMemory + "\n/no_think"
 
     /** Qwen3 follows the most recent mode instruction; keep it on each turn. */
     fun directResponsePrompt(message: String): String = "$message\n/no_think"
