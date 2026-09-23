@@ -18,13 +18,13 @@ jobs:
           fetch-depth: 0
 
       - name: Apply floating portrait layout
-        shell: python
+        shell: bash
         run: |
+          python3 <<'PY'
           from pathlib import Path
 
           p = Path("app/src/main/java/com/kura/aria/MainActivity.kt")
           s = p.read_text()
-
           old = '''        // Give the expression its own space above the conversation.
         root.addView(avatarCard, LinearLayout.LayoutParams(dp(150), dp(200)).apply {
             marginStart = dp(4); topMargin = dp(8)
@@ -34,7 +34,6 @@ jobs:
         scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
 '''
-
           new = '''        conversation = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(10), 0, dp(10))
@@ -62,14 +61,11 @@ jobs:
             1f
         ).apply { topMargin = dp(8) })
 '''
-
-          if old not in s:
-              if "val chatStage = FrameLayout(this)" in s:
-                  print("Floating portrait already applied")
-              else:
-                  raise SystemExit("Expected portrait layout block was not found")
-          else:
+          if old in s:
               p.write_text(s.replace(old, new, 1))
+          elif "val chatStage = FrameLayout(this)" not in s:
+              raise SystemExit("Expected portrait layout block was not found")
+          PY
 
       - name: Verify layout patch
         shell: bash
@@ -77,20 +73,14 @@ jobs:
           set -euo pipefail
           grep -q 'val chatStage = FrameLayout(this)' app/src/main/java/com/kura/aria/MainActivity.kt
           grep -q 'addView(avatarCard, FrameLayout.LayoutParams' app/src/main/java/com/kura/aria/MainActivity.kt
-          if grep -q 'root.addView(avatarCard, LinearLayout.LayoutParams' app/src/main/java/com/kura/aria/MainActivity.kt; then
-            echo 'Old non-floating portrait layout is still present'
-            exit 1
-          fi
+          ! grep -q 'root.addView(avatarCard, LinearLayout.LayoutParams' app/src/main/java/com/kura/aria/MainActivity.kt
           git diff --check
 
       - name: Commit layout patch
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet; then
-            echo 'No changes required'
-            exit 0
-          fi
+          if git diff --quiet; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app/src/main/java/com/kura/aria/MainActivity.kt
