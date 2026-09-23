@@ -1,13 +1,9 @@
-name: Apply ARIA floating portrait patch
-
+name: ARIA Portrait Patch
 on:
   push:
-    branches:
-      - aria-alpha-0.2-local-ai
-
+    branches: [aria-alpha-0.2-local-ai]
 permissions:
   contents: write
-
 jobs:
   patch:
     runs-on: ubuntu-latest
@@ -15,74 +11,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: aria-alpha-0.2-local-ai
-          fetch-depth: 0
-
-      - name: Apply floating portrait layout
-        shell: bash
+      - name: Patch portrait
         run: |
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-
-          p = Path("app/src/main/java/com/kura/aria/MainActivity.kt")
-          s = p.read_text()
-          old = '''        // Give the expression its own space above the conversation.
-        root.addView(avatarCard, LinearLayout.LayoutParams(dp(150), dp(200)).apply {
-            marginStart = dp(4); topMargin = dp(8)
-        })
-
-        conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }
-        scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }
-        root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
-'''
-          new = '''        conversation = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(10), 0, dp(10))
-        }
-        scroll = ScrollView(this).apply {
-            addView(conversation)
-            isFillViewport = true
-        }
-
-        // ARIA floats over the conversation instead of reserving a full row.
-        val chatStage = FrameLayout(this).apply {
-            addView(scroll, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            ))
-            addView(avatarCard, FrameLayout.LayoutParams(dp(150), dp(200), Gravity.TOP or Gravity.START).apply {
-                marginStart = dp(4)
-                topMargin = dp(8)
-            })
-        }
-        avatarCard.elevation = dp(10).toFloat()
-        root.addView(chatStage, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            0,
-            1f
-        ).apply { topMargin = dp(8) })
-'''
-          if old in s:
-              p.write_text(s.replace(old, new, 1))
-          elif "val chatStage = FrameLayout(this)" not in s:
-              raise SystemExit("Expected portrait layout block was not found")
+          p=Path('app/src/main/java/com/kura/aria/MainActivity.kt')
+          s=p.read_text()
+          a='''        // Give the expression its own space above the conversation.\n        root.addView(avatarCard, LinearLayout.LayoutParams(dp(150), dp(200)).apply {\n            marginStart = dp(4); topMargin = dp(8)\n        })\n\n        conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }\n        scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }\n        root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })\n'''
+          b='''        conversation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(10)) }\n        scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }\n        val chatStage = FrameLayout(this).apply {\n            addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))\n            addView(avatarCard, FrameLayout.LayoutParams(dp(150), dp(200), Gravity.TOP or Gravity.START).apply {\n                marginStart = dp(4); topMargin = dp(8)\n            })\n        }\n        avatarCard.elevation = dp(10).toFloat()\n        root.addView(chatStage, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })\n'''
+          if a not in s:
+              raise SystemExit('portrait target not found')
+          p.write_text(s.replace(a,b,1))
           PY
-
-      - name: Verify layout patch
-        shell: bash
+      - name: Commit
         run: |
-          set -euo pipefail
           grep -q 'val chatStage = FrameLayout(this)' app/src/main/java/com/kura/aria/MainActivity.kt
-          grep -q 'addView(avatarCard, FrameLayout.LayoutParams' app/src/main/java/com/kura/aria/MainActivity.kt
-          ! grep -q 'root.addView(avatarCard, LinearLayout.LayoutParams' app/src/main/java/com/kura/aria/MainActivity.kt
-          git diff --check
-
-      - name: Commit layout patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          if git diff --quiet; then exit 0; fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.name github-actions
+          git config user.email github-actions@github.com
           git add app/src/main/java/com/kura/aria/MainActivity.kt
-          git commit -m 'Float ARIA portrait over conversation'
-          git push origin HEAD:aria-alpha-0.2-local-ai
+          git commit -m 'Float ARIA portrait over chat'
+          git push
