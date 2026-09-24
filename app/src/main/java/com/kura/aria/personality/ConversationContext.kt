@@ -4,17 +4,22 @@ import com.kura.aria.chat.ChatMessage
 import com.kura.aria.emotion.MoodReader
 import com.kura.aria.memory.Memory
 import com.kura.aria.memory.MemorySelector
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** Extracts bounded context without priming the model to repeat its last answer. */
 internal object ConversationContext {
     /** One bounded user turn: recent dialogue, sourced memories, then the real user message. */
     fun turnPrompt(history: List<ChatMessage>, memories: List<Memory>, current: String,
-                   state: ConversationState = ConversationState()): String {
+                   state: ConversationState = ConversationState(),
+                   stylePreferences: StylePreferences = StylePreferences()): String {
         require(current.isNotBlank())
         val lastUser = history.lastOrNull { it.role == "Kura" }
         val mood = MoodReader.forTurn(current, state.topic.ifBlank { lastUser?.text.orEmpty() },
             state.socialMood, state.updatedAt, carriedTurns = state.socialTurns)
-        val expression = ExpressionResolver.forTurn(current, mood, state.expression, state.updatedAt)
+        val expression = ExpressionResolver.forTurn(current, mood, state.expression, state.updatedAt,
+            preferences = stylePreferences)
         val directFollowUp = MemorySelector.isFollowUp(current)
         val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
         val followsLast = !returnsToTopic && (directFollowUp ||
@@ -53,7 +58,7 @@ internal object ConversationContext {
             }
             if (memories.isNotEmpty()) {
                 append("\nDATOS QUE KURA ELIGIÓ GUARDAR (úsalos solo si vienen al caso; no menciones esta lista):\n")
-                memories.take(5).forEach { append("• ${it.content.take(240)}\n") }
+                memories.take(5).forEach { append("• ${memoryLine(it)}\n") }
             }
             if (earlier.isNotEmpty()) {
                 append("\nFragmentos anteriores del historial (no guardados):\n")
@@ -61,6 +66,15 @@ internal object ConversationContext {
             }
             append("\nMENSAJE ACTUAL DE KURA:\n").append(current)
         }
+    }
+
+    private fun memoryLine(memory: Memory): String = when (memory.category) {
+        "experiencia_compartida", "experiencia" -> {
+            val saved = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(Date(memory.timestamp))
+            "[Kura pidió guardar esta experiencia el $saved] ${memory.content.take(240)}"
+        }
+        "preferencia_conversacion" -> "[Preferencia de conversación elegida por Kura] ${memory.content.take(240)}"
+        else -> memory.content.take(240)
     }
 
     /** A short assent needs the prior question, never the entire previous answer. */

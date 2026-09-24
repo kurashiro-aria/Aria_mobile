@@ -4,6 +4,8 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.Normalizer
+import com.kura.aria.personality.RelationshipState
+import com.kura.aria.personality.StylePreferences
 
 data class Memory(
     val id: Long,
@@ -25,7 +27,10 @@ class AriaMemory(context: Context) {
 
     @Synchronized fun recallAll(): List<Memory> = MemoryFacts.current(read())
 
-    @Synchronized fun remember(text: String): Memory {
+    /** Only Kura's explicitly stored preferences can bias future expression. */
+    @Synchronized internal fun stylePreferences(): StylePreferences = RelationshipState.from(recallAll())
+
+    @Synchronized fun remember(text: String, categoryHint: String? = null): Memory {
         val content = text.trim().replace(Regex("\\s+"), " ")
         require(content.length in 3..240) { "El recuerdo debe tener entre 3 y 240 caracteres." }
         val current = read()
@@ -36,9 +41,9 @@ class AriaMemory(context: Context) {
         val now = System.currentTimeMillis()
         val item = if (old == null) {
             require(current.size < 50) { "Llegué al límite de 50 recuerdos. Borra uno antes de añadir otro." }
-            Memory(prefs.getLong("next_id", 1L), content, category = MemoryFacts.category(content),
+            Memory(prefs.getLong("next_id", 1L), content, category = categoryHint ?: MemoryFacts.category(content),
                 tags = MemorySelector.keywords(content).take(8), timestamp = now)
-        } else old.copy(content = content, category = MemoryFacts.category(content),
+        } else old.copy(content = content, category = categoryHint ?: MemoryFacts.category(content),
             tags = MemorySelector.keywords(content).take(8), updatedAt = now, active = true)
         val items = current.filterNot { it.id == item.id || (key != null && MemoryFacts.key(it.content) == key) } + item
         persist(items, if (old == null) item.id + 1 else prefs.getLong("next_id", 1L))
@@ -114,6 +119,8 @@ class AriaMemory(context: Context) {
             val text = message.trim().removePrefix("¿").replaceFirst(Regex("^aria\\s*[,.:]?\\s*", RegexOption.IGNORE_CASE), "")
             Regex("^recuerda\\s+(?:que\\s+|esto\\s*[:：]\\s*)(.+)$", RegexOption.IGNORE_CASE)
                 .matchEntire(text)?.let { return MemoryCommand.Save(it.groupValues[1].trim()) }
+            Regex("^(?:recuerda|guarda)\\s+(?:nuestra\\s+)?experiencia\\s*[:：]\\s*(.+)$", RegexOption.IGNORE_CASE)
+                .matchEntire(text)?.let { return MemoryCommand.Save(it.groupValues[1].trim(), "experiencia_compartida") }
             Regex("^olvida\\s+(?:el\\s+)?recuerdo\\s+#?(\\d+)\\s*[.!]?$", RegexOption.IGNORE_CASE)
                 .matchEntire(text)?.let { return MemoryCommand.Delete(it.groupValues[1].toLongOrNull() ?: return null) }
             Regex("^corrige\\s+(?:el\\s+)?recuerdo\\s+#?(\\d+)\\s*[:：]\\s*(.+)$", RegexOption.IGNORE_CASE)
@@ -134,15 +141,31 @@ internal object MemoryFacts {
     fun category(text: String): String {
         val normalized = normalize(text)
         return when {
+            Regex("^(?:no )?me gusta\\b|^prefiero\\b|^odio\\b|^kura (?:no )?prefiere\\b|^kura disfruta\\b").containsMatchIn(normalized) &&
+                Regex("\\b(?:bromas?|bromees|bromea|bromeas|coqueteo|coquetees|coqueteas|sarcasmo|sarcastic[ao]|molestes|molestar|carino|carinosa|tono)\\b")
+                    .containsMatchIn(normalized) -> "preferencia_conversacion"
+            Regex("\\b(?:juntos|juntas|hablamos|hicimos|terminamos|jugamos|vivimos|compartimos)\\b")
+                .containsMatchIn(normalized) -> "experiencia_compartida"
             Regex("^(?:no )?me gusta\\b|^prefiero\\b|^odio\\b").containsMatchIn(normalized) -> "preferencia"
             Regex("\\b(?:manga|proyecto|aplicacion|app|historia|novela)\\b").containsMatchIn(normalized) -> "proyecto"
-            Regex("\\b(?:ayer|hoy|fuimos|hicimos|pasamos|hablamos)\\b").containsMatchIn(normalized) -> "experiencia"
+            Regex("\\b(?:fuimos|pasamos)\\b").containsMatchIn(normalized) -> "experiencia_compartida"
             else -> "personal"
         }
     }
 
     fun key(text: String): String? {
         val normalized = normalize(text)
+        if (category(text) == "preferencia_conversacion") {
+            val style = when {
+                Regex("\\b(?:coqueteo|coquetees|coqueteas)\\b").containsMatchIn(normalized) -> "coqueteo"
+                Regex("\\b(?:sarcasmo|sarcastic[ao])\\b").containsMatchIn(normalized) -> "sarcasmo"
+                Regex("\\b(?:molestes|molestar)\\b").containsMatchIn(normalized) -> "molestia"
+                Regex("\\b(?:bromas?|bromees|bromea|bromeas)\\b").containsMatchIn(normalized) -> "bromas"
+                Regex("\\b(?:carino|carinosa)\\b").containsMatchIn(normalized) -> "carino"
+                else -> null
+            }
+            if (style != null) return "estilo:$style"
+        }
         Regex("^mi (gato|perro|nombre) (?:se llama|es) ([a-z0-9]+)$")
             .matchEntire(normalized)?.let { return "nombre:" + it.groupValues[1] }
         Regex("^(?:no )?me gusta (?:el |la |los |las )?([a-z0-9 ]+)$")
@@ -158,7 +181,8 @@ internal object MemoryFacts {
         .sortedBy { it.id }
 
     fun staleRelativeDate(memory: Memory, now: Long): Boolean =
-        Regex("\\b(?:hoy|ayer)\\b").containsMatchIn(normalize(memory.content)) &&
+        memory.category != "experiencia_compartida" && memory.category != "experiencia" &&
+            Regex("\\b(?:hoy|ayer)\\b").containsMatchIn(normalize(memory.content)) &&
             memory.updatedAt > 0 && now - memory.updatedAt > 48L * 60 * 60 * 1000
 }
 
@@ -211,7 +235,7 @@ internal object MemorySelector {
 }
 
 sealed class MemoryCommand {
-    data class Save(val text: String) : MemoryCommand()
+    data class Save(val text: String, val categoryHint: String? = null) : MemoryCommand()
     data class Delete(val id: Long) : MemoryCommand()
     data class Correct(val id: Long, val text: String) : MemoryCommand()
     data object ListAll : MemoryCommand()

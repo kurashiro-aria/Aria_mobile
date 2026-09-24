@@ -461,7 +461,7 @@ class MainActivity : AppCompatActivity() {
             val answer = try {
                 when (command) {
                     is MemoryCommand.Save -> {
-                        val memory = ariaMemory.remember(command.text)
+                        val memory = ariaMemory.remember(command.text, command.categoryHint)
                         "Lo guardé como recuerdo #${memory.id}: ${memory.content}"
                     }
                     is MemoryCommand.Delete -> if (ariaMemory.forget(command.id))
@@ -484,10 +484,11 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val stateBefore = conversationManager.snapshot()
+        val stylePreferences = ariaMemory.stylePreferences()
         val turnMood = MoodReader.forTurn(message, stateBefore.topic,
             stateBefore.socialMood, stateBefore.updatedAt, carriedTurns = stateBefore.socialTurns)
         val turnExpression = ExpressionResolver.forTurn(message, turnMood,
-            stateBefore.expression, stateBefore.updatedAt)
+            stateBefore.expression, stateBefore.updatedAt, preferences = stylePreferences)
         busy = true; loadBrain.isEnabled = false; user(message)
         input.text.clear(); send.isEnabled = false; setStatus("● Pensando", true)
         val listeningEmotion = AriaEmotion.fromInteraction(turnMood, turnExpression, message, "")
@@ -506,7 +507,8 @@ class MainActivity : AppCompatActivity() {
                         .map { it.text }.takeLast(2)
                     val relevant = ariaMemory.relevantTo(message, recentUserMessages)
                     lastMemoryCount = relevant.size
-                    ConversationContext.turnPrompt(previousHistory, relevant, message, stateBefore)
+                    ConversationContext.turnPrompt(previousHistory, relevant, message, stateBefore,
+                        stylePreferences)
                 }
                 lastContextChars = modelMessage.length
                 val previewExpression: (String) -> Unit = { visible ->
@@ -534,7 +536,7 @@ class MainActivity : AppCompatActivity() {
                     showPortrait(lastEmotion)
                     withContext(Dispatchers.IO) {
                         chatHistory.append("ARIA", answer)
-                        conversationManager.record(message, answer)
+                        conversationManager.record(message, answer, stylePreferences)
                     }
                 }
                 else { generationFailures++; reply.text = "No llegué a completar una respuesta. Prueba con una pregunta más corta."; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
@@ -693,7 +695,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
         AlertDialog.Builder(this).setTitle("Memoria de ARIA")
-            .setItems(memories.map { "#${it.id} · ${it.content}" }.toTypedArray()) { _, index ->
+            .setItems(memories.map { "#${it.id} · ${when (it.category) {
+                "experiencia_compartida", "experiencia" -> "Experiencia"
+                "preferencia_conversacion" -> "Preferencia de conversación"
+                "proyecto" -> "Proyecto"
+                else -> "Recuerdo"
+            }} · ${it.content}" }.toTypedArray()) { _, index ->
                 val item = memories[index]
                 AlertDialog.Builder(this).setTitle("Olvidar recuerdo #${item.id}")
                     .setMessage(item.content)

@@ -19,7 +19,8 @@ internal data class ExpressionState(
 /** Future relationship preferences can bias a suggestion, never force a lasting mode. */
 internal data class StylePreferences(
     val preferred: Set<ExpressionStyle> = emptySet(),
-    val avoided: Set<ExpressionStyle> = emptySet()
+    val avoided: Set<ExpressionStyle> = emptySet(),
+    val gentle: Set<ExpressionStyle> = emptySet()
 )
 
 internal object ExpressionResolver {
@@ -78,8 +79,14 @@ internal object ExpressionResolver {
             mood == ConversationMood.TIRED -> ExpressionStyle.COMFORTING
             else -> ExpressionStyle.NATURAL
         }
-        val safe = contextual.takeUnless { it in preferences.avoided } ?: ExpressionStyle.NATURAL
+        val safe = when {
+            contextual == ExpressionStyle.TEASING && contextual in preferences.avoided &&
+                mood == ConversationMood.PLAYFUL -> ExpressionStyle.PLAYFUL
+            contextual in preferences.avoided -> ExpressionStyle.NATURAL
+            else -> contextual
+        }
         val intensity = if (safe == ExpressionStyle.NATURAL) 0f
+            else if (safe in preferences.gentle) 0.35f
             else if (safe in preferences.preferred) 0.5f else 0.3f
         return ExpressionState(safe, intensity,
             turns = if (recent && safe == previous.style) (previous.turns + 1).coerceAtMost(5) else 0)

@@ -14,6 +14,8 @@ class AriaMemoryCommandTest {
         assertEquals(MemoryCommand.Correct(7, "mi gato se llama Sol"),
             AriaMemory.command("ARIA, corrige el recuerdo #7: mi gato se llama Sol"))
         assertEquals(MemoryCommand.ListAll, AriaMemory.command("¿Qué recuerdas?"))
+        assertEquals(MemoryCommand.Save("ayer terminamos una escena juntos", "experiencia_compartida"),
+            AriaMemory.command("ARIA, guarda nuestra experiencia: ayer terminamos una escena juntos"))
     }
 
     @Test fun ordinaryConversationDoesNotSilentlyChangeMemory() {

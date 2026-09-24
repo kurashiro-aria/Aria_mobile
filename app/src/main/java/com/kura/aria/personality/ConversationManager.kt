@@ -18,7 +18,8 @@ internal data class ConversationState(
     val socialTurns: Int = 0,
     val expression: ExpressionState = ExpressionState()
 ) {
-    fun afterExchange(user: String, reply: String, now: Long = System.currentTimeMillis()): ConversationState {
+    fun afterExchange(user: String, reply: String, now: Long = System.currentTimeMillis(),
+                      stylePreferences: StylePreferences = StylePreferences()): ConversationState {
         val cleanUser = user.replace(Regex("\\s+"), " ").trim().take(160)
         val substantive = MemorySelector.keywords(cleanUser).isNotEmpty() && !MemorySelector.isFollowUp(cleanUser)
         val nextTopic = if (substantive) cleanUser else topic
@@ -28,7 +29,8 @@ internal data class ConversationState(
         } else earlierTopics
         val question = ConversationContext.priorQuestion(reply).orEmpty()
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
-        val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now)
+        val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now,
+            stylePreferences)
         val mood = if (observedMood == ConversationMood.NEUTRAL) when (AriaEmotion.fromReply(reply)) {
             AriaEmotion.PLAYFUL, AriaEmotion.AMUSED -> ConversationMood.PLAYFUL
             AriaEmotion.THINKING, AriaEmotion.SURPRISED -> ConversationMood.CURIOUS
@@ -70,8 +72,9 @@ internal class ConversationManager(context: Context) {
         } catch (_: Exception) { ConversationState() }
     }
 
-    @Synchronized fun record(user: String, reply: String) {
-        val state = snapshot().afterExchange(user, reply)
+    @Synchronized fun record(user: String, reply: String,
+                             stylePreferences: StylePreferences = StylePreferences()) {
+        val state = snapshot().afterExchange(user, reply, stylePreferences = stylePreferences)
         val obj = JSONObject().put("topic", state.topic).put("pendingQuestion", state.pendingQuestion)
             .put("earlierTopics", JSONArray(state.earlierTopics)).put("updatedAt", state.updatedAt)
             .put("socialMood", state.socialMood.name).put("socialTurns", state.socialTurns)
