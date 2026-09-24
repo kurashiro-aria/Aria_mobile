@@ -37,4 +37,13 @@ class ConversationMoodTest {
         assertEquals(ConversationMood.URGENT, MoodReader.forTurn("Hay una emergencia", "Jajaja",
             ConversationMood.PLAYFUL, 1_000L, 2_000L))
     }
+
+    @Test fun kuraMoodUnderstandsCommonVariantsWithoutTreatingThemAsAriaEmotion() {
+        assertEquals(ConversationMood.JOYFUL, MoodReader.forTurn("Estoy contento"))
+        assertEquals(ConversationMood.JOYFUL, MoodReader.forTurn("Me siento alegre"))
+        assertEquals(ConversationMood.VULNERABLE, MoodReader.forTurn("Estoy desanimado"))
+        assertEquals(ConversationMood.TIRED, MoodReader.forTurn("Estoy exhausto"))
+        assertEquals(ConversationMood.FRUSTRATED, MoodReader.forTurn("Me irrita este error"))
+        assertEquals(ConversationMood.SHY, MoodReader.forTurn("Estoy avergonzado"))
+    }
 }

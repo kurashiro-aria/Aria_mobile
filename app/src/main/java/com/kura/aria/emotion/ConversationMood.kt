@@ -56,18 +56,18 @@ internal object MoodReader {
         val s = normalize(message)
         if (Regex("\\b(?:infarto|emergencia|urgencia|accidente|peligro|no puedo respirar)\\b").containsMatchIn(s))
             return ConversationMood.URGENT
-        val negatedSadness = Regex("\\bno (?:estoy|me siento|ando) (?:triste|mal|deprimido)\\b").containsMatchIn(s)
-        if (!negatedSadness && Regex("\\b(?:estoy triste|me siento triste|me siento mal|tengo miedo|estoy asustado|estoy deprimido|fallecio|murio|me duele|estoy preocupado|tengo ansiedad)\\b").containsMatchIn(s))
+        val negatedSadness = Regex("\\bno (?:estoy|me siento|ando) (?:triste|mal|deprimido|preocupado|asustado)\\b").containsMatchIn(s)
+        if (!negatedSadness && Regex("\\b(?:estoy triste|me siento triste|me siento mal|estoy desanimado|estoy decaido|tengo miedo|estoy asustado|estoy deprimido|fallecio|murio|me duele|estoy preocupado|me preocupa|tengo ansiedad)\\b").containsMatchIn(s))
             return ConversationMood.VULNERABLE
-        if (Regex("\\b(?:estoy cansado|estoy agotado|tengo sueno|no he dormido)\\b").containsMatchIn(s))
+        if (Regex("\\b(?:estoy cansado|estoy agotado|estoy exhausto|tengo sueno|me muero de sueno|no he dormido)\\b").containsMatchIn(s))
             return ConversationMood.TIRED
-        if (Regex("\\b(?:lo logre|funciono|salio bien|estoy feliz|buenas noticias|ya termine)\\b").containsMatchIn(s))
+        if (Regex("\\b(?:lo logre|funciono|salio bien|estoy feliz|estoy contento|me siento alegre|estoy alegre|me alegra|buenas noticias|ya termine)\\b").containsMatchIn(s))
             return ConversationMood.JOYFUL
         if (Regex("\\b(?:jaja+|jeje+|xd|es broma|te estoy molestando)\\b").containsMatchIn(s))
             return ConversationMood.PLAYFUL
-        if (Regex("\\b(?:me da verguenza|me sonrojo|que verguenza)\\b").containsMatchIn(s))
+        if (Regex("\\b(?:me da verguenza|me sonrojo|que verguenza|estoy avergonzado|me da pena decirlo)\\b").containsMatchIn(s))
             return ConversationMood.SHY
-        if (Regex("\\b(?:me frustra|estoy frustrado|estoy enojado|me molesta|odio|no funciona|sigue fallando)\\b").containsMatchIn(s))
+        if (Regex("\\b(?:me frustra|estoy frustrado|estoy enojado|me enfada|me irrita|me fastidia|me molesta|odio|no funciona|sigue fallando)\\b").containsMatchIn(s))
             return ConversationMood.FRUSTRATED
         return ConversationMood.NEUTRAL
     }

@@ -2,6 +2,7 @@ package com.kura.aria.emotion
 
 import com.kura.aria.personality.ExpressionState
 import com.kura.aria.personality.ExpressionStyle
+import java.text.Normalizer
 
 /** Emotion Engine v1. Keeps UI state separate from ARIA's personality and memory. */
 enum class AriaEmotion(val tile: Int, val label: String) {
@@ -22,14 +23,14 @@ enum class AriaEmotion(val tile: Int, val label: String) {
                 ConversationMood.RELAXED -> if (expressed == NEUTRAL) NEUTRAL else expressed
                 ConversationMood.FOCUSED -> if (reply.isBlank()) THINKING else if (expressed == NEUTRAL) SERIOUS else expressed
                 ConversationMood.CURIOUS -> if (expressed == SURPRISED) SURPRISED else THINKING
-                ConversationMood.SHY -> EMBARRASSED
+                ConversationMood.SHY -> if (expressed == NEUTRAL) EMBARRASSED else expressed
                 ConversationMood.VULNERABLE -> if (reply.isBlank() || MoodReader.isGrief(user)) SAD else AFFECTIONATE
                 ConversationMood.URGENT, ConversationMood.FRUSTRATED -> SERIOUS
-                ConversationMood.TIRED -> AFFECTIONATE
-                ConversationMood.JOYFUL -> if (expressed == EXCITED) EXCITED else HAPPY
+                ConversationMood.TIRED -> expressed
+                ConversationMood.JOYFUL -> if (expressed == NEUTRAL) HAPPY else expressed
                 ConversationMood.PLAYFUL -> when (expressed) {
-                    AMUSED, SURPRISED, EMBARRASSED, ANNOYED, PLAYFUL -> expressed
-                    else -> PLAYFUL
+                    NEUTRAL, THINKING -> PLAYFUL
+                    else -> expressed
                 }
                 ConversationMood.NEUTRAL -> expressed
             }
@@ -44,7 +45,8 @@ enum class AriaEmotion(val tile: Int, val label: String) {
                 return fromReply(reply)
             if (expression.style == ExpressionStyle.SERIOUS) return SERIOUS
             if (expression.style == ExpressionStyle.FOCUSED) return if (reply.isBlank()) THINKING else SERIOUS
-            if (base != NEUTRAL && base != THINKING) return base
+            // Once ARIA speaks, her own words take priority over a suggested style.
+            if (reply.isNotBlank() && base != NEUTRAL && base != THINKING) return base
             return when (expression.style) {
                 ExpressionStyle.FLIRTY, ExpressionStyle.TEASING, ExpressionStyle.PLAYFUL ->
                     if (mood == ConversationMood.SHY) EMBARRASSED else PLAYFUL
@@ -58,28 +60,35 @@ enum class AriaEmotion(val tile: Int, val label: String) {
         }
 
         fun fromReply(text: String): AriaEmotion {
-            val s = text.lowercase()
+            val s = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
+                .replace(Regex("\\p{M}+"), "")
+                .replace(Regex("\\bno (?:estoy|me siento|ando) (?:triste|enojada|enfadada|feliz|contenta|cansada|agotada|confundida)\\b"), "")
             val scored = listOf(
-                EXCITED to score(s, "lo logramos", "¡vamos", "funcionó", "no me lo creo", "qué emoción"),
-                SAD to score(s, "triste", "lo siento", "duele", "pena", "preocupa"),
-                ANGRY to score(s, "me enfada", "furiosa", "basta"),
-                ANNOYED to score(s, "hmpf", "tch", "qué pesado", "molesta", "🙄"),
-                EMBARRASSED to score(s, "vergüenza", "sonro", "no digas eso", "😳"),
-                SURPRISED to score(s, "¿¡", "¡¿", "wow", "no me esperaba", "😮"),
-                CONFUSED to score(s, "no entiendo", "confund", "¿cómo?", "qué raro"),
-                AFFECTIONATE to score(s, "cariño", "me alegra que", "cuídate", "💜", "❤️"),
-                PLAYFUL to score(s, "jeje", "😏", "te pillé", "tramposo"),
-                AMUSED to score(s, "jaj", "😂", "🤣", "me hizo gracia"),
-                HAPPY to score(s, "me alegra", "genial", "perfecto", "bien!", "😊", "✨"),
-                THINKING to score(s, "hmm", "interesante", "me pregunto", "qué habrá", "curioso"),
-                TIRED to score(s, "cansada", "sueño", "agotada", "😴"),
-                SERIOUS to score(s, "importante", "en serio", "cuidado", "riesgo"),
+                EXCITED to score(s, "lo logramos", "¡vamos", "funciono!", "no me lo creo", "que emocion", "emocionada", "entusiasmada", "euforica", "🎉"),
+                SAD to score(s, "triste", "entristece", "apenada", "desanimada", "melancolica", "me da pena", "me duele", "😢"),
+                ANGRY to score(s, "me enfada", "furiosa", "enojada", "indignada", "me da rabia", "estoy que ardo"),
+                ANNOYED to score(s, "hmpf", "tch", "que pesado", "me fastidia", "me irrita", "molesta", "🙄"),
+                EMBARRASSED to score(s, "verguenza", "sonrojo", "sonrojada", "avergonzada", "ruborizada", "no digas eso", "😳"),
+                SURPRISED to score(s, "¿¡", "¡¿", "wow", "no me lo esperaba", "sorprendida", "asombrada", "atónita", "😮"),
+                CONFUSED to score(s, "no entiendo", "confundida", "desconcertada", "no me queda claro", "¿como?", "que raro"),
+                AFFECTIONATE to score(s, "carino", "te quiero", "me importas", "cuídate", "cuidate", "con ternura", "💜", "❤️"),
+                PLAYFUL to score(s, "jeje", "😏", "te pille", "tramposo", "travieso", "bromista", "te tomo el pelo"),
+                AMUSED to score(s, "jaj", "jajaja", "😂", "🤣", "me hizo gracia", "me divierte", "que risa"),
+                HAPPY to score(s, "me alegra", "feliz", "contenta", "alegre", "genial", "perfecto", "bien!", "sonrio", "😊", "✨"),
+                THINKING to score(s, "hmm", "interesante", "me pregunto", "que habra", "curioso", "dejame pensar", "reflexionar", "🤔"),
+                TIRED to score(s, "cansada", "tengo sueno", "agotada", "exhausta", "sonolienta", "me vence el sueno", "😴"),
+                SERIOUS to score(s, "importante", "en serio", "cuidado", "riesgo", "delicado", "preocupante", "debemos atender"),
             )
             val best = scored.maxByOrNull { it.second }
             if (best != null && best.second >= 2) return best.first
             return NEUTRAL
         }
 
-        private fun score(text: String, vararg cues: String): Int = cues.count { text.contains(it) } * 2
+        private fun score(text: String, vararg cues: String): Int = cues.count { cue ->
+            val normalized = Normalizer.normalize(cue.lowercase(), Normalizer.Form.NFD)
+                .replace(Regex("\\p{M}+"), "")
+            val pattern = Regex("(?<![\\p{L}\\p{N}])${Regex.escape(normalized)}(?![\\p{L}\\p{N}])")
+            pattern.containsMatchIn(text)
+        } * 2
     }
 }

@@ -33,4 +33,39 @@ class AriaEmotionTest {
         assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromReply("De acuerdo."))
         assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromExchange("Lo logré", "Qué bueno."))
     }
+
+    @Test fun ariaWordsCanChangeThePortraitWithinTheSameConversationMood() {
+        assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromExchange("Estoy cansado", "Entiendo."))
+        assertEquals(AriaEmotion.AFFECTIONATE, AriaEmotion.fromExchange("Estoy cansado", "Cuídate 💜"))
+        assertEquals(AriaEmotion.PLAYFUL, AriaEmotion.fromExchange("Jaja, era broma", "Jeje, te pillé."))
+        assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromExchange("Jaja, era broma", "Me alegra 😊"))
+        assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromExchange("Me da vergüenza", "Genial, lo hiciste 😊"))
+        assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromReply("Lo siento, te escucho."))
+    }
+
+    @Test fun spanishSynonymsSelectEveryExpressivePortrait() {
+        val examples = mapOf(
+            AriaEmotion.HAPPY to listOf("Estoy contenta", "Me siento alegre"),
+            AriaEmotion.AMUSED to listOf("Me divierte", "Qué risa"),
+            AriaEmotion.THINKING to listOf("Déjame pensar", "Voy a reflexionar"),
+            AriaEmotion.SURPRISED to listOf("Estoy asombrada", "Qué sorpresa 😮"),
+            AriaEmotion.CONFUSED to listOf("Estoy desconcertada", "No me queda claro"),
+            AriaEmotion.ANNOYED to listOf("Me fastidia", "Me irrita"),
+            AriaEmotion.ANGRY to listOf("Estoy indignada", "Me da rabia"),
+            AriaEmotion.EMBARRASSED to listOf("Estoy sonrojada", "Me siento avergonzada"),
+            AriaEmotion.SAD to listOf("Estoy desanimada", "Me siento melancólica"),
+            AriaEmotion.AFFECTIONATE to listOf("Me importas", "Te quiero"),
+            AriaEmotion.PLAYFUL to listOf("Qué travieso", "Soy bromista"),
+            AriaEmotion.SERIOUS to listOf("Es un asunto delicado", "Eso es preocupante"),
+            AriaEmotion.TIRED to listOf("Estoy exhausta", "Me siento soñolienta"),
+            AriaEmotion.EXCITED to listOf("Estoy entusiasmada", "Qué emoción")
+        )
+        assertEquals(AriaEmotion.entries.size - 1, examples.size)
+        examples.forEach { (emotion, phrases) -> phrases.forEach { phrase ->
+            assertEquals(phrase, emotion, AriaEmotion.fromReply(phrase))
+        } }
+        assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromReply("No estoy triste, estoy contenta"))
+        assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromReply("No estoy enojada"))
+        assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromReply("No me siento cansada"))
+    }
 }
