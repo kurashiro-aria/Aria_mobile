@@ -149,7 +149,6 @@ class MainActivity : AppCompatActivity() {
             addView(root, FrameLayout.LayoutParams(-1, -1))
         }
         setContentView(screen)
-        if (savedModel() != null) showLoadingScreen()
         showPortrait(AriaEmotion.NEUTRAL)
 
         chatHistory = ChatHistory(applicationContext)
@@ -164,6 +163,8 @@ class MainActivity : AppCompatActivity() {
         send.setOnClickListener { sendMessage() }
         try {
             engine = AiChat.getInferenceEngine(applicationContext)
+            if (savedModel() != null && engine.state.value !is InferenceEngine.State.ModelReady)
+                showLoadingScreen()
             uiScope.launch { restoreBrainIfNeeded() }
         } catch (e: LinkageError) {
             hideLoadingScreen(false)
@@ -293,7 +294,8 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun restoreBrainIfNeeded() {
         if (busy) return
-        if (savedModel() != null) showLoadingScreen()
+        if (savedModel() != null && engine.state.value !is InferenceEngine.State.ModelReady)
+            showLoadingScreen()
         busy = true; loadBrain.isEnabled = false; send.isEnabled = false
         try {
             val state = withTimeout(30_000) { engine.state.first { it !is InferenceEngine.State.Uninitialized && it !is InferenceEngine.State.Initializing } }
@@ -673,7 +675,8 @@ class MainActivity : AppCompatActivity() {
             if (avatarCard.width == 0 || avatarCard.height == 0) return@post
             val width = image.intrinsicWidth.toFloat()
             val height = image.intrinsicHeight.toFloat()
-            val scale = maxOf(avatarCard.width / (width * 0.55f), avatarCard.height / (height * 0.55f))
+            // Keep the 150 x 200 card; show more of each portrait inside it.
+            val scale = maxOf(avatarCard.width / (width * 0.65f), avatarCard.height / (height * 0.65f))
             avatarCard.imageMatrix = Matrix().apply {
                 setScale(scale, scale)
                 postTranslate(avatarCard.width / 2f - width * 0.58f * scale,
