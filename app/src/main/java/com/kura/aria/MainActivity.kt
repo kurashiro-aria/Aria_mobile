@@ -13,6 +13,7 @@ import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -62,6 +63,11 @@ class MainActivity : AppCompatActivity() {
     private var repeatedReplies = 0
     private var generationFailures = 0
     private var initiativeJob: Job? = null
+    private var loadingOverlay: FrameLayout? = null
+    private var loadingTimer: Job? = null
+    private var loadingStartedAt = 0L
+    private var loadingProgress: ProgressBar? = null
+    private var loadingElapsed: TextView? = null
 
     private data class GenerationStats(val firstTokenMs: Long?, val firstVisibleMs: Long?, val totalMs: Long, val chunks: Int) {
         val approximateTokensPerSecond: Double?
@@ -139,7 +145,11 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { if (!busy && savedModel() != null && !modelLoaded) uiScope.launch { restoreBrainIfNeeded() } else chooseModel() }
         }
         root.addView(loadBrain)
-        setContentView(root)
+        val screen = FrameLayout(this).apply {
+            addView(root, FrameLayout.LayoutParams(-1, -1))
+        }
+        setContentView(screen)
+        if (savedModel() != null) showLoadingScreen()
         showPortrait(AriaEmotion.NEUTRAL)
 
         chatHistory = ChatHistory(applicationContext)
@@ -156,6 +166,7 @@ class MainActivity : AppCompatActivity() {
             engine = AiChat.getInferenceEngine(applicationContext)
             uiScope.launch { restoreBrainIfNeeded() }
         } catch (e: LinkageError) {
+            hideLoadingScreen(false)
             setStatus("● Error de motor", false)
             loadBrain.isEnabled = false
         }
@@ -203,8 +214,77 @@ class MainActivity : AppCompatActivity() {
         status.setTextColor(Color.parseColor(if (ready) PURPLE else MUTED))
     }
 
+    private fun showLoadingScreen() {
+        if (loadingOverlay != null) return
+        val screen = findViewById<View>(android.R.id.content) as FrameLayout
+        val overlay = FrameLayout(this).apply { setBackgroundColor(Color.parseColor(BG)) }
+        overlay.addView(ImageView(this).apply {
+            setImageResource(R.drawable.aria_sleeping)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            contentDescription = "ARIA duerme mientras se carga su cerebro"
+        }, FrameLayout.LayoutParams(-1, -1))
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(30), 0, dp(30), 0)
+        }
+        controls.addView(TextView(this).apply {
+            text = "ARIA está despertando"
+            textSize = 27f
+            setTextColor(Color.parseColor(TEXT))
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(24) })
+        loadingProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progress = 0
+            progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(PURPLE))
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#514060"))
+            contentDescription = "Carga del cerebro de ARIA"
+        }
+        controls.addView(loadingProgress, LinearLayout.LayoutParams(-1, dp(12)))
+        loadingElapsed = TextView(this).apply {
+            text = "Tiempo transcurrido: 00:00"
+            textSize = 15f
+            setTextColor(Color.parseColor(MUTED))
+            gravity = Gravity.CENTER
+        }
+        controls.addView(loadingElapsed, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(20) })
+        overlay.addView(controls, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = dp(112) })
+        screen.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        loadingOverlay = overlay
+        window.insetsController?.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+        loadingStartedAt = SystemClock.elapsedRealtime()
+        loadingTimer?.cancel()
+        loadingTimer = uiScope.launch {
+            while (isActive && loadingOverlay === overlay) {
+                val seconds = (SystemClock.elapsedRealtime() - loadingStartedAt) / 1000
+                loadingElapsed?.text = "Tiempo transcurrido: %02d:%02d".format(seconds / 60, seconds % 60)
+                if (::engine.isInitialized && engine.state.value is InferenceEngine.State.LoadingModel) loadingProgress?.progress =
+                    (engine.modelLoadProgress.coerceIn(0f, 0.95f) * 1000).toInt()
+                delay(200)
+            }
+        }
+    }
+
+    private fun hideLoadingScreen(completed: Boolean) {
+        val overlay = loadingOverlay ?: return
+        loadingTimer?.cancel()
+        loadingTimer = null
+        if (completed) loadingProgress?.progress = 1000
+        overlay.postDelayed({
+            if (loadingOverlay === overlay) {
+                (overlay.parent as? FrameLayout)?.removeView(overlay)
+                loadingOverlay = null
+                loadingProgress = null
+                loadingElapsed = null
+                window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+            }
+        }, if (completed) 220L else 0L)
+    }
+
     private suspend fun restoreBrainIfNeeded() {
         if (busy) return
+        if (savedModel() != null) showLoadingScreen()
         busy = true; loadBrain.isEnabled = false; send.isEnabled = false
         try {
             val state = withTimeout(30_000) { engine.state.first { it !is InferenceEngine.State.Uninitialized && it !is InferenceEngine.State.Initializing } }
@@ -230,6 +310,7 @@ class MainActivity : AppCompatActivity() {
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { modelLoaded = false; setStatus("○ Error de cerebro", false); toast(e.message ?: e.javaClass.simpleName) }
         finally {
+            hideLoadingScreen(modelLoaded)
             busy = false; loadBrain.isEnabled = ::engine.isInitialized
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
@@ -332,6 +413,7 @@ class MainActivity : AppCompatActivity() {
                 target
             }
             setStatus("○ Cargando cerebro", false)
+            showLoadingScreen()
             val loadStarted = SystemClock.elapsedRealtime()
             engine.loadModel(model.absolutePath)
             engine.setSystemPrompt(AriaPersonality.systemPrompt())
@@ -346,6 +428,7 @@ class MainActivity : AppCompatActivity() {
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { modelLoaded = false; setStatus("○ Error de cerebro", false); aria("Mi trasplante falló: ${e.javaClass.simpleName}: ${e.message ?: "sin detalle"}.") }
         finally {
+            hideLoadingScreen(modelLoaded)
             var restoreFailed = false
             if (!modelCommitted && (imported != null || replaced != null)) withContext(NonCancellable + Dispatchers.IO) {
                 imported?.delete()

@@ -8,6 +8,7 @@ La rama `aria-alpha-0.2-local-ai` usa Kotlin y el ejemplo Android de llama.cpp f
 
 - Chat y selección/importación de GGUF.
 - Inferencia local; sin permiso de Internet en la aplicación.
+- Al reconectar un GGUF guardado, ARIA aparece dormida a pantalla completa antes del chat. Una barra sigue el avance real comunicado por llama.cpp y se completa después de preparar la personalidad; se muestra el tiempo transcurrido sin porcentaje ni estimación ficticia. Si no hay cerebro guardado o falla la carga, se muestra el chat para elegir o reconectar uno.
 - Diagnóstico nativo y recuperación tras errores de carga.
 - Historial local persistente, recuerdos explícitos que se pueden guardar, corregir u olvidar, y retratos de expresiones. La voz sigue pendiente.
 - La personalidad de ARIA se carga con el GGUF. Cuando el mensaje continúa el hilo, se consideran hasta seis mensajes recientes; el modelo recibe las palabras pertinentes de Kura y, si la respuesta es elíptica, solo la pregunta o afirmación necesaria de ARIA. También puede recibir hasta cinco recuerdos explícitos relacionados, fragmentos anteriores del usuario y un tema resumido de sus propias palabras. Un saludo o tema nuevo no arrastra la conversación anterior.

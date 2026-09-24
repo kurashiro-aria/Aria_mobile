@@ -11,6 +11,7 @@ Antes de probar ajustes de conversación de 0.2.26-alpha:
 | 0.2.28-alpha, antes de ajustar estados de ánimo | `aria-restore-0.2.28-before-mood` | `335532ed2033bd47fd50199e4bbfdc5cb3727d56` |
 | 0.2.29-alpha, antes de ajustar la expresión textual y visual | `aria-restore-0.2.29-before-expression-tuning` | `aaba37063afed5c8469975f4529cce0afdb27e8d` |
 | 0.2.30-alpha, antes del estado social de varios turnos | `aria-restore-0.2.30-before-social-state` | `baa884ccbef96edd19bd80dd50d351acf8a8ed97` |
+| 0.2.31-alpha, antes de la pantalla de carga | `aria-restore-0.2.31-before-loading-screen` | `7fb2f226e804e238f5e46cef90f49889cf705106` |
 
 El APK 0.2.24-alpha que pasó las comprobaciones del workflow sigue disponible en
 [la ejecución 35891568373](https://github.com/kurashiro-aria/Aria_mobile/actions/runs/35891568373/artifacts/10765876814).

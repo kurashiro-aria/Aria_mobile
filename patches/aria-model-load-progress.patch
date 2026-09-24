@@ -1,0 +1,83 @@
+diff --git a/examples/llama.android/lib/src/main/cpp/ai_chat.cpp b/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
+index 8966a28..5196f70 100644
+--- a/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
++++ b/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
+@@ -4,6 +4,7 @@
+ #include <cmath>
+ #include <string>
+ #include <mutex>
++#include <atomic>
+ #include <unistd.h>
+ #include <sampling.h>
+ 
+@@ -43,6 +44,17 @@ static common_sampler                   * g_sampler;
+ // Retain only warnings/errors, bounded and synchronized: llama may log from worker threads.
+ static std::mutex native_error_mutex;
+ static std::string native_error;
++static std::atomic<float> model_load_progress{0.0f};
++static bool aria_load_progress(float progress, void *) {
++    model_load_progress.store(std::max(0.0f, std::min(0.95f, progress * 0.95f)));
++    return true;
++}
++
++extern "C"
++JNIEXPORT jfloat JNICALL
++Java_com_arm_aichat_internal_InferenceEngineImpl_nativeModelLoadProgress(JNIEnv *, jobject) {
++    return model_load_progress.load();
++}
+ static void aria_log_callback(enum ggml_log_level level, const char *text, void *user) {
+     aichat_android_log_callback(level, text, user);
+     if (text && (level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_WARN)) {
+@@ -85,11 +97,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unu
+ extern "C"
+ JNIEXPORT jint JNICALL
+ Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {
++    model_load_progress.store(0.0f);
+     {
+         std::lock_guard<std::mutex> lock(native_error_mutex);
+         native_error.clear();
+     }
+     llama_model_params model_params = llama_model_default_params();
++    model_params.progress_callback = aria_load_progress;
+ 
+     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
+     LOGd("%s: Loading model from: \n%s\n", __func__, model_path);
+diff --git a/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt b/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt
+index 26c1668..c4fb330 100644
+--- a/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt
++++ b/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt
+@@ -13,6 +13,9 @@ interface InferenceEngine {
+      */
+     val state: StateFlow<State>
+ 
++    /** Progress reported by llama.cpp while loading the model, from 0 to 0.95. */
++    val modelLoadProgress: Float
++
+     /**
+      * Load a model from the given path.
+      *
+diff --git a/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt b/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt
+index f935fbf..cc81230 100644
+--- a/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt
++++ b/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt
+@@ -87,6 +87,9 @@ internal class InferenceEngineImpl private constructor(
+     @FastNative
+     private external fun lastNativeError(): String
+ 
++    @FastNative
++    private external fun nativeModelLoadProgress(): Float
++
+     @FastNative
+     private external fun prepare(): Int
+ 
+@@ -114,7 +117,10 @@ internal class InferenceEngineImpl private constructor(
+     private val _state =
+         MutableStateFlow<InferenceEngine.State>(InferenceEngine.State.Uninitialized)
+     override val state: StateFlow<InferenceEngine.State> = _state.asStateFlow()
++    override val modelLoadProgress: Float
++        get() = if (nativeInitialized) nativeModelLoadProgress() else 0.0f
+ 
++    @Volatile
+     private var nativeInitialized = false
+     private var _readyForSystemPrompt = false
+     @Volatile
