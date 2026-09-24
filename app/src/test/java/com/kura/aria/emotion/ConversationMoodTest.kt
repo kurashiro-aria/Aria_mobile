@@ -30,4 +30,11 @@ class ConversationMoodTest {
         assertEquals(ConversationMood.PLAYFUL, MoodReader.forTurn("Odio el calor jaja"))
         assertEquals(AriaEmotion.SERIOUS, AriaEmotion.fromExchange("La app no funciona", "Lo siento."))
     }
+
+    @Test fun greetingClearsOldMoodAndReplyCanStartAPlayfulThread() {
+        assertEquals(ConversationMood.RELAXED, MoodReader.forTurn("¿cómo estás?", "Estoy triste",
+            ConversationMood.VULNERABLE, 1_000L, 2_000L))
+        assertEquals(ConversationMood.URGENT, MoodReader.forTurn("Hay una emergencia", "Jajaja",
+            ConversationMood.PLAYFUL, 1_000L, 2_000L))
+    }
 }

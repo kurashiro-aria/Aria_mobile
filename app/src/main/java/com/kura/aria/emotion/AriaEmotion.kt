@@ -10,8 +10,16 @@ enum class AriaEmotion(val tile: Int, val label: String) {
     companion object {
         /** The portrait reacts to Kura's situation as well as ARIA's words. */
         fun fromExchange(user: String, reply: String, previousUser: String? = null): AriaEmotion {
+            return fromMood(MoodReader.forTurn(user, previousUser), user, reply)
+        }
+
+        internal fun fromMood(mood: ConversationMood, user: String, reply: String): AriaEmotion {
             val expressed = fromReply(reply)
-            return when (MoodReader.forTurn(user, previousUser)) {
+            return when (mood) {
+                ConversationMood.RELAXED -> if (expressed == NEUTRAL) NEUTRAL else expressed
+                ConversationMood.FOCUSED -> if (reply.isBlank()) THINKING else if (expressed == NEUTRAL) SERIOUS else expressed
+                ConversationMood.CURIOUS -> if (expressed == SURPRISED) SURPRISED else THINKING
+                ConversationMood.SHY -> EMBARRASSED
                 ConversationMood.VULNERABLE -> if (reply.isBlank() || MoodReader.isGrief(user)) SAD else AFFECTIONATE
                 ConversationMood.URGENT, ConversationMood.FRUSTRATED -> SERIOUS
                 ConversationMood.TIRED -> AFFECTIONATE

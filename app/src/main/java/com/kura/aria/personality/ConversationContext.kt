@@ -13,7 +13,8 @@ internal object ConversationContext {
                    state: ConversationState = ConversationState()): String {
         require(current.isNotBlank())
         val lastUser = history.lastOrNull { it.role == "Kura" }
-        val mood = MoodReader.forTurn(current, lastUser?.text)
+        val mood = MoodReader.forTurn(current, state.topic.ifBlank { lastUser?.text.orEmpty() },
+            state.socialMood, state.updatedAt, carriedTurns = state.socialTurns)
         val directFollowUp = MemorySelector.isFollowUp(current)
         val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
         val followsLast = !returnsToTopic && (directFollowUp ||

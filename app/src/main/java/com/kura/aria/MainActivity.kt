@@ -28,6 +28,7 @@ import com.kura.aria.chat.ReplyQuality
 import com.kura.aria.memory.AriaMemory
 import com.kura.aria.memory.MemoryCommand
 import com.kura.aria.emotion.AriaEmotion
+import com.kura.aria.emotion.MoodReader
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -389,9 +390,12 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
+        val stateBefore = conversationManager.snapshot()
+        val turnMood = MoodReader.forTurn(message, stateBefore.topic,
+            stateBefore.socialMood, stateBefore.updatedAt, carriedTurns = stateBefore.socialTurns)
         busy = true; loadBrain.isEnabled = false; user(message)
         input.text.clear(); send.isEnabled = false; setStatus("● Pensando", true)
-        val listeningEmotion = AriaEmotion.fromExchange(message, "")
+        val listeningEmotion = AriaEmotion.fromMood(turnMood, message, "")
         if (listeningEmotion != AriaEmotion.NEUTRAL) showPortrait(listeningEmotion)
         else if (message.startsWith("¿") || message.endsWith("?")) showPortrait(AriaEmotion.THINKING)
         val reply = messageView("ARIA", "Preparando respuesta…"); conversation.addView(reply); scrollToBottom()
@@ -407,13 +411,11 @@ class MainActivity : AppCompatActivity() {
                         .map { it.text }.takeLast(2)
                     val relevant = ariaMemory.relevantTo(message, recentUserMessages)
                     lastMemoryCount = relevant.size
-                    ConversationContext.turnPrompt(previousHistory, relevant, message,
-                        conversationManager.snapshot())
+                    ConversationContext.turnPrompt(previousHistory, relevant, message, stateBefore)
                 }
                 lastContextChars = modelMessage.length
-                val previousUser = previousHistory.lastOrNull { it.role == "Kura" }?.text
                 val previewExpression: (String) -> Unit = { visible ->
-                    showPortrait(AriaEmotion.fromExchange(message, visible, previousUser))
+                    showPortrait(AriaEmotion.fromMood(turnMood, message, visible))
                 }
                 var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), 768, reply,
                     previewExpression)
@@ -433,7 +435,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (answer.isNotBlank()) {
                     reply.text = answer
-                    lastEmotion = AriaEmotion.fromExchange(message, answer, previousUser)
+                    lastEmotion = AriaEmotion.fromMood(turnMood, message, answer)
                     showPortrait(lastEmotion)
                     withContext(Dispatchers.IO) {
                         chatHistory.append("ARIA", answer)
@@ -496,6 +498,7 @@ class MainActivity : AppCompatActivity() {
             append("\nCerebro: ").append(savedModel()?.name ?: "sin cargar")
             append("\nContexto del último turno: ").append(lastContextChars).append(" caracteres")
             append("\nRecuerdos recuperados: ").append(lastMemoryCount)
+            append("\nEstado social: ").append(conversationManager.snapshot().socialMood.name)
             append("\nRepeticiones detectadas: ").append(repeatedReplies)
             append("\nFallos de respuesta: ").append(generationFailures)
         }
