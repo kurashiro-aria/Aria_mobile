@@ -1,5 +1,5 @@
 diff --git a/examples/llama.android/lib/src/main/cpp/ai_chat.cpp b/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
-index 8966a28..5196f70 100644
+index 8966a28..5a52bab 100644
 --- a/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
 +++ b/examples/llama.android/lib/src/main/cpp/ai_chat.cpp
 @@ -4,6 +4,7 @@
@@ -16,7 +16,7 @@ index 8966a28..5196f70 100644
  static std::string native_error;
 +static std::atomic<float> model_load_progress{0.0f};
 +static bool aria_load_progress(float progress, void *) {
-+    model_load_progress.store(std::max(0.0f, std::min(0.95f, progress * 0.95f)));
++    model_load_progress.store(std::max(0.0f, std::min(1.0f, progress)));
 +    return true;
 +}
 +
@@ -43,14 +43,14 @@ index 8966a28..5196f70 100644
      const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
      LOGd("%s: Loading model from: \n%s\n", __func__, model_path);
 diff --git a/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt b/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt
-index 26c1668..c4fb330 100644
+index 26c1668..ff66d60 100644
 --- a/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt
 +++ b/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt
 @@ -13,6 +13,9 @@ interface InferenceEngine {
       */
      val state: StateFlow<State>
  
-+    /** Progress reported by llama.cpp while loading the model, from 0 to 0.95. */
++    /** Tensor loading progress reported by llama.cpp, from 0 to 1; context setup is separate. */
 +    val modelLoadProgress: Float
 +
      /**

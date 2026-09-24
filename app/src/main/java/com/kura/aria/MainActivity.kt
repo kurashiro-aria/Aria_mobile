@@ -68,6 +68,7 @@ class MainActivity : AppCompatActivity() {
     private var loadingStartedAt = 0L
     private var loadingProgress: ProgressBar? = null
     private var loadingElapsed: TextView? = null
+    private var wakeButton: Button? = null
 
     private data class GenerationStats(val firstTokenMs: Long?, val firstVisibleMs: Long?, val totalMs: Long, val chunks: Int) {
         val approximateTokensPerSecond: Double?
@@ -249,6 +250,15 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         controls.addView(loadingElapsed, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(20) })
+        wakeButton = Button(this).apply {
+            text = "DESPERTAR"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            background = rounded(CHAT_PURPLE, 22f)
+            visibility = View.GONE
+            setOnClickListener { openChatFromLoadingScreen() }
+        }
+        controls.addView(wakeButton, LinearLayout.LayoutParams(-1, dp(54)).apply { topMargin = dp(24) })
         overlay.addView(controls, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = dp(112) })
         screen.addView(overlay, FrameLayout.LayoutParams(-1, -1))
         loadingOverlay = overlay
@@ -259,8 +269,10 @@ class MainActivity : AppCompatActivity() {
             while (isActive && loadingOverlay === overlay) {
                 val seconds = (SystemClock.elapsedRealtime() - loadingStartedAt) / 1000
                 loadingElapsed?.text = "Tiempo transcurrido: %02d:%02d".format(seconds / 60, seconds % 60)
-                if (::engine.isInitialized && engine.state.value is InferenceEngine.State.LoadingModel) loadingProgress?.progress =
-                    (engine.modelLoadProgress.coerceIn(0f, 0.95f) * 1000).toInt()
+                val modelLoading = ::engine.isInitialized && engine.state.value is InferenceEngine.State.LoadingModel
+                loadingProgress?.isIndeterminate = !modelLoading
+                if (modelLoading) loadingProgress?.progress =
+                    (engine.modelLoadProgress.coerceIn(0f, 1f) * 1000).toInt()
                 delay(200)
             }
         }
@@ -270,16 +282,25 @@ class MainActivity : AppCompatActivity() {
         val overlay = loadingOverlay ?: return
         loadingTimer?.cancel()
         loadingTimer = null
-        if (completed) loadingProgress?.progress = 1000
-        overlay.postDelayed({
-            if (loadingOverlay === overlay) {
-                (overlay.parent as? FrameLayout)?.removeView(overlay)
-                loadingOverlay = null
-                loadingProgress = null
-                loadingElapsed = null
-                window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-            }
-        }, if (completed) 220L else 0L)
+        if (completed) {
+            loadingProgress?.isIndeterminate = false
+            loadingProgress?.progress = 1000
+            wakeButton?.visibility = View.VISIBLE
+            return
+        }
+        openChatFromLoadingScreen()
+    }
+
+    private fun openChatFromLoadingScreen() {
+        val overlay = loadingOverlay ?: return
+        loadingTimer?.cancel()
+        (overlay.parent as? FrameLayout)?.removeView(overlay)
+        loadingOverlay = null
+        loadingProgress = null
+        loadingElapsed = null
+        wakeButton = null
+        window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+        if (modelLoaded) scheduleInitiative()
     }
 
     private suspend fun restoreBrainIfNeeded() {
@@ -314,7 +335,6 @@ class MainActivity : AppCompatActivity() {
             busy = false; loadBrain.isEnabled = ::engine.isInitialized
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
-            if (modelLoaded) scheduleInitiative()
         }
     }
 
@@ -323,7 +343,7 @@ class MainActivity : AppCompatActivity() {
         if (::engine.isInitialized && !busy && savedModel() != null &&
             (!modelLoaded || engine.state.value !is InferenceEngine.State.ModelReady)) {
             uiScope.launch { restoreBrainIfNeeded() }
-        } else if (::engine.isInitialized && modelLoaded) {
+        } else if (::engine.isInitialized && modelLoaded && loadingOverlay == null) {
             scheduleInitiative()
         }
     }
