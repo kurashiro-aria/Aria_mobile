@@ -12,11 +12,14 @@ enum class AriaEmotion(val tile: Int, val label: String) {
         fun fromExchange(user: String, reply: String, previousUser: String? = null): AriaEmotion {
             val expressed = fromReply(reply)
             return when (MoodReader.forTurn(user, previousUser)) {
-                ConversationMood.VULNERABLE -> SAD
+                ConversationMood.VULNERABLE -> if (reply.isBlank() || MoodReader.isGrief(user)) SAD else AFFECTIONATE
                 ConversationMood.URGENT, ConversationMood.FRUSTRATED -> SERIOUS
                 ConversationMood.TIRED -> AFFECTIONATE
                 ConversationMood.JOYFUL -> if (expressed == EXCITED) EXCITED else HAPPY
-                ConversationMood.PLAYFUL -> if (expressed == AMUSED) AMUSED else PLAYFUL
+                ConversationMood.PLAYFUL -> when (expressed) {
+                    AMUSED, SURPRISED, EMBARRASSED, ANNOYED, PLAYFUL -> expressed
+                    else -> PLAYFUL
+                }
                 ConversationMood.NEUTRAL -> expressed
             }
         }

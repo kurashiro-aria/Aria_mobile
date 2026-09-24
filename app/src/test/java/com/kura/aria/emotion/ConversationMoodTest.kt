@@ -10,7 +10,7 @@ import org.junit.Test
 class ConversationMoodTest {
     @Test fun followsFeelingForShortAnswerButResetsOnNewTopic() {
         assertEquals(ConversationMood.VULNERABLE, MoodReader.forTurn("sí", "Estoy triste hoy"))
-        assertEquals(AriaEmotion.SAD, AriaEmotion.fromExchange("sí", "Entiendo.", "Estoy triste hoy"))
+        assertEquals(AriaEmotion.AFFECTIONATE, AriaEmotion.fromExchange("sí", "Entiendo.", "Estoy triste hoy"))
         assertEquals(ConversationMood.NEUTRAL, MoodReader.forTurn("Hablemos del manga", "Estoy triste hoy"))
         assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromExchange("Hablemos del manga", "De acuerdo."))
     }

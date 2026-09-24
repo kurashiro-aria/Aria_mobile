@@ -23,10 +23,13 @@ class AriaEmotionTest {
     }
 
     @Test fun portraitRespondsToTheSituationInsteadOfAnUnrelatedHappyWord() {
-        assertEquals(AriaEmotion.SAD, AriaEmotion.fromExchange("Estoy triste hoy", "Aquí estoy contigo."))
+        assertEquals(AriaEmotion.SAD, AriaEmotion.fromExchange("Estoy triste hoy", ""))
+        assertEquals(AriaEmotion.AFFECTIONATE, AriaEmotion.fromExchange("Estoy triste hoy", "Aquí estoy contigo."))
+        assertEquals(AriaEmotion.SAD, AriaEmotion.fromExchange("Mi amiga falleció", "Lo siento mucho."))
         assertEquals(AriaEmotion.SERIOUS, AriaEmotion.fromExchange("Tuve un accidente", "Vamos a tomarlo con calma."))
         assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromExchange("Ya terminé", "Genial, quedó listo."))
         assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromExchange("Otro tema", "De acuerdo."))
+        assertEquals(AriaEmotion.ANNOYED, AriaEmotion.fromExchange("Era broma jaja", "Hmpf, qué pesado."))
         assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromReply("De acuerdo."))
         assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromExchange("Lo logré", "Qué bueno."))
     }

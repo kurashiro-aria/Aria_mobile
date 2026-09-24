@@ -46,6 +46,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var avatarCard: ImageView
     private val portraits = mutableMapOf<Int, Bitmap>()
     private var lastEmotion = AriaEmotion.NEUTRAL
+    private var displayedEmotion: AriaEmotion? = null
     private lateinit var engine: InferenceEngine
     private lateinit var chatHistory: ChatHistory
     private lateinit var ariaMemory: AriaMemory
@@ -410,14 +411,20 @@ class MainActivity : AppCompatActivity() {
                         conversationManager.snapshot())
                 }
                 lastContextChars = modelMessage.length
-                var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), 768, reply)
+                val previousUser = previousHistory.lastOrNull { it.role == "Kura" }?.text
+                val previewExpression: (String) -> Unit = { visible ->
+                    showPortrait(AriaEmotion.fromExchange(message, visible, previousUser))
+                }
+                var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), 768, reply,
+                    previewExpression)
                 val previousAria = previousHistory.lastOrNull { it.role == "ARIA" }?.text
                 if (answer.isBlank() || ReplyQuality.repeats(previousAria, answer)) {
                     if (ReplyQuality.repeats(previousAria, answer)) repeatedReplies++
                     reply.text = "Ajustando respuesta…"
+                    showPortrait(AriaEmotion.THINKING)
                     answer = collectVisibleReply(
                         AriaPersonality.directResponsePrompt(ReplyQuality.retryPrompt(previousHistory, message)),
-                        256, reply
+                        256, reply, previewExpression
                     )
                     if (ReplyQuality.repeats(previousAria, answer)) {
                         repeatedReplies++
@@ -426,8 +433,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (answer.isNotBlank()) {
                     reply.text = answer
-                    lastEmotion = AriaEmotion.fromExchange(message, answer,
-                        previousHistory.lastOrNull { it.role == "Kura" }?.text)
+                    lastEmotion = AriaEmotion.fromExchange(message, answer, previousUser)
                     showPortrait(lastEmotion)
                     withContext(Dispatchers.IO) {
                         chatHistory.append("ARIA", answer)
@@ -445,13 +451,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun collectVisibleReply(prompt: String, tokenLimit: Int, reply: TextView): String {
+    private suspend fun collectVisibleReply(prompt: String, tokenLimit: Int, reply: TextView,
+                                            onFirstPhrase: (String) -> Unit = {}): String {
         val filter = VisibleReplyFilter()
         val started = SystemClock.elapsedRealtime()
         var firstTokenMs: Long? = null
         var firstVisibleMs: Long? = null
         var chunks = 0
         var lastRenderedAt = 0L
+        var expressionPreviewed = false
         engine.sendUserPrompt(prompt, predictLength = tokenLimit).flowOn(Dispatchers.IO).collect { token ->
             chunks++
             val answer = filter.append(token)
@@ -462,6 +470,11 @@ class MainActivity : AppCompatActivity() {
             if (answer.isNotBlank() && (lastRenderedAt == 0L || now - lastRenderedAt >= 80L)) {
                 reply.text = answer
                 lastRenderedAt = now
+            }
+            if (!expressionPreviewed && answer.length >= 18 &&
+                (answer.length >= 45 || answer.any { it == '.' || it == '!' || it == '?' })) {
+                expressionPreviewed = true
+                onFirstPhrase(answer)
             }
         }
         lastGeneration = GenerationStats(firstTokenMs, firstVisibleMs, SystemClock.elapsedRealtime() - started, chunks)
@@ -530,6 +543,9 @@ class MainActivity : AppCompatActivity() {
     private fun scrollToBottom() { scroll.post { scroll.fullScroll(View.FOCUS_DOWN) } }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     private fun showPortrait(emotion: AriaEmotion) {
+        if (displayedEmotion == emotion) return
+        val animateChange = displayedEmotion != null
+        displayedEmotion = emotion
         val (drawable, label) = when (emotion) {
             AriaEmotion.NEUTRAL -> R.drawable.aria_neutral to emotion.label
             AriaEmotion.HAPPY -> R.drawable.aria_happy to emotion.label
@@ -551,6 +567,11 @@ class MainActivity : AppCompatActivity() {
             BitmapFactory.Options().apply { inSampleSize = 2 })?.also { portraits[drawable] = it }
         if (portrait != null) avatarCard.setImageBitmap(portrait) else avatarCard.setImageResource(drawable)
         avatarCard.contentDescription = "ARIA, expresión $label"
+        if (animateChange) {
+            avatarCard.animate().cancel()
+            avatarCard.alpha = 0.65f
+            avatarCard.animate().alpha(1f).setDuration(160L).start()
+        }
         avatarCard.post {
             val image = avatarCard.drawable ?: return@post
             if (avatarCard.width == 0 || avatarCard.height == 0) return@post

@@ -6,15 +6,18 @@ import java.text.Normalizer
 /** Lightweight signal from Kura's own words; it is not a diagnosis or permanent memory. */
 internal enum class ConversationMood(val guidance: String) {
     NEUTRAL(""),
-    VULNERABLE("Responde con calma y atención a lo que siente Kura; evita bromas y preguntas de relleno."),
+    VULNERABLE("Escucha el hecho concreto que contó Kura y responde con cuidado. No dramatices, diagnostiques ni repitas fórmulas de consuelo."),
     URGENT("Da prioridad al problema concreto y habla con claridad y seriedad; evita bromas."),
     FRUSTRATED("Reconoce la molestia brevemente y ve a algo útil; no repitas disculpas ni cambies de tema."),
     TIRED("Mantén un tono suave y breve, sin exigirle energía ni asumir qué necesita."),
-    JOYFUL("Acompaña la alegría con una reacción concreta; evita una felicitación prefabricada."),
-    PLAYFUL("Puedes seguir el humor de Kura si encaja; no fuerces una broma ni repitas una anterior.")
+    JOYFUL("Reacciona a lo que Kura consiguió o compartió, con alegría propia y una observación concreta; evita felicitaciones prefabricadas."),
+    PLAYFUL("Sigue el juego desde tu personalidad si encaja: puedes sorprenderte, picarte o reírte. No fuerces la misma broma ni una pregunta final.")
 }
 
 internal object MoodReader {
+    fun isGrief(message: String): Boolean = Regex("\\b(?:falleci[oó]|muri[oó]|perd[ií] a)\\b")
+        .containsMatchIn(message.lowercase())
+
     fun forTurn(current: String, previousUser: String? = null): ConversationMood {
         val mood = detect(current)
         if (mood != ConversationMood.NEUTRAL) return mood
