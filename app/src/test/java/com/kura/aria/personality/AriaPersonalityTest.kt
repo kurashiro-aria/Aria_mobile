@@ -26,8 +26,9 @@ class AriaPersonalityTest {
             ChatMessage("ARIA", "¿Cómo se llama?", 2)
         )
         val prompt = ConversationContext.turnPrompt(history, listOf(Memory(7, "El gato se llama Nube")), "Se llama Nube")
-        assertTrue(prompt.indexOf("Kura: Tengo un gato") < prompt.indexOf("Guardado por Kura #7"))
-        assertTrue(prompt.indexOf("Guardado por Kura #7") < prompt.indexOf("MENSAJE ACTUAL DE KURA:"))
+        assertTrue(prompt.indexOf("Kura: Tengo un gato") < prompt.indexOf("• El gato se llama Nube"))
+        assertTrue(prompt.indexOf("• El gato se llama Nube") < prompt.indexOf("MENSAJE ACTUAL DE KURA:"))
+        assertFalse(prompt.contains("#7"))
         assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nSe llama Nube"))
         assertTrue(prompt.contains("¿Cómo se llama?"))
         assertFalse(prompt.contains("ARIA: ¿Cómo se llama?"))
@@ -42,7 +43,7 @@ class AriaPersonalityTest {
         assertTrue(prompt.contains("Fragmentos anteriores del historial (no guardados)"))
         assertTrue(prompt.contains("Hablemos del manga de Sora"))
         assertFalse(prompt.contains("Sora entra a la mazmorra"))
-        assertFalse(prompt.contains("Guardado por Kura"))
+        assertFalse(prompt.contains("DATOS QUE KURA ELIGIÓ GUARDAR"))
     }
 
     @Test fun historyIsBoundedAndDoesNotInventYesterday() {

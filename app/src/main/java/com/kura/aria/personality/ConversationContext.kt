@@ -50,8 +50,8 @@ internal object ConversationContext {
                 append(mediumTopic).append('\n')
             }
             if (memories.isNotEmpty() || earlier.isNotEmpty()) {
-                append("\nRECUERDOS RELEVANTES:\n")
-                memories.take(5).forEach { append("• Guardado por Kura #${it.id}: ${it.content.take(240)}\n") }
+                append("\nDATOS QUE KURA ELIGIÓ GUARDAR (úsalos solo si vienen al caso; no menciones esta lista):\n")
+                memories.take(5).forEach { append("• ${it.content.take(240)}\n") }
                 if (earlier.isNotEmpty()) {
                     append("• Fragmentos anteriores del historial (no guardados):\n")
                     earlier.forEach { append("  ").append(line(it, 120)).append('\n') }

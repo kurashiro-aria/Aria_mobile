@@ -14,23 +14,34 @@ data class Memory(
     val source: String = "Kura",
     val tags: List<String> = emptyList(),
     val updatedAt: Long = timestamp,
-    val active: Boolean = true
+    val active: Boolean = true,
+    val lastUsed: Long = 0L,
+    val accessCount: Int = 0
 )
 
 /** Explicit, private on-device memories. Conversation history remains separate. */
 class AriaMemory(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("aria_memories_v2", Context.MODE_PRIVATE)
 
-    @Synchronized fun recallAll(): List<Memory> = read()
+    @Synchronized fun recallAll(): List<Memory> = MemoryFacts.current(read())
 
     @Synchronized fun remember(text: String): Memory {
         val content = text.trim().replace(Regex("\\s+"), " ")
         require(content.length in 3..240) { "El recuerdo debe tener entre 3 y 240 caracteres." }
         val current = read()
-        require(current.size < 50) { "Llegué al límite de 50 recuerdos. Borra uno antes de añadir otro." }
-        val item = Memory(prefs.getLong("next_id", 1L), content,
-            tags = MemorySelector.keywords(content).take(8))
-        persist(current + item, item.id + 1)
+        val key = MemoryFacts.key(content)
+        val old = current.filter { key != null && MemoryFacts.key(it.content) == key }
+            .maxByOrNull { it.updatedAt }
+            ?: current.firstOrNull { MemoryFacts.normalize(it.content) == MemoryFacts.normalize(content) }
+        val now = System.currentTimeMillis()
+        val item = if (old == null) {
+            require(current.size < 50) { "Llegué al límite de 50 recuerdos. Borra uno antes de añadir otro." }
+            Memory(prefs.getLong("next_id", 1L), content, category = MemoryFacts.category(content),
+                tags = MemorySelector.keywords(content).take(8), timestamp = now)
+        } else old.copy(content = content, category = MemoryFacts.category(content),
+            tags = MemorySelector.keywords(content).take(8), updatedAt = now, active = true)
+        val items = current.filterNot { it.id == item.id || (key != null && MemoryFacts.key(it.content) == key) } + item
+        persist(items, if (old == null) item.id + 1 else prefs.getLong("next_id", 1L))
         return item
     }
 
@@ -39,9 +50,11 @@ class AriaMemory(context: Context) {
         require(content.length in 3..240) { "El recuerdo debe tener entre 3 y 240 caracteres." }
         val current = read()
         val old = current.firstOrNull { it.id == id } ?: return null
-        val changed = old.copy(content = content, tags = MemorySelector.keywords(content).take(8),
+        val changed = old.copy(content = content, category = MemoryFacts.category(content),
+            tags = MemorySelector.keywords(content).take(8),
             updatedAt = System.currentTimeMillis(), active = true)
-        persist(current.map { if (it.id == id) changed else it })
+        val key = MemoryFacts.key(content)
+        persist(current.filterNot { it.id == id || (key != null && MemoryFacts.key(it.content) == key) } + changed)
         return changed
     }
 
@@ -52,15 +65,26 @@ class AriaMemory(context: Context) {
         return true
     }
 
-    @Synchronized fun relevantTo(message: String, previousUserMessages: List<String> = emptyList()): List<Memory> =
-        MemorySelector.select(read(), message, previousUserMessages)
+    @Synchronized fun relevantTo(message: String, previousUserMessages: List<String> = emptyList()): List<Memory> {
+        val current = read()
+        val selected = MemorySelector.select(current, message, previousUserMessages)
+        if (selected.isEmpty()) return selected
+        val ids = selected.map { it.id }.toSet()
+        val now = System.currentTimeMillis()
+        val updated = current.map { if (it.id in ids) it.copy(lastUsed = now,
+            accessCount = (it.accessCount + 1).coerceAtMost(1_000_000)) else it }
+        persist(updated)
+        val byId = updated.associateBy { it.id }
+        return selected.mapNotNull { byId[it.id] }
+    }
 
     private fun persist(items: List<Memory>, nextId: Long = prefs.getLong("next_id", 1L)) {
         val data = JSONArray()
         items.forEach { data.put(JSONObject().put("id", it.id).put("content", it.content)
             .put("category", it.category).put("importance", it.importance)
             .put("timestamp", it.timestamp).put("source", it.source)
-            .put("tags", JSONArray(it.tags)).put("updatedAt", it.updatedAt).put("active", it.active)) }
+            .put("tags", JSONArray(it.tags)).put("updatedAt", it.updatedAt).put("active", it.active)
+            .put("lastUsed", it.lastUsed).put("accessCount", it.accessCount)) }
         check(prefs.edit().putString("items", data.toString()).putLong("next_id", nextId).commit()) {
             "No pude guardar la memoria local."
         }
@@ -75,10 +99,12 @@ class AriaMemory(context: Context) {
             val content = obj.optString("content")
             val tags = obj.optJSONArray("tags") ?: JSONArray()
             if (id <= 0 || content.isBlank()) null else Memory(id, content,
-                obj.optString("category", "personal"), obj.optInt("importance", 1),
+                obj.optString("category", "personal").takeUnless { it == "personal" }
+                    ?: MemoryFacts.category(content), obj.optInt("importance", 1),
                 obj.optLong("timestamp"), obj.optString("source", "Kura"),
                 (0 until tags.length()).map { tags.optString(it) },
-                obj.optLong("updatedAt", obj.optLong("timestamp")), obj.optBoolean("active", true))
+                obj.optLong("updatedAt", obj.optLong("timestamp")), obj.optBoolean("active", true),
+                obj.optLong("lastUsed", 0L), obj.optInt("accessCount", 0).coerceAtLeast(0))
         }
     }
 
@@ -100,6 +126,42 @@ class AriaMemory(context: Context) {
     }
 }
 
+/** Only high-confidence explicit facts share a key; unrelated memories stay separate. */
+internal object MemoryFacts {
+    fun normalize(text: String): String = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "").replace(Regex("\\s+"), " ").trim().trimEnd('.', '!', '?')
+
+    fun category(text: String): String {
+        val normalized = normalize(text)
+        return when {
+            Regex("^(?:no )?me gusta\\b|^prefiero\\b|^odio\\b").containsMatchIn(normalized) -> "preferencia"
+            Regex("\\b(?:manga|proyecto|aplicacion|app|historia|novela)\\b").containsMatchIn(normalized) -> "proyecto"
+            Regex("\\b(?:ayer|hoy|fuimos|hicimos|pasamos|hablamos)\\b").containsMatchIn(normalized) -> "experiencia"
+            else -> "personal"
+        }
+    }
+
+    fun key(text: String): String? {
+        val normalized = normalize(text)
+        Regex("^mi (gato|perro|nombre) (?:se llama|es) ([a-z0-9]+)$")
+            .matchEntire(normalized)?.let { return "nombre:" + it.groupValues[1] }
+        Regex("^(?:no )?me gusta (?:el |la |los |las )?([a-z0-9 ]+)$")
+            .matchEntire(normalized)?.let { return "preferencia:" + it.groupValues[1].trim() }
+        Regex("^odio (?:el |la |los |las )?([a-z0-9 ]+)$")
+            .matchEntire(normalized)?.let { return "preferencia:" + it.groupValues[1].trim() }
+        return null
+    }
+
+    fun current(memories: List<Memory>): List<Memory> = memories.filter { it.active }
+        .groupBy { key(it.content) ?: "id:${it.id}" }
+        .values.map { group -> group.maxWith(compareBy<Memory> { it.updatedAt }.thenBy { it.id }) }
+        .sortedBy { it.id }
+
+    fun staleRelativeDate(memory: Memory, now: Long): Boolean =
+        Regex("\\b(?:hoy|ayer)\\b").containsMatchIn(normalize(memory.content)) &&
+            memory.updatedAt > 0 && now - memory.updatedAt > 48L * 60 * 60 * 1000
+}
+
 /** Recent user turns resolve follow-up references; the current turn has higher priority. */
 internal object MemorySelector {
     private val ignored = setOf(
@@ -116,12 +178,13 @@ internal object MemorySelector {
         .split(Regex("[^a-z0-9]+"))
         .filter { it.length in 3..32 && it !in ignored }.toSet()
 
-    fun select(memories: List<Memory>, current: String, previous: List<String>): List<Memory> {
+    fun select(memories: List<Memory>, current: String, previous: List<String>,
+               nowMillis: Long = System.currentTimeMillis()): List<Memory> {
         val now = keywords(current)
         val recent = if (isFollowUp(current)) previous.takeLast(2).flatMap { keywords(it) }.toSet()
             else emptySet()
         if (now.isEmpty() && recent.isEmpty()) return emptyList()
-        val active = memories.filter { it.active }
+        val active = MemoryFacts.current(memories).filterNot { MemoryFacts.staleRelativeDate(it, nowMillis) }
         val currentMatches = active.map { item ->
             val terms = item.tags.takeIf { it.isNotEmpty() }?.toSet() ?: keywords(item.content)
             item to terms.intersect(now).size
