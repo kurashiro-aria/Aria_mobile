@@ -13,6 +13,7 @@ Antes de probar ajustes de conversación de 0.2.26-alpha:
 | 0.2.30-alpha, antes del estado social de varios turnos | `aria-restore-0.2.30-before-social-state` | `baa884ccbef96edd19bd80dd50d351acf8a8ed97` |
 | 0.2.31-alpha, antes de la pantalla de carga | `aria-restore-0.2.31-before-loading-screen` | `7fb2f226e804e238f5e46cef90f49889cf705106` |
 | 0.2.31.1-alpha, antes de corregir el indicador y añadir «Despertar» | `aria-restore-0.2.31.1-before-wake-button` | `42951d20524c9f86e32b88179949c13c5efe5e6d` |
+| 0.2.31.2-alpha, antes de quitar el cronómetro de carga | `aria-restore-0.2.31.2-before-timer-removal` | `5e56f456d3f25fb1a9e48151fec1a1f740dd91dc` |
 
 El APK 0.2.24-alpha que pasó las comprobaciones del workflow sigue disponible en
 [la ejecución 35891568373](https://github.com/kurashiro-aria/Aria_mobile/actions/runs/35891568373/artifacts/10765876814).

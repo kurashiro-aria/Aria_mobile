@@ -65,9 +65,7 @@ class MainActivity : AppCompatActivity() {
     private var initiativeJob: Job? = null
     private var loadingOverlay: FrameLayout? = null
     private var loadingTimer: Job? = null
-    private var loadingStartedAt = 0L
     private var loadingProgress: ProgressBar? = null
-    private var loadingElapsed: TextView? = null
     private var wakeButton: Button? = null
 
     private data class GenerationStats(val firstTokenMs: Long?, val firstVisibleMs: Long?, val totalMs: Long, val chunks: Int) {
@@ -243,13 +241,6 @@ class MainActivity : AppCompatActivity() {
             contentDescription = "Carga del cerebro de ARIA"
         }
         controls.addView(loadingProgress, LinearLayout.LayoutParams(-1, dp(12)))
-        loadingElapsed = TextView(this).apply {
-            text = "Tiempo transcurrido: 00:00"
-            textSize = 15f
-            setTextColor(Color.parseColor(MUTED))
-            gravity = Gravity.CENTER
-        }
-        controls.addView(loadingElapsed, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(20) })
         wakeButton = Button(this).apply {
             text = "DESPERTAR"
             textSize = 17f
@@ -263,12 +254,9 @@ class MainActivity : AppCompatActivity() {
         screen.addView(overlay, FrameLayout.LayoutParams(-1, -1))
         loadingOverlay = overlay
         window.insetsController?.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-        loadingStartedAt = SystemClock.elapsedRealtime()
         loadingTimer?.cancel()
         loadingTimer = uiScope.launch {
             while (isActive && loadingOverlay === overlay) {
-                val seconds = (SystemClock.elapsedRealtime() - loadingStartedAt) / 1000
-                loadingElapsed?.text = "Tiempo transcurrido: %02d:%02d".format(seconds / 60, seconds % 60)
                 val modelLoading = ::engine.isInitialized && engine.state.value is InferenceEngine.State.LoadingModel
                 loadingProgress?.isIndeterminate = !modelLoading
                 if (modelLoading) loadingProgress?.progress =
@@ -297,7 +285,6 @@ class MainActivity : AppCompatActivity() {
         (overlay.parent as? FrameLayout)?.removeView(overlay)
         loadingOverlay = null
         loadingProgress = null
-        loadingElapsed = null
         wakeButton = null
         window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
         if (modelLoaded) scheduleInitiative()
