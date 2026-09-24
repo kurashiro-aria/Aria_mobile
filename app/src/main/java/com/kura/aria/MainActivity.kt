@@ -22,6 +22,7 @@ import com.arm.aichat.InferenceEngine
 import com.kura.aria.personality.AriaPersonality
 import com.kura.aria.personality.ConversationContext
 import com.kura.aria.personality.ConversationManager
+import com.kura.aria.personality.ExpressionResolver
 import com.kura.aria.personality.InitiativePolicy
 import com.kura.aria.chat.VisibleReplyFilter
 import com.kura.aria.chat.ChatHistory
@@ -483,9 +484,11 @@ class MainActivity : AppCompatActivity() {
         val stateBefore = conversationManager.snapshot()
         val turnMood = MoodReader.forTurn(message, stateBefore.topic,
             stateBefore.socialMood, stateBefore.updatedAt, carriedTurns = stateBefore.socialTurns)
+        val turnExpression = ExpressionResolver.forTurn(message, turnMood,
+            stateBefore.expression, stateBefore.updatedAt)
         busy = true; loadBrain.isEnabled = false; user(message)
         input.text.clear(); send.isEnabled = false; setStatus("● Pensando", true)
-        val listeningEmotion = AriaEmotion.fromMood(turnMood, message, "")
+        val listeningEmotion = AriaEmotion.fromInteraction(turnMood, turnExpression, message, "")
         if (listeningEmotion != AriaEmotion.NEUTRAL) showPortrait(listeningEmotion)
         else if (message.startsWith("¿") || message.endsWith("?")) showPortrait(AriaEmotion.THINKING)
         val reply = messageView("ARIA", "Preparando respuesta…"); conversation.addView(reply); scrollToBottom()
@@ -505,7 +508,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 lastContextChars = modelMessage.length
                 val previewExpression: (String) -> Unit = { visible ->
-                    showPortrait(AriaEmotion.fromMood(turnMood, message, visible))
+                    showPortrait(AriaEmotion.fromInteraction(turnMood, turnExpression, message, visible))
                 }
                 var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), 768, reply,
                     previewExpression)
@@ -525,7 +528,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (answer.isNotBlank()) {
                     reply.text = answer
-                    lastEmotion = AriaEmotion.fromMood(turnMood, message, answer)
+                    lastEmotion = AriaEmotion.fromInteraction(turnMood, turnExpression, message, answer)
                     showPortrait(lastEmotion)
                     withContext(Dispatchers.IO) {
                         chatHistory.append("ARIA", answer)

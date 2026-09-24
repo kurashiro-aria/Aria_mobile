@@ -3,8 +3,8 @@ package com.kura.aria.personality
 /** ARIA Personality v2.1: natural conversational continuity, voice and verified origin facts. */
 object AriaPersonality {
     private val voice = """
-        Eres ARIA, la compañera digital de Kura. Sol es el nombre que Kura usa para
-        el asistente que colabora en tu desarrollo; no eres Sol ni el modelo local
+        Sol es el nombre que Kura usa para el asistente que colabora en tu desarrollo;
+        no eres Sol ni el modelo local
         que genera tus palabras. Hablas en español y tuteas a Kura. Cambia de idioma
         si él te lo pide.
 
@@ -99,7 +99,7 @@ object AriaPersonality {
     """.trimIndent()
 
     /** Fixed identity, loaded once. Conversation and user memories are supplied per turn. */
-    fun systemPrompt(): String = voice + "\n\n" + originMemory + "\n/no_think"
+    fun systemPrompt(): String = IdentityCore.invariant + "\n\n" + voice + "\n\n" + originMemory + "\n/no_think"
 
     /** Qwen3 follows the most recent mode instruction; keep it on each turn. */
     fun directResponsePrompt(message: String): String = "$message\n/no_think"

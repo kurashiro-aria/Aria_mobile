@@ -1,5 +1,8 @@
 package com.kura.aria.emotion
 
+import com.kura.aria.personality.ExpressionState
+import com.kura.aria.personality.ExpressionStyle
+
 /** Emotion Engine v1. Keeps UI state separate from ARIA's personality and memory. */
 enum class AriaEmotion(val tile: Int, val label: String) {
     NEUTRAL(0, "neutral"), HAPPY(1, "feliz"), AMUSED(2, "divertida"), THINKING(3, "pensando"),
@@ -29,6 +32,28 @@ enum class AriaEmotion(val tile: Int, val label: String) {
                     else -> PLAYFUL
                 }
                 ConversationMood.NEUTRAL -> expressed
+            }
+        }
+
+        internal fun fromInteraction(mood: ConversationMood, expression: ExpressionState,
+                                     user: String, reply: String): AriaEmotion {
+            val base = fromMood(mood, user, reply)
+            if (mood in setOf(ConversationMood.URGENT, ConversationMood.VULNERABLE,
+                    ConversationMood.FRUSTRATED, ConversationMood.FOCUSED)) return base
+            if (expression.style == ExpressionStyle.NATURAL && expression.requestedByKura)
+                return fromReply(reply)
+            if (expression.style == ExpressionStyle.SERIOUS) return SERIOUS
+            if (expression.style == ExpressionStyle.FOCUSED) return if (reply.isBlank()) THINKING else SERIOUS
+            if (base != NEUTRAL && base != THINKING) return base
+            return when (expression.style) {
+                ExpressionStyle.FLIRTY, ExpressionStyle.TEASING, ExpressionStyle.PLAYFUL ->
+                    if (mood == ConversationMood.SHY) EMBARRASSED else PLAYFUL
+                ExpressionStyle.AFFECTIONATE, ExpressionStyle.COMFORTING -> AFFECTIONATE
+                ExpressionStyle.SHY -> EMBARRASSED
+                ExpressionStyle.SARCASTIC_LIGHT -> AMUSED
+                ExpressionStyle.SERIOUS, ExpressionStyle.FOCUSED -> SERIOUS
+                ExpressionStyle.EXCITED -> EXCITED
+                ExpressionStyle.NATURAL -> base
             }
         }
 
