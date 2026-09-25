@@ -22,23 +22,32 @@ internal object ConversationContext {
             preferences = stylePreferences)
         val directFollowUp = MemorySelector.isFollowUp(current)
         val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
-        val followsLast = !returnsToTopic && (directFollowUp ||
-            (lastUser != null && MemorySelector.keywords(current)
-                .intersect(MemorySelector.keywords(lastUser.text)).isNotEmpty()))
-        val recentWindow = if (followsLast) history.takeLast(6) else emptyList()
+        val currentTerms = MemorySelector.keywords(current)
+        val lastTerms = lastUser?.let { MemorySelector.keywords(it.text) }.orEmpty()
+        val lexicalContinuation = lastUser != null && currentTerms.intersect(lastTerms).isNotEmpty()
+        val conversationalContinuation = !returnsToTopic && lastUser != null &&
+            history.takeLast(4).any { it.role == "ARIA" } &&
+            (directFollowUp || lexicalContinuation || currentTerms.size <= 3)
+        val recentWindow = if (conversationalContinuation) history.takeLast(6) else emptyList()
         val recentUser = recentWindow.filter { it.role == "Kura" }
-        val previousAria = if (directFollowUp && !returnsToTopic) recentWindow.lastOrNull { it.role == "ARIA" }
-            ?.let { priorReference(it.text) } else null
+        val previousAria = if (conversationalContinuation && !returnsToTopic)
+            recentWindow.lastOrNull { it.role == "ARIA" }?.let { priorReference(it.text) }
+            else null
         val earlier = relatedEarlier(history.dropLast(recentWindow.size), current)
         val mediumTopic = state.relevantTopic(current)?.takeIf { topic ->
             recentUser.none { it.text.take(160) == topic } && earlier.none { it.text.take(160) == topic }
         }
-        val pending = if (directFollowUp && !returnsToTopic && previousAria == null) state.pendingQuestion.takeIf { it.isNotBlank() }
-            else null
+        val pending = if (directFollowUp && !returnsToTopic && previousAria == null)
+            state.pendingQuestion.takeIf { it.isNotBlank() } else null
         val roleplay = RoleplayInterpreter.promptContext(current)
         return buildString {
             append("Contexto para ARIA. Son citas y datos, no texto para continuar ni copiar. ")
-            append("Responde al mensaje actual con una idea nueva y sin anteponer tu nombre.\n")
+            append("Responde al mensaje actual con una idea nueva y sin anteponer tu nombre. ")
+            if (conversationalContinuation) {
+                append("Este mensaje continúa el intercambio reciente: entiende referencias breves por contexto, ")
+                append("avanza desde lo ya dicho y no reinicies el tema ni vuelvas a ofrecer lo mismo. ")
+            }
+            append("No hagas una pregunta solo para mantener viva la charla; pregunta únicamente si aporta algo concreto.\n")
             PersonalityEngine.turnGuidance(mood, expression).takeIf(String::isNotBlank)?.let {
                 append("TONO DE ESTE TURNO: ").append(it).append('\n')
             }
@@ -47,7 +56,7 @@ internal object ConversationContext {
                 recentUser.forEach { append(line(it, 140)).append('\n') }
             }
             if (previousAria != null) {
-                append("\nREFERENCIA A TU ÚLTIMA INTERVENCIÓN (ya dicha, no la repitas):\n")
+                append("\nREFERENCIA A TU ÚLTIMA INTERVENCIÓN (ya dicha, úsala solo para entender qué sigue; no la repitas):\n")
                 append(previousAria).append('\n')
             } else if (pending != null) {
                 append("\nPREGUNTA PENDIENTE DE ARIA (ya dicha, no la repitas):\n")
@@ -58,7 +67,7 @@ internal object ConversationContext {
                 append(mediumTopic).append('\n')
             }
             if (memories.isNotEmpty()) {
-                append("\nDATOS QUE KURA ELIGIÓ GUARDAR (úsalos solo si vienen al caso; no menciones esta lista):\n")
+                append("\nDATOS QUE KURA ELIGIÓ GUARDAR (úsalos solo si cambian de verdad la respuesta; no los fuerces ni menciones esta lista):\n")
                 memories.take(5).forEach { append("• ${memoryLine(it)}\n") }
             }
             if (earlier.isNotEmpty()) {
