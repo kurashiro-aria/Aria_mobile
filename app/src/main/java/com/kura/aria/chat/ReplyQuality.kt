@@ -45,12 +45,20 @@ internal object ReplyQuality {
         candidate.isBlank() || repeats(previous, candidate) || echoesUser(user, candidate) || hasNeedlessOffer(user, candidate)
 
     fun retryPrompt(history: List<ChatMessage>, current: String): String = buildString {
-        val lastAria = history.lastOrNull { it.role == "ARIA" }?.text
+        // Keep enough of Kura's prior turn to resolve short replies such as "sí" or "exacto",
+        // but never paste ARIA's previous answer into the retry prompt: doing so can make the
+        // model copy the very response that triggered the retry.
+        val previousKura = history.asReversed()
+            .firstOrNull { it.role == "Kura" && it.text.trim() != current.trim() }
+            ?.text
+
         append("Responde directamente al mensaje actual de Kura con una respuesta nueva y natural en español. ")
         append("No repitas ni reformules lo que Kura acaba de decir. ")
         append("No termines ofreciendo probar, intentar o hacer algo salvo que necesites una decisión real para continuar. ")
         append("No repitas una propuesta ni una pregunta anterior. No antepongas ARIA:.\n")
-        if (lastAria != null) append("Evita repetir esta respuesta anterior de ARIA: ").append(lastAria.take(140)).append('\n')
+        if (!previousKura.isNullOrBlank()) {
+            append("Contexto inmediato de Kura: ").append(previousKura.take(180)).append('\n')
+        }
         append("Mensaje actual de Kura: ").append(current)
     }
 
