@@ -205,21 +205,23 @@ internal object MemorySelector {
     fun select(memories: List<Memory>, current: String, previous: List<String>,
                nowMillis: Long = System.currentTimeMillis()): List<Memory> {
         val now = keywords(current)
-        val recent = if (isFollowUp(current)) previous.takeLast(2).flatMap { keywords(it) }.toSet()
-            else emptySet()
+        val followUp = isFollowUp(current)
+        val recent = if (followUp) previous.takeLast(2).flatMap { keywords(it) }.toSet() else emptySet()
         if (now.isEmpty() && recent.isEmpty()) return emptyList()
         val active = MemoryFacts.current(memories).filterNot { MemoryFacts.staleRelativeDate(it, nowMillis) }
-        val currentMatches = active.map { item ->
+        val scored = active.mapNotNull { item ->
             val terms = item.tags.takeIf { it.isNotEmpty() }?.toSet() ?: keywords(item.content)
-            item to terms.intersect(now).size
-        }.filter { it.second > 0 }
-        val matches = if (currentMatches.isNotEmpty()) currentMatches else active.map { item ->
-            item to keywords(item.content).intersect(recent).size
-        }.filter { it.second > 0 }
-        return matches
-            .sortedWith(compareByDescending<Pair<Memory, Int>> { it.second }
-                .thenByDescending { it.first.importance }.thenByDescending { it.first.updatedAt })
-            .take(5).map { it.first }
+            val currentScore = terms.intersect(now).size
+            val recentScore = if (followUp) terms.intersect(recent).size else 0
+            val score = currentScore * 3 + recentScore
+            if (score <= 0) null else Triple(item, score, currentScore)
+        }
+        return scored
+            .sortedWith(compareByDescending<Triple<Memory, Int, Int>> { it.second }
+                .thenByDescending { it.third }
+                .thenByDescending { it.first.importance }
+                .thenByDescending { it.first.updatedAt })
+            .take(3).map { it.first }
     }
 
     /** Referencias sin tema propio pueden retomar el turno anterior; saludos y temas nuevos no. */
