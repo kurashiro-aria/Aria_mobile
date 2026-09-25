@@ -15,7 +15,6 @@ internal object ReplyQuality {
         return now.windowed(7).any { it.joinToString(" ") in sequences }
     }
 
-    /** Detects when ARIA starts by substantially restating Kura's current message. */
     fun echoesUser(user: String, candidate: String): Boolean {
         val source = words(user)
         val answer = words(candidate).take(32)
@@ -31,18 +30,14 @@ internal object ReplyQuality {
         return longSequence || overlap >= 0.72
     }
 
-    /**
-     * Flags the habitual assistant-style closing question only when the user's turn
-     * did not itself ask for a choice/clarification. Genuine task questions remain.
-     */
     fun hasNeedlessOffer(user: String, candidate: String): Boolean {
         val normalized = normalize(candidate).trim()
         if (!normalized.endsWith("?")) return false
-        val lastSentence = normalized.substringAfterLast(Regex("[.!]"), normalized).trim()
+        val lastSentence = normalized.split(Regex("[.!]"))
+            .lastOrNull { it.isNotBlank() }?.trim() ?: normalized
         val offer = Regex("^(y\\s+)?(quieres|te gustaria|prefieres)\\s+(que\\s+)?(lo\\s+)?(intente|intentemos|pruebe|probemos|haga|hagamos|siga|sigamos|continue|continuemos|revise|revisemos)|^(seguimos|continuamos|lo intentamos|lo probamos)\\b")
         if (!offer.containsMatchIn(lastSentence)) return false
         val userNormalized = normalize(user)
-        // If Kura explicitly asks for options/permission, a closing choice can be legitimate.
         return !Regex("\\b(cual|que opcion|prefieres|recomiendas|podemos|puedes)\\b").containsMatchIn(userNormalized)
     }
 
