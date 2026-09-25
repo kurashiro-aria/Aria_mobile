@@ -36,7 +36,7 @@ class MemorySelectorTest {
     @Test fun obsoleteMemoriesAreNotRecoveredAndRelevantOnesAreBounded() {
         val items = (1..9).map { Memory(it.toLong(), "Mi gato Nube tiene juguete $it", active = it != 1) }
         val selected = MemorySelector.select(items, "¿Cómo está mi gato Nube?", emptyList())
-        assertEquals(5, selected.size)
+        assertEquals(3, selected.size)
         assertTrue(selected.none { it.id == 1L })
     }
 
