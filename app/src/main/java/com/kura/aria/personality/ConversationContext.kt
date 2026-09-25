@@ -33,6 +33,8 @@ internal object ConversationContext {
         val previousAria = if (conversationalContinuation && !returnsToTopic)
             recentWindow.lastOrNull { it.role == "ARIA" }?.let { priorReference(it.text) }
             else null
+        val recentAriaPatterns = history.filter { it.role == "ARIA" }.takeLast(3)
+            .mapNotNull { responsePattern(it.text) }.distinct()
         val earlier = relatedEarlier(history.dropLast(recentWindow.size), current)
         val mediumTopic = state.relevantTopic(current)?.takeIf { topic ->
             recentUser.none { it.text.take(160) == topic } && earlier.none { it.text.take(160) == topic }
@@ -47,9 +49,14 @@ internal object ConversationContext {
                 append("Este mensaje continúa el intercambio reciente: entiende referencias breves por contexto, ")
                 append("avanza desde lo ya dicho y no reinicies el tema ni vuelvas a ofrecer lo mismo. ")
             }
-            append("No hagas una pregunta solo para mantener viva la charla; pregunta únicamente si aporta algo concreto.\n")
+            append("No hagas una pregunta solo para mantener viva la charla; pregunta únicamente si aporta algo concreto. ")
+            append("Varía de forma natural el ritmo y la estructura; no reutilices por costumbre el mismo arranque, cierre, pregunta, oferta o broma de tus turnos recientes.\n")
             PersonalityEngine.turnGuidance(mood, expression).takeIf(String::isNotBlank)?.let {
                 append("TONO DE ESTE TURNO: ").append(it).append('\n')
+            }
+            if (recentAriaPatterns.isNotEmpty()) {
+                append("\nPATRONES RECIENTES DE TU FORMA DE RESPONDER (evita repetirlos literalmente; no menciones esta lista):\n")
+                recentAriaPatterns.forEach { append("• ").append(it).append('\n') }
             }
             if (recentUser.isNotEmpty()) {
                 append("\nLO QUE KURA DIJO ANTES:\n")
@@ -68,7 +75,7 @@ internal object ConversationContext {
             }
             if (memories.isNotEmpty()) {
                 append("\nDATOS QUE KURA ELIGIÓ GUARDAR (úsalos solo si cambian de verdad la respuesta; no los fuerces ni menciones esta lista):\n")
-                memories.take(5).forEach { append("• ${memoryLine(it)}\n") }
+                memories.take(3).forEach { append("• ${memoryLine(it)}\n") }
             }
             if (earlier.isNotEmpty()) {
                 append("\nFragmentos anteriores del historial (no guardados):\n")
@@ -78,6 +85,21 @@ internal object ConversationContext {
                 append("\nCONTEXTO DE ESCENA FICTICIA:\n").append(it).append('\n')
             }
             append("\nMENSAJE ACTUAL DE KURA:\n").append(current)
+        }
+    }
+
+    private fun responsePattern(text: String): String? {
+        val normalized = text.replace(Regex("\\s+"), " ").trim()
+            .replaceFirst(Regex("^ARIA\\s*:\\s*", RegexOption.IGNORE_CASE), "")
+        if (normalized.isBlank()) return null
+        val start = normalized.split(Regex("(?<=[.!?])\\s+"), limit = 2).firstOrNull().orEmpty().take(90)
+        val questionStart = normalized.lastIndexOf('¿')
+        val ending = if (questionStart >= 0) normalized.substring(questionStart).substringBefore('?').trimEnd() + "?"
+            else normalized.split(Regex("(?<=[.!])\\s+")).lastOrNull().orEmpty()
+        return when {
+            ending.isNotBlank() && ending != start -> "Inicio: ${start.take(70)} | Cierre: ${ending.take(70)}"
+            start.isNotBlank() -> "Inicio: ${start.take(90)}"
+            else -> null
         }
     }
 
