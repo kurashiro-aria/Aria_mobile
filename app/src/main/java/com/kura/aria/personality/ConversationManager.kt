@@ -25,7 +25,7 @@ internal data class ConversationState(
         val nextTopic = if (substantive) cleanUser else topic
         val earlier = if (substantive && topic.isNotBlank() &&
             MemorySelector.keywords(topic).intersect(MemorySelector.keywords(cleanUser)).isEmpty()) {
-            (earlierTopics + topic).distinct().takeLast(6)
+            (earlierTopics + topic).distinct().takeLast(24)
         } else earlierTopics
         val question = ConversationContext.priorQuestion(reply).orEmpty()
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
@@ -65,7 +65,7 @@ internal class ConversationManager(context: Context) {
             val style = runCatching { ExpressionStyle.valueOf(obj.optString("expressionStyle")) }
                 .getOrDefault(ExpressionStyle.NATURAL)
             ConversationState(obj.optString("topic"), obj.optString("pendingQuestion"),
-                (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }.takeLast(6),
+                (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }.takeLast(24),
                 obj.optLong("updatedAt"), mood, obj.optInt("socialTurns", 0).coerceIn(0, 3),
                 ExpressionState(style, obj.optDouble("expressionIntensity", 0.0).toFloat().coerceIn(0f, 1f),
                     obj.optInt("expressionTurns", 0).coerceIn(0, 5), obj.optBoolean("expressionRequested", false)))
