@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
+        android:name=".AriaApp"
         android:theme="@style/Theme.Aria"
         android:label="@string/app_name"
         android:allowBackup="true"
@@ -14,12 +15,10 @@
             android:name=".MainActivity"
             android:screenOrientation="portrait"
             android:exported="true">
-
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-
         </activity>
 
         <service
