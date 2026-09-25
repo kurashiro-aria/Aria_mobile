@@ -20,12 +20,13 @@ internal object ConversationContext {
             state.socialMood, state.updatedAt, carriedTurns = state.socialTurns)
         val expression = ExpressionResolver.forTurn(current, mood, state.expression, state.updatedAt,
             preferences = stylePreferences)
-        val directFollowUp = MemorySelector.isFollowUp(current)
+        val greeting = isStandaloneGreeting(current)
+        val directFollowUp = !greeting && MemorySelector.isFollowUp(current)
         val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
         val currentTerms = MemorySelector.keywords(current)
         val lastTerms = lastUser?.let { MemorySelector.keywords(it.text) }.orEmpty()
-        val lexicalContinuation = lastUser != null && currentTerms.intersect(lastTerms).isNotEmpty()
-        val conversationalContinuation = !returnsToTopic && lastUser != null &&
+        val lexicalContinuation = !greeting && lastUser != null && currentTerms.intersect(lastTerms).isNotEmpty()
+        val conversationalContinuation = !greeting && !returnsToTopic && lastUser != null &&
             history.takeLast(4).any { it.role == "ARIA" } &&
             (directFollowUp || lexicalContinuation || currentTerms.size <= 3)
         val recentWindow = if (conversationalContinuation) history.takeLast(6) else emptyList()
@@ -33,8 +34,8 @@ internal object ConversationContext {
         val previousAria = if (conversationalContinuation && !returnsToTopic)
             recentWindow.lastOrNull { it.role == "ARIA" }?.let { priorReference(it.text) }
             else null
-        val earlier = relatedEarlier(history.dropLast(recentWindow.size), current)
-        val mediumTopic = state.relevantTopic(current)?.takeIf { topic ->
+        val earlier = if (greeting) emptyList() else relatedEarlier(history.dropLast(recentWindow.size), current)
+        val mediumTopic = if (greeting) null else state.relevantTopic(current)?.takeIf { topic ->
             recentUser.none { it.text.take(160) == topic } && earlier.none { it.text.take(160) == topic }
         }
         val pending = if (directFollowUp && !returnsToTopic && previousAria == null)
@@ -67,7 +68,7 @@ internal object ConversationContext {
                 append("\nTEMA ANTERIOR MENCIONADO POR KURA (resumen literal, no respuesta):\n")
                 append(mediumTopic).append('\n')
             }
-            if (memories.isNotEmpty()) {
+            if (!greeting && memories.isNotEmpty()) {
                 append("\nDATOS QUE KURA ELIGIÓ GUARDAR (úsalos solo si cambian de verdad la respuesta; no los fuerces ni menciones esta lista):\n")
                 memories.take(3).forEach { append("• ${memoryLine(it)}\n") }
             }
@@ -80,6 +81,13 @@ internal object ConversationContext {
             }
             append("\nMENSAJE ACTUAL DE KURA:\n").append(current)
         }
+    }
+
+    private fun isStandaloneGreeting(text: String): Boolean {
+        val normalized = text.lowercase(Locale.ROOT).trim()
+            .replace(Regex("[¡!¿?.,;:]+"), " ")
+            .replace(Regex("\\s+"), " ").trim()
+        return normalized.matches(Regex("^(?:(?:hola|hey|buenas|holi|holaa)(?:\\s+aria)?|(?:buenos días|buenas tardes|buenas noches)(?:\\s+aria)?)$"))
     }
 
     private fun memoryLine(memory: Memory): String = when (memory.category) {
