@@ -42,8 +42,6 @@ internal object MoodReader {
         val previousTerms = previousUser?.let(MemorySelector::keywords).orEmpty()
         val terms = MemorySelector.keywords(current)
         val sameTopic = terms.isNotEmpty() && terms.intersect(previousTerms).isNotEmpty()
-        // Carry emotion only when this really looks like a continuation. A short sentence with
-        // meaningful new words (for example "Hablemos del manga") must be free to change topic.
         val shortContinuation = text.length <= 32 && terms.isEmpty()
         if (recent && carriedTurns < 3 && (follows || sameTopic || shortContinuation)) {
             val held = previousMood.takeUnless { it == ConversationMood.NEUTRAL }
@@ -51,6 +49,11 @@ internal object MoodReader {
             if (held != null && held != ConversationMood.NEUTRAL) return held
         }
         if (current.trim().endsWith('?') || current.trim().startsWith('¿')) return ConversationMood.CURIOUS
+        // If a carried social mood has expired, yield one clean NEUTRAL turn. Without this guard,
+        // short acknowledgements such as "sí" immediately become RELAXED, so the state never
+        // reaches the neutral boundary expected by ConversationState.
+        if (previousMood != ConversationMood.NEUTRAL && (!recent || carriedTurns >= 3))
+            return ConversationMood.NEUTRAL
         // Prefer a light relaxed state for genuinely social filler, not for substantive new topics.
         if (terms.isEmpty() && text.length <= 48 &&
             !Regex("\\b(?:codigo|proyecto|error|compila|prueba)\\b").containsMatchIn(text))
