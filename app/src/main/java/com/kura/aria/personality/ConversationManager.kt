@@ -31,7 +31,12 @@ internal data class ConversationState(
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
         val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now,
             stylePreferences)
-        val mood = if (observedMood == ConversationMood.NEUTRAL) when (AriaEmotion.fromReply(reply)) {
+        // Once a carried social mood has reached its turn limit, keep the neutral result neutral.
+        // Otherwise AriaEmotion.fromReply(reply) can immediately resurrect the expired mood from
+        // generic replies such as "Perfecto" or "Vamos", making the tone effectively permanent.
+        val carriedMoodExpired = observedMood == ConversationMood.NEUTRAL &&
+            socialMood != ConversationMood.NEUTRAL && socialTurns >= 3
+        val mood = if (observedMood == ConversationMood.NEUTRAL && !carriedMoodExpired) when (AriaEmotion.fromReply(reply)) {
             AriaEmotion.PLAYFUL, AriaEmotion.AMUSED -> ConversationMood.PLAYFUL
             AriaEmotion.THINKING, AriaEmotion.SURPRISED -> ConversationMood.CURIOUS
             AriaEmotion.EMBARRASSED -> ConversationMood.SHY
