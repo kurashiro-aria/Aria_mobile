@@ -31,11 +31,13 @@ internal data class ConversationState(
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
         val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now,
             stylePreferences)
-        // Once a carried social mood has reached its turn limit, keep the neutral result neutral.
-        // Otherwise AriaEmotion.fromReply(reply) can immediately resurrect the expired mood from
-        // generic replies such as "Perfecto" or "Vamos", making the tone effectively permanent.
+        // A carried mood can expire for two independent reasons: too many continuation turns or
+        // more than 30 minutes of inactivity. In either case, keep the first result neutral instead
+        // of allowing generic ARIA reply wording ("Entendido", "Perfecto", etc.) to resurrect a
+        // social mood immediately.
+        val idleExpired = updatedAt > 0L && now - updatedAt > 30 * 60 * 1000L
         val carriedMoodExpired = observedMood == ConversationMood.NEUTRAL &&
-            socialMood != ConversationMood.NEUTRAL && socialTurns >= 3
+            socialMood != ConversationMood.NEUTRAL && (socialTurns >= 3 || idleExpired)
         val mood = if (observedMood == ConversationMood.NEUTRAL && !carriedMoodExpired) when (AriaEmotion.fromReply(reply)) {
             AriaEmotion.PLAYFUL, AriaEmotion.AMUSED -> ConversationMood.PLAYFUL
             AriaEmotion.THINKING, AriaEmotion.SURPRISED -> ConversationMood.CURIOUS
@@ -43,9 +45,6 @@ internal data class ConversationState(
             AriaEmotion.EXCITED -> ConversationMood.JOYFUL
             else -> observedMood
         } else observedMood
-        // socialTurns counts how many subsequent turns a non-neutral social mood has been carried.
-        // A newly detected mood starts at zero; each continuation increments it. When the reader
-        // finally yields to neutral, reset the counter instead of comparing against the old mood.
         val nextSocialTurns = when {
             mood == ConversationMood.NEUTRAL -> 0
             mood == socialMood -> (socialTurns + 1).coerceAtMost(3)
