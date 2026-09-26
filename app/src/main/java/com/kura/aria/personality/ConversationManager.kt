@@ -28,14 +28,13 @@ internal data class ConversationState(
             (earlierTopics + topic).distinct().takeLast(24)
         } else earlierTopics
         val question = ConversationContext.priorQuestion(reply).orEmpty()
+        val idleExpired = updatedAt > 0L && now - updatedAt > 30 * 60 * 1000L
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
         val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now,
             stylePreferences)
         // A carried mood can expire for two independent reasons: too many continuation turns or
-        // more than 30 minutes of inactivity. In either case, keep the first result neutral instead
-        // of allowing generic ARIA reply wording ("Entendido", "Perfecto", etc.) to resurrect a
-        // social mood immediately.
-        val idleExpired = updatedAt > 0L && now - updatedAt > 30 * 60 * 1000L
+        // more than 30 minutes of inactivity. MoodReader deliberately yields NEUTRAL at that
+        // boundary. Do not let generic reply wording ("Entendido", "Perfecto", etc.) resurrect it.
         val carriedMoodExpired = observedMood == ConversationMood.NEUTRAL &&
             socialMood != ConversationMood.NEUTRAL && (socialTurns >= 3 || idleExpired)
         val mood = if (observedMood == ConversationMood.NEUTRAL && !carriedMoodExpired) when (AriaEmotion.fromReply(reply)) {
