@@ -43,9 +43,17 @@ internal data class ConversationState(
             AriaEmotion.EXCITED -> ConversationMood.JOYFUL
             else -> observedMood
         } else observedMood
+        // socialTurns counts how many subsequent turns a non-neutral social mood has been carried.
+        // A newly detected mood starts at zero; each continuation increments it. When the reader
+        // finally yields to neutral, reset the counter instead of comparing against the old mood.
+        val nextSocialTurns = when {
+            mood == ConversationMood.NEUTRAL -> 0
+            mood == socialMood -> (socialTurns + 1).coerceAtMost(3)
+            else -> 0
+        }
         return copy(topic = nextTopic, pendingQuestion = question, earlierTopics = earlier,
             updatedAt = now, socialMood = mood, expression = nextExpression,
-            socialTurns = if (mood == socialMood) (socialTurns + 1).coerceAtMost(3) else 0)
+            socialTurns = nextSocialTurns)
     }
 
     fun relevantTopic(message: String): String? {
