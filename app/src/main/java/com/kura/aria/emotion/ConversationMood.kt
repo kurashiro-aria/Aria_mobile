@@ -33,19 +33,24 @@ internal object MoodReader {
         val text = normalize(current).trim()
         if (text.matches(Regex("^[¿?¡! ]*(?:hola|buenas|como estas|que tal)(?: aria)?[¿?¡!. ]*$")))
             return ConversationMood.RELAXED
-        if (Regex("\\b(?:revisa|arregla|codigo|proyecto|compila|error|prueba|trabajemos)\\b")
-                .containsMatchIn(text)) return ConversationMood.FOCUSED
+        if (Regex("\\b(?:revisa|arregla|codigo|proyecto|compila|error|prueba|trabajemos)\\b").containsMatchIn(text))
+            return ConversationMood.FOCUSED
+        if (Regex("\\*[^*]*(?:acarici|abrazo|abraz|beso|besar|sonrio|sonrie|rio|reir|guiño|guino|mimo|palmad)[^*]*\\*")
+                .containsMatchIn(text)) return ConversationMood.PLAYFUL
         val recent = previousAt == 0L || now - previousAt in 0..MAX_IDLE_MS
         val follows = MemorySelector.isFollowUp(current)
         val previousTerms = previousUser?.let(MemorySelector::keywords).orEmpty()
         val terms = MemorySelector.keywords(current)
         val sameTopic = terms.isNotEmpty() && terms.intersect(previousTerms).isNotEmpty()
-        if (recent && carriedTurns < 3 && (follows || sameTopic)) {
+        if (recent && carriedTurns < 4 && (follows || sameTopic || text.length <= 32)) {
             val held = previousMood.takeUnless { it == ConversationMood.NEUTRAL }
                 ?: previousUser?.takeIf { previousAt == 0L }?.let(::explicit)
             if (held != null && held != ConversationMood.NEUTRAL) return held
         }
         if (current.trim().endsWith('?') || current.trim().startsWith('¿')) return ConversationMood.CURIOUS
+        // Ordinary short social turns feel better relaxed than repeatedly snapping back to neutral.
+        if (text.length <= 48 && !Regex("\\b(?:codigo|proyecto|error|compila|prueba)\\b").containsMatchIn(text))
+            return ConversationMood.RELAXED
         return ConversationMood.NEUTRAL
     }
 
