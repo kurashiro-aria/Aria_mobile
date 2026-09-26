@@ -32,9 +32,9 @@ internal data class ConversationState(
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
         val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now,
             stylePreferences)
-        // A carried mood can expire for two independent reasons: too many continuation turns or
-        // more than 30 minutes of inactivity. MoodReader deliberately yields NEUTRAL at that
-        // boundary. Do not let generic reply wording ("Entendido", "Perfecto", etc.) resurrect it.
+        // socialTurns counts continuation turns AFTER the turn that established a social mood.
+        // Therefore the fourth neutral/follow-up turn reaches the expiration boundary when the
+        // previous state already contains three carried turns. Idle expiration is independent.
         val carriedMoodExpired = observedMood == ConversationMood.NEUTRAL &&
             socialMood != ConversationMood.NEUTRAL && (socialTurns >= 3 || idleExpired)
         val mood = if (observedMood == ConversationMood.NEUTRAL && !carriedMoodExpired) when (AriaEmotion.fromReply(reply)) {
@@ -46,8 +46,9 @@ internal data class ConversationState(
         } else observedMood
         val nextSocialTurns = when {
             mood == ConversationMood.NEUTRAL -> 0
-            mood == socialMood -> (socialTurns + 1).coerceAtMost(3)
-            else -> 0
+            // A newly observed/established mood starts at zero; only subsequent carried turns count.
+            socialMood == ConversationMood.NEUTRAL || mood != socialMood -> 0
+            else -> (socialTurns + 1).coerceAtMost(3)
         }
         return copy(topic = nextTopic, pendingQuestion = question, earlierTopics = earlier,
             updatedAt = now, socialMood = mood, expression = nextExpression,
