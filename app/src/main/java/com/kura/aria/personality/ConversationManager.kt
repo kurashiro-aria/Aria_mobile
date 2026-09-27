@@ -28,15 +28,18 @@ internal data class ConversationState(
             (earlierTopics + topic).distinct().takeLast(24)
         } else earlierTopics
         val question = ConversationContext.priorQuestion(reply).orEmpty()
-        // Use Long arithmetic. 30 * 60 * 1000 is an Int expression and keeping the duration
-        // explicitly Long makes the timestamp boundary unambiguous in both tests and production.
         val idleExpired = updatedAt > 0L && now - updatedAt > 30L * 60L * 1000L
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
         val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now,
             stylePreferences)
-        val carriedMoodExpired = observedMood == ConversationMood.NEUTRAL &&
-            socialMood != ConversationMood.NEUTRAL && (socialTurns >= 3 || idleExpired)
-        val mood = if (observedMood == ConversationMood.NEUTRAL && !carriedMoodExpired) when (AriaEmotion.fromReply(reply)) {
+        // Expiration must win over emotion inferred from ARIA's reply. Otherwise a neutral
+        // acknowledgement such as "Entendido." can be reclassified (for example as THINKING)
+        // and resurrect the social tone that just expired.
+        val carriedMoodExpired = socialMood != ConversationMood.NEUTRAL &&
+            (idleExpired || (observedMood == ConversationMood.NEUTRAL && socialTurns >= 3))
+        val mood = if (carriedMoodExpired) {
+            ConversationMood.NEUTRAL
+        } else if (observedMood == ConversationMood.NEUTRAL) when (AriaEmotion.fromReply(reply)) {
             AriaEmotion.PLAYFUL, AriaEmotion.AMUSED -> ConversationMood.PLAYFUL
             AriaEmotion.THINKING, AriaEmotion.SURPRISED -> ConversationMood.CURIOUS
             AriaEmotion.EMBARRASSED -> ConversationMood.SHY
