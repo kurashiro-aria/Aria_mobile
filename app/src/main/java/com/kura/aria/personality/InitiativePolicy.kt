@@ -13,7 +13,9 @@ internal object InitiativePolicy {
     fun suggestion(state: ConversationState, enabled: Boolean, now: Long,
                    lastInitiative: Long, localHour: Int): String? {
         if (!enabled || localHour !in 8..22 || state.topic.isBlank() || state.pendingQuestion.isBlank() ||
-            RoleplayInterpreter.isPureAction(state.topic)) return null
+            RoleplayInterpreter.hasRoleplay(state.topic) ||
+            ConversationContext.isStandaloneGreeting(state.topic) ||
+            ConversationContext.isQualifiedAssent(state.topic)) return null
         if (state.updatedAt <= 0 || now - state.updatedAt < TWO_HOURS ||
             (lastInitiative > 0 && now - lastInitiative < SIX_HOURS) ||
             (lastInitiative > 0 && lastInitiative >= state.updatedAt)) return null

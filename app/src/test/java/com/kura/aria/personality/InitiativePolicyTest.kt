@@ -24,4 +24,9 @@ class InitiativePolicyTest {
         val legacy = state.copy(topic = "*acaricio la cabeza de aria*", pendingQuestion = "¿Seguimos?")
         assertNull(InitiativePolicy.suggestion(legacy, true, 4 * hour, 0, 12))
     }
+
+    @Test fun oldSavedAssentCannotBecomeInitiativeReminder() {
+        val legacy = state.copy(topic = "si,uno de uva", pendingQuestion = "¿Qué te pasa?")
+        assertNull(InitiativePolicy.suggestion(legacy, true, 4 * hour, 0, 12))
+    }
 }

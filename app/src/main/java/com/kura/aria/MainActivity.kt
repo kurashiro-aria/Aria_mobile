@@ -23,6 +23,7 @@ import com.kura.aria.personality.AriaPersonality
 import com.kura.aria.personality.ConversationContext
 import com.kura.aria.personality.ConversationManager
 import com.kura.aria.personality.ExpressionResolver
+import com.kura.aria.personality.RoleplayInterpreter
 import com.kura.aria.personality.InitiativePolicy
 import com.kura.aria.chat.VisibleReplyFilter
 import com.kura.aria.chat.ChatHistory
@@ -514,7 +515,7 @@ class MainActivity : AppCompatActivity() {
                 val previewExpression: (String) -> Unit = { visible ->
                     showPortrait(AriaEmotion.fromInteraction(turnMood, turnExpression, message, visible))
                 }
-                var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), 768, reply,
+                var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), 768, reply, message,
                     previewExpression)
                 val previousAria = previousHistory.lastOrNull { it.role == "ARIA" }?.text
                 if (ReplyQuality.needsRetry(message, previousAria, answer)) {
@@ -523,7 +524,7 @@ class MainActivity : AppCompatActivity() {
                     showPortrait(AriaEmotion.THINKING)
                     answer = collectVisibleReply(
                         AriaPersonality.directResponsePrompt(ReplyQuality.retryPrompt(previousHistory, message)),
-                        256, reply, previewExpression
+                        256, reply, message, previewExpression
                     )
                     if (ReplyQuality.needsRetry(message, previousAria, answer)) {
                         repeatedReplies++
@@ -550,7 +551,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun collectVisibleReply(prompt: String, tokenLimit: Int, reply: TextView,
+    private suspend fun collectVisibleReply(prompt: String, tokenLimit: Int, reply: TextView, userMessage: String,
                                             onFirstPhrase: (String) -> Unit = {}): String {
         val filter = VisibleReplyFilter()
         val started = SystemClock.elapsedRealtime()
@@ -562,12 +563,16 @@ class MainActivity : AppCompatActivity() {
         engine.sendUserPrompt(prompt, predictLength = tokenLimit).flowOn(Dispatchers.IO).collect { token ->
             chunks++
             val answer = filter.append(token)
-            if (filter.transcriptDetected) reply.text = "Ajustando respuesta…"
+            val copiedAction = ReplyQuality.copiesKuraAction(userMessage, answer)
+            if (filter.transcriptDetected || copiedAction) reply.text = "Ajustando respuesta…"
             val now = SystemClock.uptimeMillis()
             if (firstTokenMs == null) firstTokenMs = SystemClock.elapsedRealtime() - started
             if (firstVisibleMs == null && answer.isNotBlank())
                 firstVisibleMs = SystemClock.elapsedRealtime() - started
-            if (answer.isNotBlank() && (lastRenderedAt == 0L || now - lastRenderedAt >= 80L)) {
+            if (answer.isNotBlank() && !copiedAction && !filter.transcriptDetected &&
+                !(RoleplayInterpreter.hasRoleplay(userMessage) && answer.startsWith("*") &&
+                    answer.count { it == '*' } < 2) &&
+                (lastRenderedAt == 0L || now - lastRenderedAt >= 80L)) {
                 reply.text = answer
                 lastRenderedAt = now
             }

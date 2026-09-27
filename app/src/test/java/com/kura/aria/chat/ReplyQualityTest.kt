@@ -48,4 +48,12 @@ class ReplyQualityTest {
         val previous = listOf(ChatMessage("Kura", "hola aria,que tal tu día?", 1L))
         assertFalse(ReplyQuality.retryPrompt(previous, "hoy hace calor").contains("hola aria"))
     }
+
+    @Test fun rejectsCopiedActionEvenWithAdditionalDialogue() {
+        val user = "hola aria *acaricio su cabeza *"
+        val reply = "*acaricio su cabeza* ¿Qué tal el día?"
+        assertTrue(ReplyQuality.copiesKuraAction(user, reply))
+        assertTrue(ReplyQuality.needsRetry(user, null, reply))
+        assertFalse(ReplyQuality.copiesKuraAction(user, "*me acomodo el cabello* Eso me tomó por sorpresa."))
+    }
 }

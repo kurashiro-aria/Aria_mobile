@@ -40,6 +40,13 @@ internal object ReplyQuality {
         return longSequence || overlap >= 0.72
     }
 
+    /** A roleplay action remains Kura's even if the model surrounds the copy with new text. */
+    fun copiesKuraAction(user: String, candidate: String): Boolean {
+        val userActions = RoleplayInterpreter.actions(user).map { it.action.lowercase() }.toSet()
+        return userActions.isNotEmpty() && RoleplayInterpreter.actions(candidate)
+            .any { it.action.lowercase() in userActions }
+    }
+
     fun hasNeedlessOffer(user: String, candidate: String): Boolean {
         val normalized = normalize(candidate).trim()
         if (!normalized.endsWith("?")) return false
@@ -52,7 +59,8 @@ internal object ReplyQuality {
     }
 
     fun needsRetry(user: String, previous: String?, candidate: String): Boolean =
-        candidate.isBlank() || hasTranscript(candidate) || repeats(previous, candidate) ||
+        candidate.isBlank() || hasTranscript(candidate) || copiesKuraAction(user, candidate) ||
+            repeats(previous, candidate) ||
             echoesUser(user, candidate) || hasNeedlessOffer(user, candidate)
 
     fun retryPrompt(history: List<ChatMessage>, current: String): String = buildString {

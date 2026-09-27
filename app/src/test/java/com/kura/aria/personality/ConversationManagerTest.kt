@@ -57,4 +57,14 @@ class ConversationManagerTest {
         assertTrue(prompt.contains("¿Quieres cambiar el fondo?"))
         assertFalse(prompt.contains("La pose se ve bien"))
     }
+
+    @Test fun qualifiedDrinkAnswerIsNotStoredAsAnUnfinishedTopic() {
+        val state = ConversationState().afterExchange("¿eso sería genial? quiero uno de uva",
+            "Busquemos uno de uva.", 1_000L)
+            .afterExchange("si,uno de uva", "¿Qué te pasa?", 2_000L)
+        assertFalse(state.topic.contains("si,uno de uva"))
+        assertTrue(state.pendingQuestion.isEmpty())
+        assertFalse(InitiativePolicy.suggestion(state, true, 3 * 60 * 60 * 1000L,
+            0L, 12)?.contains("si,uno de uva") == true)
+    }
 }

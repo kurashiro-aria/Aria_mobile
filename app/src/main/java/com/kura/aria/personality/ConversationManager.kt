@@ -20,16 +20,18 @@ internal data class ConversationState(
 ) {
     fun afterExchange(user: String, reply: String, now: Long = System.currentTimeMillis(),
                       stylePreferences: StylePreferences = StylePreferences()): ConversationState {
-        val cleanUser = user.replace(Regex("\\s+"), " ").trim().take(160)
+        val cleanUser = RoleplayInterpreter.spokenText(user).take(160)
         val pureAction = RoleplayInterpreter.isPureAction(user)
-        val substantive = !pureAction && MemorySelector.keywords(cleanUser).isNotEmpty() &&
-            !MemorySelector.isFollowUp(cleanUser)
-        val nextTopic = if (substantive) cleanUser else topic.takeUnless(RoleplayInterpreter::isPureAction).orEmpty()
+        val substantive = !pureAction && !ConversationContext.isStandaloneGreeting(cleanUser) &&
+            !ConversationContext.isQualifiedAssent(cleanUser) &&
+            MemorySelector.keywords(cleanUser).isNotEmpty() && !MemorySelector.isFollowUp(cleanUser)
+        val nextTopic = if (substantive) cleanUser else topic.takeUnless(RoleplayInterpreter::hasRoleplay).orEmpty()
         val earlier = if (substantive && topic.isNotBlank() &&
             MemorySelector.keywords(topic).intersect(MemorySelector.keywords(cleanUser)).isEmpty()) {
             (earlierTopics + topic).distinct().takeLast(24)
         } else earlierTopics
-        val question = if (pureAction) "" else ConversationContext.priorQuestion(reply).orEmpty()
+        val question = if (substantive && !RoleplayInterpreter.hasRoleplay(user))
+            ConversationContext.priorQuestion(reply).orEmpty() else ""
         val idleExpired = updatedAt > 0L && now - updatedAt > 30L * 60L * 1000L
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
         val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now,
@@ -62,7 +64,9 @@ internal data class ConversationState(
         val terms = MemorySelector.keywords(message)
         if (terms.isEmpty()) return null
         return (listOf(topic) + earlierTopics.asReversed()).firstOrNull {
-            !RoleplayInterpreter.isPureAction(it) && terms.intersect(MemorySelector.keywords(it)).isNotEmpty()
+            !RoleplayInterpreter.hasRoleplay(it) &&
+                !ConversationContext.isQualifiedAssent(it) &&
+                terms.intersect(MemorySelector.keywords(it)).isNotEmpty()
         }
     }
 }
@@ -80,11 +84,14 @@ internal class ConversationManager(context: Context) {
             val style = runCatching { ExpressionStyle.valueOf(obj.optString("expressionStyle")) }
                 .getOrDefault(ExpressionStyle.NATURAL)
             val savedTopic = obj.optString("topic")
-            val legacyAction = RoleplayInterpreter.isPureAction(savedTopic)
-            ConversationState(if (legacyAction) "" else savedTopic,
-                if (legacyAction) "" else obj.optString("pendingQuestion"),
+            val staleTopic = RoleplayInterpreter.hasRoleplay(savedTopic) ||
+                ConversationContext.isStandaloneGreeting(savedTopic) ||
+                ConversationContext.isQualifiedAssent(savedTopic)
+            ConversationState(if (staleTopic) "" else savedTopic,
+                if (staleTopic) "" else obj.optString("pendingQuestion"),
                 (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
-                    .filterNot(RoleplayInterpreter::isPureAction).takeLast(24),
+                    .filterNot(RoleplayInterpreter::hasRoleplay)
+                    .filterNot(ConversationContext::isQualifiedAssent).takeLast(24),
                 obj.optLong("updatedAt"), mood, obj.optInt("socialTurns", 0).coerceIn(0, 3),
                 ExpressionState(style, obj.optDouble("expressionIntensity", 0.0).toFloat().coerceIn(0f, 1f),
                     obj.optInt("expressionTurns", 0).coerceIn(0, 5), obj.optBoolean("expressionRequested", false)))

@@ -22,11 +22,11 @@ internal object ConversationContext {
             state.socialMood, state.updatedAt, carriedTurns = state.socialTurns)
         val expression = ExpressionResolver.forTurn(current, mood, state.expression, state.updatedAt,
             preferences = stylePreferences)
-        val greeting = isStandaloneGreeting(current)
+        val greeting = isStandaloneGreeting(RoleplayInterpreter.spokenText(current))
         val directFollowUp = !greeting && (MemorySelector.isFollowUp(current) || isQualifiedAssent(current))
         val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
-        val currentTerms = MemorySelector.keywords(current)
-        val lastTerms = lastUser?.let { MemorySelector.keywords(it.text) }.orEmpty()
+        val currentTerms = MemorySelector.keywords(RoleplayInterpreter.spokenText(current))
+        val lastTerms = lastUser?.let { MemorySelector.keywords(RoleplayInterpreter.spokenText(it.text)) }.orEmpty()
         val lexicalContinuation = !greeting && lastUser != null && currentTerms.intersect(lastTerms).isNotEmpty()
         val conversationalContinuation = !greeting && !returnsToTopic && lastUser != null &&
             history.takeLast(4).any { it.role == "ARIA" } &&
@@ -89,7 +89,7 @@ internal object ConversationContext {
         }
     }
 
-    private fun isStandaloneGreeting(text: String): Boolean {
+    fun isStandaloneGreeting(text: String): Boolean {
         val normalized = text.lowercase(Locale.ROOT).trim()
             .replace(Regex("[¡!¿?.,;:]+"), " ")
             .replace(Regex("\\s+"), " ").trim()
@@ -97,10 +97,10 @@ internal object ConversationContext {
     }
 
     /** An assent can carry the actual choice: "sí, uno de uva" still answers ARIA's last question. */
-    private fun isQualifiedAssent(text: String): Boolean {
+    fun isQualifiedAssent(text: String): Boolean {
         val normalized = Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFD)
             .replace(Regex("\\p{M}+"), "").trim()
-        return normalized.matches(Regex("^(?:si|claro|exacto|vale|ok|dale|por supuesto)[,;:]?\\s+.{1,80}[.!]?$") )
+        return normalized.matches(Regex("^(?:si|claro|exacto|vale|ok|dale|por supuesto)(?:[,;:]\\s*|\\s+).{1,80}[.!]?$"))
     }
 
     private fun memoryLine(memory: Memory): String = when (memory.category) {
@@ -129,18 +129,19 @@ internal object ConversationContext {
         }
 
     fun line(message: ChatMessage, limit: Int): String {
-        val normalized = message.text.replace(Regex("\\s+"), " ").trim()
+        val normalized = RoleplayInterpreter.spokenText(message.text)
         val excerpt = if (normalized.length > limit) normalized.take(limit - 1).trimEnd() + "…" else normalized
         return "• «$excerpt»"
     }
 
     fun relatedEarlier(older: List<ChatMessage>, subject: String): List<ChatMessage> {
-        val terms = MemorySelector.keywords(subject)
+        val terms = MemorySelector.keywords(RoleplayInterpreter.spokenText(subject))
         if (terms.isEmpty()) return emptyList()
         return older.withIndex().filter { it.value.role == "Kura" &&
             !RoleplayInterpreter.isPureAction(it.value.text) }
             .map { indexed ->
-                val score = terms.intersect(MemorySelector.keywords(indexed.value.text)).size
+                val score = terms.intersect(MemorySelector.keywords(
+                    RoleplayInterpreter.spokenText(indexed.value.text))).size
                 indexed.index to score
             }
             .filter { it.second > 0 }

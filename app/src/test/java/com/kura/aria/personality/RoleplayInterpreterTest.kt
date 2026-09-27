@@ -37,4 +37,16 @@ class RoleplayInterpreterTest {
         val prompt = ConversationContext.turnPrompt(history, emptyList(), action, after)
         assertEquals(1, Regex(Regex.escape(action)).findAll(prompt).count())
     }
+
+    @Test fun greetingWithPossessiveActionKeepsKuraAsActorAndAriaAsTarget() {
+        val message = "hola aria *acaricio su cabeza *"
+        assertEquals("hola aria", RoleplayInterpreter.spokenText(message))
+        val prompt = RoleplayInterpreter.promptContext(message)!!
+        assertTrue(prompt.contains("Kura acaba de realizar una acción dirigida a ARIA"))
+        assertFalse(prompt.contains("*acaricio su cabeza*"))
+        val state = ConversationState().afterExchange(message,
+            "*sonrío* Qué lindo gesto. ¿Qué tal el día?", 2_000L)
+        assertTrue(state.topic.isEmpty())
+        assertTrue(state.pendingQuestion.isEmpty())
+    }
 }

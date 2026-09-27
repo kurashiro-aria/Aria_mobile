@@ -20,15 +20,19 @@ internal object RoleplayInterpreter {
 
     fun hasRoleplay(message: String): Boolean = actions(message).isNotEmpty()
 
+    fun spokenText(message: String): String = segment.replace(message, " ")
+        .replace(Regex("\\s+"), " ").trim()
+
     /** A scene action alone is not a conversational topic or an unfinished request. */
     fun isPureAction(message: String): Boolean = hasRoleplay(message) &&
-        segment.replace(message, "").trim().trim('.', '!', '?', '¡', '¿').isBlank()
+        spokenText(message).trim('.', '!', '?', '¡', '¿').isBlank()
 
     /** Context for the GGUF: direct actions toward ARIA should produce an in-character reaction, not narration of Kura. */
     fun promptContext(message: String): String? {
         val parsed = actions(message)
         if (parsed.isEmpty()) return null
-        val towardAria = parsed.any { it.target == "ARIA" }
+        val towardAria = parsed.any { it.target == "ARIA" } ||
+            (parsed.any { it.target == null } && Regex("(?i)\\baria\\b").containsMatchIn(spokenText(message)))
         return buildString {
             append("ESCENA DE ROLEPLAY: el texto entre asteriscos son acciones ficticias de Kura dentro de la escena compartida. ")
             append("Responde siempre desde el punto de vista de ARIA y no lo registres como un hecho físico real. ")
