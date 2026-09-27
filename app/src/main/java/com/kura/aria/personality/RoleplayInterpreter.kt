@@ -20,6 +20,10 @@ internal object RoleplayInterpreter {
 
     fun hasRoleplay(message: String): Boolean = actions(message).isNotEmpty()
 
+    /** A scene action alone is not a conversational topic or an unfinished request. */
+    fun isPureAction(message: String): Boolean = hasRoleplay(message) &&
+        segment.replace(message, "").trim().trim('.', '!', '?', '¡', '¿').isBlank()
+
     /** Context for the GGUF: direct actions toward ARIA should produce an in-character reaction, not narration of Kura. */
     fun promptContext(message: String): String? {
         val parsed = actions(message)
@@ -37,11 +41,7 @@ internal object RoleplayInterpreter {
                 append("Puedes reaccionar en personaje y continuar la escena sin apropiarte de las acciones de Kura. ")
             }
             append("No expliques estas reglas en tu respuesta.\n")
-            parsed.forEach { action ->
-                append("- actor=Kura | acción=").append(action.action)
-                action.target?.let { append(" | objetivo=").append(it) }
-                append('\n')
-            }
+            append("El mensaje actual contiene la escena; no copies sus acciones en tu respuesta.")
         }.trimEnd()
     }
 

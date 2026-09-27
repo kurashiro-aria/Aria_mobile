@@ -27,4 +27,15 @@ class ReplyQualityTest {
         assertFalse(prompt.contains("refugio más fresco"))
         assertEquals("Vale, seguimos con eso.", ReplyQuality.fallback("sí"))
     }
+
+    @Test fun roleplayRetryKeepsActorPerspectiveWithoutCopyingPreviousAction() {
+        val action = "*acaricio la cabeza de aria*"
+        val history = listOf(ChatMessage("Kura", "*abrazo a aria*", 1L),
+            ChatMessage("ARIA", "*acaricio la cabeza de aria*", 2L))
+        assertTrue(ReplyQuality.needsRetry(action, history.last().text, action))
+        val retry = ReplyQuality.retryPrompt(history, action)
+        assertTrue(retry.contains("acciones ficticias de Kura"))
+        assertFalse(retry.contains("*abrazo a aria*"))
+        assertEquals(1, Regex(Regex.escape(action)).findAll(retry).count())
+    }
 }

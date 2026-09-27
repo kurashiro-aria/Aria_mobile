@@ -1,5 +1,6 @@
 package com.kura.aria.chat
 
+import com.kura.aria.personality.RoleplayInterpreter
 import java.text.Normalizer
 
 /** Conversation-quality checks applied after generation, not just prompt advice. */
@@ -49,13 +50,15 @@ internal object ReplyQuality {
         // but never paste ARIA's previous answer into the retry prompt: doing so can make the
         // model copy the very response that triggered the retry.
         val previousKura = history.asReversed()
-            .firstOrNull { it.role == "Kura" && it.text.trim() != current.trim() }
+            .firstOrNull { it.role == "Kura" && it.text.trim() != current.trim() &&
+                !RoleplayInterpreter.isPureAction(it.text) }
             ?.text
 
         append("Responde directamente al mensaje actual de Kura con una respuesta nueva y natural en español. ")
         append("No repitas ni reformules lo que Kura acaba de decir. ")
         append("No termines ofreciendo probar, intentar o hacer algo salvo que necesites una decisión real para continuar. ")
         append("No repitas una propuesta ni una pregunta anterior. No antepongas ARIA:.\n")
+        RoleplayInterpreter.promptContext(current)?.let { append(it).append('\n') }
         if (!previousKura.isNullOrBlank()) {
             append("Contexto inmediato de Kura: ").append(previousKura.take(180)).append('\n')
         }

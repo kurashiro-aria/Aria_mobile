@@ -21,13 +21,15 @@ internal data class ConversationState(
     fun afterExchange(user: String, reply: String, now: Long = System.currentTimeMillis(),
                       stylePreferences: StylePreferences = StylePreferences()): ConversationState {
         val cleanUser = user.replace(Regex("\\s+"), " ").trim().take(160)
-        val substantive = MemorySelector.keywords(cleanUser).isNotEmpty() && !MemorySelector.isFollowUp(cleanUser)
+        val pureAction = RoleplayInterpreter.isPureAction(user)
+        val substantive = !pureAction && MemorySelector.keywords(cleanUser).isNotEmpty() &&
+            !MemorySelector.isFollowUp(cleanUser)
         val nextTopic = if (substantive) cleanUser else topic
         val earlier = if (substantive && topic.isNotBlank() &&
             MemorySelector.keywords(topic).intersect(MemorySelector.keywords(cleanUser)).isEmpty()) {
             (earlierTopics + topic).distinct().takeLast(24)
         } else earlierTopics
-        val question = ConversationContext.priorQuestion(reply).orEmpty()
+        val question = if (pureAction) "" else ConversationContext.priorQuestion(reply).orEmpty()
         val idleExpired = updatedAt > 0L && now - updatedAt > 30L * 60L * 1000L
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
         val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now,

@@ -30,12 +30,15 @@ internal object ConversationContext {
             history.takeLast(4).any { it.role == "ARIA" } &&
             (directFollowUp || lexicalContinuation || currentTerms.size <= 3)
         val recentWindow = if (conversationalContinuation) history.takeLast(6) else emptyList()
-        val recentUser = recentWindow.filter { it.role == "Kura" }
+        val recentUser = recentWindow.filter { it.role == "Kura" &&
+            !RoleplayInterpreter.isPureAction(it.text) }
         val previousAria = if (conversationalContinuation && !returnsToTopic)
             recentWindow.lastOrNull { it.role == "ARIA" }?.let { priorReference(it.text) }
             else null
-        val earlier = if (greeting) emptyList() else relatedEarlier(history.dropLast(recentWindow.size), current)
-        val mediumTopic = if (greeting) null else state.relevantTopic(current)?.takeIf { topic ->
+        val earlier = if (greeting || RoleplayInterpreter.isPureAction(current)) emptyList()
+            else relatedEarlier(history.dropLast(recentWindow.size), current)
+        val mediumTopic = if (greeting || RoleplayInterpreter.isPureAction(current)) null
+            else state.relevantTopic(current)?.takeIf { topic ->
             recentUser.none { it.text.take(160) == topic } && earlier.none { it.text.take(160) == topic }
         }
         val pending = if (directFollowUp && !returnsToTopic && previousAria == null)
@@ -125,7 +128,8 @@ internal object ConversationContext {
     fun relatedEarlier(older: List<ChatMessage>, subject: String): List<ChatMessage> {
         val terms = MemorySelector.keywords(subject)
         if (terms.isEmpty()) return emptyList()
-        return older.withIndex().filter { it.value.role == "Kura" }
+        return older.withIndex().filter { it.value.role == "Kura" &&
+            !RoleplayInterpreter.isPureAction(it.value.text) }
             .map { indexed ->
                 val score = terms.intersect(MemorySelector.keywords(indexed.value.text)).size
                 indexed.index to score

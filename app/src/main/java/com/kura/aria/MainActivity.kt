@@ -517,7 +517,7 @@ class MainActivity : AppCompatActivity() {
                 var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), 768, reply,
                     previewExpression)
                 val previousAria = previousHistory.lastOrNull { it.role == "ARIA" }?.text
-                if (answer.isBlank() || ReplyQuality.repeats(previousAria, answer)) {
+                if (ReplyQuality.needsRetry(message, previousAria, answer)) {
                     if (ReplyQuality.repeats(previousAria, answer)) repeatedReplies++
                     reply.text = "Ajustando respuesta…"
                     showPortrait(AriaEmotion.THINKING)
@@ -525,7 +525,7 @@ class MainActivity : AppCompatActivity() {
                         AriaPersonality.directResponsePrompt(ReplyQuality.retryPrompt(previousHistory, message)),
                         256, reply, previewExpression
                     )
-                    if (ReplyQuality.repeats(previousAria, answer)) {
+                    if (ReplyQuality.needsRetry(message, previousAria, answer)) {
                         repeatedReplies++
                         answer = ReplyQuality.fallback(message)
                     }
