@@ -79,24 +79,31 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      # Temporary alpha exception: keep all tests running and visible, but allow a device-test APK
-      # while socialToneExpiresAfterIdleOrSeveralNeutralTurns is tracked as a known failure.
-      # Remove continue-on-error as soon as that conversation-state regression is fixed.
-      - name: Test chat response filtering (known alpha failure allowed)
-        continue-on-error: true
+      - name: Test chat response filtering
         run: gradle :app:testDebugUnitTest --stacktrace --console=plain
 
+      - name: Summarize unit tests
+        run: |
+          python3 - <<'PY'
+          import glob
+          import xml.etree.ElementTree as ET
+          files = glob.glob('app/build/test-results/testDebugUnitTest/TEST-*.xml')
+          assert files, 'Missing JUnit XML results'
+          suites = [ET.parse(path).getroot() for path in files]
+          total = sum(int(s.get('tests', '0')) for s in suites)
+          failed = sum(int(s.get('failures', '0')) + int(s.get('errors', '0')) for s in suites)
+          print(f'ARIA unit tests: {total} completed, {failed} failed')
+          assert total >= 58 and failed == 0
+          PY
+
       - name: Build debug APK
-        if: ${{ !contains(github.event.head_commit.message, '[audit-tests-only]') }}
         run: gradle :app:assembleDebug --stacktrace --console=plain
 
       - name: Verify final APK certificate and version
-        if: ${{ !contains(github.event.head_commit.message, '[audit-tests-only]') }}
         shell: bash
         run: bash scripts/verify-apk.sh
 
       - name: Name versioned APK
-        if: ${{ !contains(github.event.head_commit.message, '[audit-tests-only]') }}
         id: apk-name
         shell: bash
         run: |
@@ -107,7 +114,6 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Upload ARIA APK
-        if: ${{ !contains(github.event.head_commit.message, '[audit-tests-only]') }}
         uses: actions/upload-artifact@v4
         with:
           name: ARIA-Mobile-${{ steps.apk-name.outputs.version }}

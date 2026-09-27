@@ -24,7 +24,7 @@ internal data class ConversationState(
         val pureAction = RoleplayInterpreter.isPureAction(user)
         val substantive = !pureAction && MemorySelector.keywords(cleanUser).isNotEmpty() &&
             !MemorySelector.isFollowUp(cleanUser)
-        val nextTopic = if (substantive) cleanUser else topic
+        val nextTopic = if (substantive) cleanUser else topic.takeUnless(RoleplayInterpreter::isPureAction).orEmpty()
         val earlier = if (substantive && topic.isNotBlank() &&
             MemorySelector.keywords(topic).intersect(MemorySelector.keywords(cleanUser)).isEmpty()) {
             (earlierTopics + topic).distinct().takeLast(24)
@@ -62,7 +62,7 @@ internal data class ConversationState(
         val terms = MemorySelector.keywords(message)
         if (terms.isEmpty()) return null
         return (listOf(topic) + earlierTopics.asReversed()).firstOrNull {
-            terms.intersect(MemorySelector.keywords(it)).isNotEmpty()
+            !RoleplayInterpreter.isPureAction(it) && terms.intersect(MemorySelector.keywords(it)).isNotEmpty()
         }
     }
 }
@@ -79,8 +79,12 @@ internal class ConversationManager(context: Context) {
                 .getOrDefault(ConversationMood.NEUTRAL)
             val style = runCatching { ExpressionStyle.valueOf(obj.optString("expressionStyle")) }
                 .getOrDefault(ExpressionStyle.NATURAL)
-            ConversationState(obj.optString("topic"), obj.optString("pendingQuestion"),
-                (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }.takeLast(24),
+            val savedTopic = obj.optString("topic")
+            val legacyAction = RoleplayInterpreter.isPureAction(savedTopic)
+            ConversationState(if (legacyAction) "" else savedTopic,
+                if (legacyAction) "" else obj.optString("pendingQuestion"),
+                (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
+                    .filterNot(RoleplayInterpreter::isPureAction).takeLast(24),
                 obj.optLong("updatedAt"), mood, obj.optInt("socialTurns", 0).coerceIn(0, 3),
                 ExpressionState(style, obj.optDouble("expressionIntensity", 0.0).toFloat().coerceIn(0f, 1f),
                     obj.optInt("expressionTurns", 0).coerceIn(0, 5), obj.optBoolean("expressionRequested", false)))
