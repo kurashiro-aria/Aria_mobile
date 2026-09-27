@@ -1,10 +1,17 @@
 package com.kura.aria.chat
 
 import com.kura.aria.personality.RoleplayInterpreter
+import com.kura.aria.memory.MemorySelector
 import java.text.Normalizer
 
 /** Conversation-quality checks applied after generation, not just prompt advice. */
 internal object ReplyQuality {
+    /** A continuation of a multi-speaker transcript is not ARIA's own reply. */
+    fun hasTranscript(candidate: String): Boolean {
+        val body = candidate.trimStart().replaceFirst(Regex("^ARIA\\s*:\\s*", RegexOption.IGNORE_CASE), "")
+        return Regex("(?im)^\\s*(?:Kura|ARIA)\\s*:").containsMatchIn(body)
+    }
+
     fun repeats(previous: String?, candidate: String): Boolean {
         if (previous.isNullOrBlank() || candidate.isBlank()) return false
         val old = words(previous)
@@ -18,7 +25,9 @@ internal object ReplyQuality {
 
     fun echoesUser(user: String, candidate: String): Boolean {
         val source = words(user)
-        val answer = words(candidate).take(32)
+        val candidateWords = words(candidate)
+        if (source.size >= 3 && source == candidateWords) return true
+        val answer = candidateWords.take(32)
         if (source.size < 5 || answer.size < 5) return false
         val sourceSet = source.filterNot { it in stopWords }.toSet()
         val answerSet = answer.filterNot { it in stopWords }.toSet()
@@ -43,13 +52,15 @@ internal object ReplyQuality {
     }
 
     fun needsRetry(user: String, previous: String?, candidate: String): Boolean =
-        candidate.isBlank() || repeats(previous, candidate) || echoesUser(user, candidate) || hasNeedlessOffer(user, candidate)
+        candidate.isBlank() || hasTranscript(candidate) || repeats(previous, candidate) ||
+            echoesUser(user, candidate) || hasNeedlessOffer(user, candidate)
 
     fun retryPrompt(history: List<ChatMessage>, current: String): String = buildString {
         // Keep enough of Kura's prior turn to resolve short replies such as "sí" or "exacto",
         // but never paste ARIA's previous answer into the retry prompt: doing so can make the
         // model copy the very response that triggered the retry.
-        val previousKura = history.asReversed()
+        val previousKura = history.asReversed().takeIf { MemorySelector.isFollowUp(current) }
+            .orEmpty()
             .firstOrNull { it.role == "Kura" && it.text.trim() != current.trim() &&
                 !RoleplayInterpreter.isPureAction(it.text) }
             ?.text

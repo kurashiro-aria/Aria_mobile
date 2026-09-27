@@ -27,6 +27,7 @@ La rama `aria-alpha-0.2-local-ai` usa Kotlin y el ejemplo Android de llama.cpp f
 - Para Qwen3 en modo directo se usan temperatura 0,7, top-p 0,8, top-k 20 y min-p 0. El menú Rendimiento muestra la duración de carga, el modelo, el tamaño del último contexto, los recuerdos recuperados y los contadores de repeticiones y fallos. Estas medidas se conservan solo durante la sesión.
 - El filtro elimina un prefijo `ARIA:` generado por el modelo; si la nueva respuesta repite un tramo largo de la anterior, se reintenta una vez con contexto mínimo antes de guardarla.
 - En 0.2.36.2 se corrigió el reconocimiento de risas repetidas para que la caducidad del estado social funcione desde el estado correcto. Las acciones puras entre asteriscos son escenas ficticias de Kura: no se guardan como tema o pregunta pendiente ni originan recordatorios. En el reintento se conserva la perspectiva de ARIA y se revisan ecos de la frase de Kura. El GGUF sigue redactando la reacción.
+- En 0.2.36.3, un mensaje nuevo y breve no recupera automáticamente la pregunta previa de ARIA; solo se arrastra contexto cuando hay una referencia o tema compartido. Los extractos de Kura se muestran al modelo como citas sin etiquetas de diálogo. Una salida que genere líneas `Kura:`/`ARIA:` se descarta y reintenta antes de guardarse en el historial.
 
 Para volver a un estado anterior, consulta [los puntos de restauración](docs/RESTAURACION-ARIA.md). Una actualización firmada conserva el modelo y el historial; desinstalar la app borra sus datos privados.
 

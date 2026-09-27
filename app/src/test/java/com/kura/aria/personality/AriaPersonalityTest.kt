@@ -26,7 +26,7 @@ class AriaPersonalityTest {
             ChatMessage("ARIA", "¿Cómo se llama?", 2)
         )
         val prompt = ConversationContext.turnPrompt(history, listOf(Memory(7, "El gato se llama Nube")), "Se llama Nube")
-        assertTrue(prompt.indexOf("Kura: Tengo un gato") < prompt.indexOf("• El gato se llama Nube"))
+        assertTrue(prompt.indexOf("• «Tengo un gato»") < prompt.indexOf("• El gato se llama Nube"))
         assertTrue(prompt.indexOf("• El gato se llama Nube") < prompt.indexOf("MENSAJE ACTUAL DE KURA:"))
         assertFalse(prompt.contains("#7"))
         assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nSe llama Nube"))
@@ -93,7 +93,7 @@ class AriaPersonalityTest {
             ChatMessage("ARIA", "Si odias el calor, quizá necesitas un refugio fresco. ¿Cómo te sientes?", 2)
         )
         val prompt = ConversationContext.turnPrompt(history, emptyList(), "odio el calor jaja")
-        assertTrue(prompt.contains("Kura: Tengo mucho calor"))
+        assertTrue(prompt.contains("• «Tengo mucho calor»"))
         assertFalse(prompt.contains("refugio fresco"))
     }
 
@@ -105,5 +105,16 @@ class AriaPersonalityTest {
         val prompt = ConversationContext.turnPrompt(history, emptyList(), "sí")
         assertTrue(prompt.contains("¿Te gustaría que fuéramos a un lugar tranquilo?"))
         assertFalse(prompt.contains("Quizá necesitas un refugio"))
+    }
+
+    @Test fun freshWeatherStatementDoesNotBecomeASpeakerTranscript() {
+        val history = listOf(
+            ChatMessage("Kura", "hola aria,que tal tu día?", 1),
+            ChatMessage("ARIA", "Hola, ¿qué tal tu día? ¿Cómo te ha ido?", 2)
+        )
+        val prompt = ConversationContext.turnPrompt(history, emptyList(), "hoy hace calor")
+        assertFalse(prompt.contains("Kura: hola"))
+        assertFalse(prompt.contains("¿Cómo te ha ido?"))
+        assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nhoy hace calor"))
     }
 }

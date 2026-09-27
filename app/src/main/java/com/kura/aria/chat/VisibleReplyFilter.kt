@@ -5,6 +5,8 @@ class VisibleReplyFilter {
     private val pending = StringBuilder()
     private val visible = StringBuilder()
     private var depth = 0
+    var transcriptDetected: Boolean = false
+        private set
     private val open = "<think>"
     private val close = "</think>"
 
@@ -23,7 +25,12 @@ class VisibleReplyFilter {
 
     private fun cleaned(): String {
         val raw = visible.toString().trim()
-        if ("aria:".startsWith(raw.lowercase()) || raw.matches(Regex("^aria\\s*$", RegexOption.IGNORE_CASE))) return ""
+        if (transcriptDetected || ReplyQuality.hasTranscript(raw)) {
+            transcriptDetected = true
+            return ""
+        }
+        if ("aria:".startsWith(raw.lowercase()) || "kura:".startsWith(raw.lowercase()) ||
+            raw.matches(Regex("^(?:aria|kura)\\s*$", RegexOption.IGNORE_CASE))) return ""
         return raw.replaceFirst(Regex("^(?:ARIA\\s*:\\s*)+", RegexOption.IGNORE_CASE), "").trim()
     }
 

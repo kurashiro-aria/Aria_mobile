@@ -38,4 +38,14 @@ class ReplyQualityTest {
         assertFalse(retry.contains("*abrazo a aria*"))
         assertEquals(1, Regex(Regex.escape(action)).findAll(retry).count())
     }
+
+    @Test fun rejectsScreenshotTranscriptAndFreshTurnDoesNotCarryOldTopicIntoRetry() {
+        val transcript = "Kura: hoy hace calor\nKura: agradable,no hace calor\n\nARIA: ¿Cómo te ha ido?"
+        assertTrue(ReplyQuality.hasTranscript(transcript))
+        assertTrue(ReplyQuality.needsRetry("hoy hace calor", "Hola, ¿cómo te ha ido?", transcript))
+        assertTrue(ReplyQuality.needsRetry("hoy hace calor", null, "hoy hace calor"))
+        assertFalse(ReplyQuality.hasTranscript("ARIA: Uf, sí que aprieta el calor hoy."))
+        val previous = listOf(ChatMessage("Kura", "hola aria,que tal tu día?", 1L))
+        assertFalse(ReplyQuality.retryPrompt(previous, "hoy hace calor").contains("hola aria"))
+    }
 }

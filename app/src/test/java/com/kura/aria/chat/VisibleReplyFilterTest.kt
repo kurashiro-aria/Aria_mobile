@@ -2,6 +2,7 @@ package com.kura.aria.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VisibleReplyFilterTest {
@@ -55,5 +56,14 @@ class VisibleReplyFilterTest {
         filter.append("IA: ")
         assertEquals("Vale, sigamos.", filter.append("Vale, sigamos."))
         assertEquals("Vale, sigamos.", filter.finish())
+    }
+
+    @Test fun transcriptAcrossChunksIsRejectedInsteadOfSavedAsDialogue() {
+        val filter = VisibleReplyFilter()
+        assertEquals("", filter.append("Ku"))
+        assertEquals("", filter.append("ra: hoy hace calor"))
+        assertEquals("", filter.append("\nARIA: ¿Cómo te ha ido?"))
+        assertEquals("", filter.finish())
+        assertTrue(filter.transcriptDetected)
     }
 }

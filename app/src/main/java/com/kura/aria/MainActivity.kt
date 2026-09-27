@@ -562,6 +562,7 @@ class MainActivity : AppCompatActivity() {
         engine.sendUserPrompt(prompt, predictLength = tokenLimit).flowOn(Dispatchers.IO).collect { token ->
             chunks++
             val answer = filter.append(token)
+            if (filter.transcriptDetected) reply.text = "Ajustando respuesta…"
             val now = SystemClock.uptimeMillis()
             if (firstTokenMs == null) firstTokenMs = SystemClock.elapsedRealtime() - started
             if (firstVisibleMs == null && answer.isNotBlank())

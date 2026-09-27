@@ -1,6 +1,7 @@
 package com.kura.aria.personality
 
 import com.kura.aria.chat.ChatMessage
+import com.kura.aria.chat.ReplyQuality
 import com.kura.aria.emotion.MoodReader
 import com.kura.aria.memory.Memory
 import com.kura.aria.memory.MemorySelector
@@ -28,12 +29,13 @@ internal object ConversationContext {
         val lexicalContinuation = !greeting && lastUser != null && currentTerms.intersect(lastTerms).isNotEmpty()
         val conversationalContinuation = !greeting && !returnsToTopic && lastUser != null &&
             history.takeLast(4).any { it.role == "ARIA" } &&
-            (directFollowUp || lexicalContinuation || currentTerms.size <= 3)
+            (directFollowUp || lexicalContinuation)
         val recentWindow = if (conversationalContinuation) history.takeLast(6) else emptyList()
         val recentUser = recentWindow.filter { it.role == "Kura" &&
             !RoleplayInterpreter.isPureAction(it.text) }
         val previousAria = if (conversationalContinuation && !returnsToTopic)
-            recentWindow.lastOrNull { it.role == "ARIA" }?.let { priorReference(it.text) }
+            recentWindow.lastOrNull { it.role == "ARIA" }?.text
+                ?.takeUnless(ReplyQuality::hasTranscript)?.let(::priorReference)
             else null
         val earlier = if (greeting || RoleplayInterpreter.isPureAction(current)) emptyList()
             else relatedEarlier(history.dropLast(recentWindow.size), current)
@@ -119,10 +121,9 @@ internal object ConversationContext {
         }
 
     fun line(message: ChatMessage, limit: Int): String {
-        val speaker = if (message.role == "Kura") "Kura" else "ARIA"
         val normalized = message.text.replace(Regex("\\s+"), " ").trim()
         val excerpt = if (normalized.length > limit) normalized.take(limit - 1).trimEnd() + "…" else normalized
-        return "$speaker: $excerpt"
+        return "• «$excerpt»"
     }
 
     fun relatedEarlier(older: List<ChatMessage>, subject: String): List<ChatMessage> {
