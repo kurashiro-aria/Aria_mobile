@@ -107,6 +107,20 @@ class AriaPersonalityTest {
         assertFalse(prompt.contains("Quizá necesitas un refugio"))
     }
 
+    @Test fun qualifiedAssentKeepsTheQuestionAndChoiceTogether() {
+        val history = listOf(
+            ChatMessage("Kura", "hoy hace calor", 1),
+            ChatMessage("ARIA", "Podríamos tomar algo frío. ¿Quieres un refresco?", 2),
+            ChatMessage("Kura", "me gusta el de uva", 3),
+            ChatMessage("ARIA", "¿Quieres uno de uva?", 4)
+        )
+        val prompt = ConversationContext.turnPrompt(history, emptyList(), "sí, uno de uva")
+        assertTrue(prompt.contains("¿Quieres uno de uva?"))
+        assertTrue(prompt.contains("• «me gusta el de uva»"))
+        assertTrue(prompt.contains("Este mensaje continúa el intercambio reciente"))
+        assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nsí, uno de uva"))
+    }
+
     @Test fun freshWeatherStatementDoesNotBecomeASpeakerTranscript() {
         val history = listOf(
             ChatMessage("Kura", "hola aria,que tal tu día?", 1),
