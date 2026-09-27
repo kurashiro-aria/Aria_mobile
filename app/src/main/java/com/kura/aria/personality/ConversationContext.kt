@@ -5,6 +5,7 @@ import com.kura.aria.chat.ReplyQuality
 import com.kura.aria.emotion.MoodReader
 import com.kura.aria.memory.Memory
 import com.kura.aria.memory.MemorySelector
+import java.text.Normalizer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -22,7 +23,7 @@ internal object ConversationContext {
         val expression = ExpressionResolver.forTurn(current, mood, state.expression, state.updatedAt,
             preferences = stylePreferences)
         val greeting = isStandaloneGreeting(current)
-        val directFollowUp = !greeting && MemorySelector.isFollowUp(current)
+        val directFollowUp = !greeting && (MemorySelector.isFollowUp(current) || isQualifiedAssent(current))
         val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
         val currentTerms = MemorySelector.keywords(current)
         val lastTerms = lastUser?.let { MemorySelector.keywords(it.text) }.orEmpty()
@@ -93,6 +94,13 @@ internal object ConversationContext {
             .replace(Regex("[¡!¿?.,;:]+"), " ")
             .replace(Regex("\\s+"), " ").trim()
         return normalized.matches(Regex("^(?:(?:hola|hey|buenas|holi|holaa)(?:\\s+aria)?|(?:buenos días|buenas tardes|buenas noches)(?:\\s+aria)?)$"))
+    }
+
+    /** An assent can carry the actual choice: "sí, uno de uva" still answers ARIA's last question. */
+    private fun isQualifiedAssent(text: String): Boolean {
+        val normalized = Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"), "").trim()
+        return normalized.matches(Regex("^(?:si|claro|exacto|vale|ok|dale|por supuesto)[,;:]?\\s+.{1,80}[.!]?$") )
     }
 
     private fun memoryLine(memory: Memory): String = when (memory.category) {
