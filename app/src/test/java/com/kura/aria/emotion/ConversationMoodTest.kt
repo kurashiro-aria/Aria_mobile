@@ -39,6 +39,8 @@ class ConversationMoodTest {
     }
 
     @Test fun kuraMoodUnderstandsCommonVariantsWithoutTreatingThemAsAriaEmotion() {
+        assertEquals(ConversationMood.PLAYFUL, MoodReader.forTurn("Jajaja, qué broma"))
+        assertEquals(ConversationMood.PLAYFUL, MoodReader.forTurn("jejeje, te pillé"))
         assertEquals(ConversationMood.JOYFUL, MoodReader.forTurn("Estoy contento"))
         assertEquals(ConversationMood.JOYFUL, MoodReader.forTurn("Me siento alegre"))
         assertEquals(ConversationMood.VULNERABLE, MoodReader.forTurn("Estoy desanimado"))

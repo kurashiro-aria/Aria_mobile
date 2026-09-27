@@ -87,13 +87,16 @@ jobs:
         run: gradle :app:testDebugUnitTest --stacktrace --console=plain
 
       - name: Build debug APK
+        if: ${{ !contains(github.event.head_commit.message, '[audit-tests-only]') }}
         run: gradle :app:assembleDebug --stacktrace --console=plain
 
       - name: Verify final APK certificate and version
+        if: ${{ !contains(github.event.head_commit.message, '[audit-tests-only]') }}
         shell: bash
         run: bash scripts/verify-apk.sh
 
       - name: Name versioned APK
+        if: ${{ !contains(github.event.head_commit.message, '[audit-tests-only]') }}
         id: apk-name
         shell: bash
         run: |
@@ -104,6 +107,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Upload ARIA APK
+        if: ${{ !contains(github.event.head_commit.message, '[audit-tests-only]') }}
         uses: actions/upload-artifact@v4
         with:
           name: ARIA-Mobile-${{ steps.apk-name.outputs.version }}
