@@ -28,13 +28,12 @@ internal data class ConversationState(
             (earlierTopics + topic).distinct().takeLast(24)
         } else earlierTopics
         val question = ConversationContext.priorQuestion(reply).orEmpty()
-        val idleExpired = updatedAt > 0L && now - updatedAt > 30 * 60 * 1000L
+        // Use Long arithmetic. 30 * 60 * 1000 is an Int expression and keeping the duration
+        // explicitly Long makes the timestamp boundary unambiguous in both tests and production.
+        val idleExpired = updatedAt > 0L && now - updatedAt > 30L * 60L * 1000L
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
         val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now,
             stylePreferences)
-        // socialTurns counts continuation turns AFTER the turn that established a social mood.
-        // Therefore the fourth neutral/follow-up turn reaches the expiration boundary when the
-        // previous state already contains three carried turns. Idle expiration is independent.
         val carriedMoodExpired = observedMood == ConversationMood.NEUTRAL &&
             socialMood != ConversationMood.NEUTRAL && (socialTurns >= 3 || idleExpired)
         val mood = if (observedMood == ConversationMood.NEUTRAL && !carriedMoodExpired) when (AriaEmotion.fromReply(reply)) {
@@ -46,7 +45,6 @@ internal data class ConversationState(
         } else observedMood
         val nextSocialTurns = when {
             mood == ConversationMood.NEUTRAL -> 0
-            // A newly observed/established mood starts at zero; only subsequent carried turns count.
             socialMood == ConversationMood.NEUTRAL || mood != socialMood -> 0
             else -> (socialTurns + 1).coerceAtMost(3)
         }
