@@ -22,6 +22,7 @@ class AriaPersonalityTest {
         assertTrue(prompt.contains("caja de zapatos"))
         assertTrue(prompt.contains("cumplido"))
         assertTrue(prompt.contains("acciones entre asteriscos"))
+        assertTrue(prompt.contains("Kura es hombre"))
     }
 
     @Test fun ordinaryTurnDoesNotResendASecondLongPersonalityPrompt() {
@@ -134,6 +135,28 @@ class AriaPersonalityTest {
         assertTrue(prompt.contains("• «me gusta el de uva»"))
         assertTrue(prompt.contains("Este mensaje continúa el intercambio reciente"))
         assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nsí, uno de uva"))
+    }
+
+    @Test fun reactionsAndPreferencesKeepTheProposalTheyAnswer() {
+        val suggestion = listOf(ChatMessage("Kura", "¿Qué me recomiendas?", 1),
+            ChatMessage("ARIA", "¿Qué te parece el pollo frito con salsa?", 2))
+        val reaction = ConversationContext.turnPrompt(suggestion, emptyList(), "suena delicioso y tentador 😉")
+        assertTrue(reaction.contains("pollo frito con salsa"))
+        val alternative = ConversationContext.turnPrompt(suggestion, emptyList(), "prefiero algo más sólido")
+        assertTrue(alternative.contains("pollo frito con salsa"))
+        val detail = ConversationContext.turnPrompt(listOf(
+            ChatMessage("Kura", "prefiero algo más sólido", 3),
+            ChatMessage("ARIA", "¿Más sólido en qué sentido?", 4)), emptyList(), "pan o algo por el estilo")
+        assertTrue(detail.contains("¿Más sólido en qué sentido?"))
+    }
+
+    @Test fun selectedIngredientsAreNotPresentedAsAnOpenChoice() {
+        val history = listOf(ChatMessage("Kura", "pan o algo por el estilo", 1),
+            ChatMessage("ARIA", "¿Te gustaría pan y algo más?", 2))
+        val prompt = ConversationContext.turnPrompt(history, emptyList(), "sí,jamón y queso")
+        assertTrue(prompt.contains("ya aceptó y precisó su elección"))
+        assertTrue(prompt.contains("¿Te gustaría pan y algo más?"))
+        assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nsí,jamón y queso"))
     }
 
     @Test fun freshWeatherStatementDoesNotBecomeASpeakerTranscript() {

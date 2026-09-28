@@ -22,7 +22,7 @@ enum class AriaEmotion(val tile: Int, val label: String) {
             return when (mood) {
                 ConversationMood.RELAXED -> if (expressed == NEUTRAL) NEUTRAL else expressed
                 ConversationMood.FOCUSED -> if (reply.isBlank()) THINKING else if (expressed == NEUTRAL) SERIOUS else expressed
-                ConversationMood.CURIOUS -> if (expressed == SURPRISED) SURPRISED else THINKING
+                ConversationMood.CURIOUS -> if (expressed == NEUTRAL) THINKING else expressed
                 ConversationMood.SHY -> if (expressed == NEUTRAL) EMBARRASSED else expressed
                 ConversationMood.VULNERABLE -> if (reply.isBlank() || MoodReader.isGrief(user)) SAD else AFFECTIONATE
                 ConversationMood.URGENT, ConversationMood.FRUSTRATED -> SERIOUS
@@ -45,6 +45,9 @@ enum class AriaEmotion(val tile: Int, val label: String) {
                 return fromReply(reply)
             if (expression.style == ExpressionStyle.SERIOUS) return SERIOUS
             if (expression.style == ExpressionStyle.FOCUSED) return if (reply.isBlank()) THINKING else SERIOUS
+            if (expression.style == ExpressionStyle.FLIRTY && reply.isNotBlank() && base == NEUTRAL &&
+                Regex("(?i)\\b(?:linda|hermosa|guapa|preciosa|me gustas)\\b").containsMatchIn(user))
+                return EMBARRASSED
             // Once ARIA speaks, her own words take priority over a suggested style.
             if (reply.isNotBlank() && base != NEUTRAL && base != THINKING) return base
             return when (expression.style) {
@@ -71,10 +74,10 @@ enum class AriaEmotion(val tile: Int, val label: String) {
                 EMBARRASSED to score(s, "verguenza", "sonrojo", "sonrojada", "avergonzada", "ruborizada", "no digas eso", "😳"),
                 SURPRISED to score(s, "¿¡", "¡¿", "wow", "no me lo esperaba", "sorprendida", "asombrada", "atónita", "😮"),
                 CONFUSED to score(s, "no entiendo", "confundida", "desconcertada", "no me queda claro", "¿como?", "que raro"),
-                AFFECTIONATE to score(s, "carino", "te quiero", "me importas", "cuídate", "cuidate", "con ternura", "💜", "❤️"),
-                PLAYFUL to score(s, "jeje", "😏", "te pille", "tramposo", "travieso", "bromista", "te tomo el pelo"),
+                AFFECTIONATE to score(s, "carino", "te quiero", "me importas", "cuidate", "con ternura", "te acompano", "te acompanaria", "te acompane", "acompanarte", "cuenta conmigo", "💜", "❤️"),
+                PLAYFUL to score(s, "jeje", "😏", "😉", "te pille", "tramposo", "travieso", "bromista", "te tomo el pelo", "te sigo el juego"),
                 AMUSED to score(s, "jaj", "jajaja", "😂", "🤣", "me hizo gracia", "me divierte", "que risa"),
-                HAPPY to score(s, "me alegra", "feliz", "contenta", "alegre", "genial", "perfecto", "bien!", "sonrio", "😊", "✨"),
+                HAPPY to score(s, "me alegra", "me alegro", "feliz", "contenta", "alegre", "genial", "perfecto", "que rico", "suena delicioso", "bien!", "sonrio", "😊", "✨"),
                 THINKING to score(s, "hmm", "interesante", "me pregunto", "que habra", "curioso", "dejame pensar", "reflexionar", "🤔"),
                 TIRED to score(s, "cansada", "tengo sueno", "agotada", "exhausta", "sonolienta", "me vence el sueno", "😴"),
                 SERIOUS to score(s, "importante", "en serio", "cuidado", "riesgo", "delicado", "preocupante", "debemos atender"),

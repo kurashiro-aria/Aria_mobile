@@ -75,7 +75,8 @@ internal object MoodReader {
             return ConversationMood.TIRED
         if (Regex("\\b(?:lo logre|funciono|salio bien|estoy feliz|estoy contento|me siento alegre|estoy alegre|me alegra|buenas noticias|ya termine)\\b").containsMatchIn(s))
             return ConversationMood.JOYFUL
-        if (Regex("\\b(?:(?:ja){2,}|(?:je){2,}|xd|es broma|te estoy molestando)\\b").containsMatchIn(s))
+        if (Regex("\\b(?:(?:ja){2,}|(?:je){2,}|xd|es broma|te estoy molestando)\\b|😉|😏")
+                .containsMatchIn(s))
             return ConversationMood.PLAYFUL
         if (Regex("\\b(?:me da verguenza|me sonrojo|que verguenza|estoy avergonzado|me da pena decirlo)\\b").containsMatchIn(s))
             return ConversationMood.SHY

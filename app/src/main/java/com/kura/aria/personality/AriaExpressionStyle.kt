@@ -71,6 +71,9 @@ internal object ExpressionResolver {
         val contextual = when {
             Regex("\\b(?:me gustas|eres linda|que guapa|te ves linda|un beso)\\b").containsMatchIn(text) ->
                 ExpressionStyle.FLIRTY
+            (current.contains("😉") || current.contains("😏")) &&
+                (ConversationPerspective.addressesAria(current) ||
+                    Regex("\\b\\w{4,}ndote\\b|\\baria\\b").containsMatchIn(text)) -> ExpressionStyle.FLIRTY
             mood == ConversationMood.PLAYFUL && recent && previous.style == ExpressionStyle.PLAYFUL &&
                 previous.turns >= 1 -> ExpressionStyle.TEASING
             mood == ConversationMood.PLAYFUL -> ExpressionStyle.PLAYFUL

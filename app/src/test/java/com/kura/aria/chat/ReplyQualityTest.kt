@@ -17,6 +17,16 @@ class ReplyQualityTest {
         assertFalse(ReplyQuality.repeats(prior, "Uf, busca sombra y toma algo frío. Hoy está pesado."))
     }
 
+    @Test fun sharingFoodWordsDoesNotDiscardAUsefulReply() {
+        assertFalse(ReplyQuality.echoesUser("sí,jamón y queso",
+            "Perfecto, un pan tostado con jamón y queso. Eso suena bien."))
+        assertTrue(ReplyQuality.echoesUser("eres tan linda", "Eres tan linda"))
+        val history = listOf(ChatMessage("Kura", "pan o algo", 1),
+            ChatMessage("ARIA", "¿Te gustaría pan y algo más?", 2))
+        val retry = ReplyQuality.retryPrompt(history, "sí,jamón y queso")
+        assertTrue(retry.contains("¿Te gustaría pan y algo más?"))
+    }
+
     @Test fun retryDoesNotPasteAriaPreviousAnswer() {
         val history = listOf(
             ChatMessage("Kura", "con mucha calor", 1),

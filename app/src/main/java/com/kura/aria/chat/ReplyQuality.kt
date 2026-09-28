@@ -2,6 +2,7 @@ package com.kura.aria.chat
 
 import com.kura.aria.personality.RoleplayInterpreter
 import com.kura.aria.personality.ConversationPerspective
+import com.kura.aria.personality.ConversationContext
 import com.kura.aria.memory.MemorySelector
 import java.text.Normalizer
 
@@ -27,18 +28,12 @@ internal object ReplyQuality {
     fun echoesUser(user: String, candidate: String): Boolean {
         val source = words(user)
         val candidateWords = words(candidate)
-        if (source.size >= 3 && source == candidateWords) return true
+        if (source.size >= 2 && source == candidateWords) return true
         val answer = candidateWords.take(32)
-        if (source.size < 5 || answer.size < 5) return false
-        val sourceSet = source.filterNot { it in stopWords }.toSet()
-        val answerSet = answer.filterNot { it in stopWords }.toSet()
-        if (sourceSet.size < 3) return false
-        val overlap = sourceSet.intersect(answerSet).size.toDouble() / sourceSet.size
-        val longSequence = source.size >= 6 && answer.size >= 6 &&
-            source.windowed(6).map { it.joinToString(" ") }.toSet().let { seq ->
-                answer.windowed(6).any { it.joinToString(" ") in seq }
+        if (source.size < 8 || answer.size < 8) return false
+        return source.windowed(8).map { it.joinToString(" ") }.toSet().let { seq ->
+                answer.windowed(8).any { it.joinToString(" ") in seq }
             }
-        return longSequence || overlap >= 0.72
     }
 
     /** A roleplay action remains Kura's even if the model surrounds the copy with new text. */
@@ -77,6 +72,12 @@ internal object ReplyQuality {
                 !RoleplayInterpreter.isPureAction(it.text) }
             ?.text
 
+        val previousAria = history.lastOrNull()?.takeIf { it.role == "ARIA" }?.text
+            ?.takeIf { it.contains('?') && (MemorySelector.isFollowUp(current) ||
+                ConversationContext.isQualifiedAssent(current) ||
+                ConversationContext.respondsToPriorTurn(current, it)) }
+            ?.takeUnless(::hasTranscript)?.let(ConversationContext::priorReference)
+
         append("Responde directamente al mensaje actual de Kura con una respuesta nueva y natural en español. ")
         append("No repitas ni reformules lo que Kura acaba de decir. ")
         append("No termines ofreciendo probar, intentar o hacer algo salvo que necesites una decisión real para continuar. ")
@@ -85,6 +86,10 @@ internal object ReplyQuality {
         RoleplayInterpreter.promptContext(current)?.let { append(it).append('\n') }
         if (!previousKura.isNullOrBlank()) {
             append("Contexto inmediato de Kura: ").append(previousKura.take(180)).append('\n')
+        }
+        if (!previousAria.isNullOrBlank()) {
+            append("Referencia a tu pregunta anterior, ya dicha: «").append(previousAria)
+                .append("». Responde al paso siguiente sin repetirla.\n")
         }
         append("Mensaje actual de Kura: ").append(current)
     }
@@ -97,11 +102,6 @@ internal object ReplyQuality {
             else -> "Se me cruzaron los cables un segundo. Voy directo al punto."
         }
     }
-
-    private val stopWords = setOf(
-        "a", "al", "algo", "con", "de", "del", "el", "en", "es", "esa", "ese", "esto", "la", "las",
-        "lo", "los", "me", "mi", "por", "que", "se", "si", "su", "te", "tu", "un", "una", "y", "ya"
-    )
 
     private fun normalize(text: String): String = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
         .replace(Regex("\\p{M}+"), "")

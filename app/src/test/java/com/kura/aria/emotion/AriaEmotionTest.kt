@@ -43,6 +43,20 @@ class AriaEmotionTest {
         assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromReply("Lo siento, te escucho."))
     }
 
+    @Test fun casualBanterAndWarmRepliesReachMoreThanNeutralOrHappy() {
+        val tease = "algo para comer, o terminaré comiéndote 😉"
+        val mood = MoodReader.forTurn(tease)
+        assertEquals(ConversationMood.PLAYFUL, mood)
+        val style = com.kura.aria.personality.ExpressionResolver.forTurn(tease, mood)
+        assertEquals(com.kura.aria.personality.ExpressionStyle.FLIRTY, style.style)
+        assertEquals(AriaEmotion.PLAYFUL, AriaEmotion.fromInteraction(mood, style, tease, "¿Un helado?"))
+        assertEquals(AriaEmotion.PLAYFUL, AriaEmotion.fromReply("¿Y si probamos esto? 😉"))
+        assertEquals(AriaEmotion.AFFECTIONATE, AriaEmotion.fromReply("Te acompaño a comprar."))
+        assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromReply("Me alegro de que hayas dormido bien."))
+        assertEquals(AriaEmotion.AMUSED, AriaEmotion.fromMood(ConversationMood.CURIOUS, "¿Qué pasó?", "Jajaja, buena esa."))
+        assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromReply("De acuerdo."))
+    }
+
     @Test fun spanishSynonymsSelectEveryExpressivePortrait() {
         val examples = mapOf(
             AriaEmotion.HAPPY to listOf("Estoy contenta", "Me siento alegre"),

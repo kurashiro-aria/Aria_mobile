@@ -23,12 +23,16 @@ internal object ConversationContext {
         val expression = ExpressionResolver.forTurn(current, mood, state.expression, state.updatedAt,
             preferences = stylePreferences)
         val greeting = isStandaloneGreeting(RoleplayInterpreter.spokenText(current))
+        val lastAria = history.lastOrNull()?.takeIf { it.role == "ARIA" }?.text
         val directFollowUp = !greeting && (MemorySelector.isFollowUp(current) || isQualifiedAssent(current) ||
-            ConversationPerspective.shortClarification(current, history.lastOrNull()?.takeIf { it.role == "ARIA" }?.text))
+            ConversationPerspective.shortClarification(current, lastAria) ||
+            respondsToPriorTurn(current, lastAria))
         val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
         val currentTerms = MemorySelector.keywords(RoleplayInterpreter.spokenText(current))
         val lastTerms = lastUser?.let { MemorySelector.keywords(RoleplayInterpreter.spokenText(it.text)) }.orEmpty()
-        val lexicalContinuation = !greeting && lastUser != null && currentTerms.intersect(lastTerms).isNotEmpty()
+        val ariaTerms = lastAria?.let(MemorySelector::keywords).orEmpty()
+        val lexicalContinuation = !greeting && lastUser != null &&
+            (currentTerms.intersect(lastTerms).isNotEmpty() || currentTerms.intersect(ariaTerms).isNotEmpty())
         val conversationalContinuation = !greeting && !returnsToTopic && lastUser != null &&
             history.takeLast(4).any { it.role == "ARIA" } &&
             (directFollowUp || lexicalContinuation)
@@ -53,6 +57,8 @@ internal object ConversationContext {
             if (conversationalContinuation) {
                 append("Este mensaje continúa el intercambio reciente: sigue el hilo sin repetir ofertas. ")
             }
+            if (isQualifiedAssent(current)) append("Kura ya aceptó y precisó su elección; incorpórala sin volver a preguntarla. ")
+            else if (respondsToPriorTurn(current, lastAria)) append("Es una reacción o precisión a tu último turno; tenla en cuenta antes de seguir. ")
             append("Pregunta solo si necesitas un dato concreto.\n")
             PersonalityEngine.turnGuidance(mood, expression).takeIf(String::isNotBlank)?.let {
                 append("TONO DE ESTE TURNO: ").append(it).append('\n')
@@ -100,6 +106,23 @@ internal object ConversationContext {
         val normalized = Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFD)
             .replace(Regex("\\p{M}+"), "").trim()
         return normalized.matches(Regex("^(?:si|claro|exacto|vale|ok|dale|por supuesto)(?:[,;:]\\s*|\\s+).{1,80}[.!]?$"))
+    }
+
+    /** A short reaction or answer can refer to ARIA's proposal without repeating its nouns. */
+    fun respondsToPriorTurn(current: String, previousAria: String?): Boolean {
+        if (previousAria.isNullOrBlank()) return false
+        val text = Normalizer.normalize(RoleplayInterpreter.spokenText(current).lowercase(Locale.ROOT), Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"), "").trim().trimStart('¿', '¡')
+        if (text.length > 110 || isStandaloneGreeting(current)) return false
+        if (Regex("^(?:suena|se ve|me gusta|me encanta|prefiero|mejor|perfecto|genial|que rico|que bueno|delicioso|tentador)\\b")
+                .containsMatchIn(text)) return true
+        val clarification = priorQuestion(previousAria)?.let { question ->
+            Normalizer.normalize(question.lowercase(Locale.ROOT), Normalizer.Form.NFD)
+                .replace(Regex("\\p{M}+"), "")
+        }.orEmpty()
+        return Regex("\\b(?:en que sentido|que tipo|que cosa|que necesitas|cual de|como que)\\b")
+            .containsMatchIn(clarification) && text.split(Regex("\\s+")).size <= 12 &&
+            !Regex("^(?:hoy|ayer|manana|ahora hablemos|cambiando de tema)\\b").containsMatchIn(text)
     }
 
     private fun memoryLine(memory: Memory): String = when (memory.category) {
