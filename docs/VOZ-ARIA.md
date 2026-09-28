@@ -1,5 +1,7 @@
 # Preparación de voz para ARIA
 
+> Actualización 28/09/2026: la referencia actual de Kura es **Bella de Kokoro** como inspiración estética, sin clonar su voz. La selección previa de Gaby/ElevenLabs que sigue abajo es histórica. La investigación local vigente está en [QWEN3-TTS-ESTUDIO-ARIA.md](QWEN3-TTS-ESTUDIO-ARIA.md); todavía no se ha elegido motor ni integrado voz en la APK.
+
 Estado: diseño para una versión posterior a 0.2.36.9. La compilación actual sigue siendo solo texto.
 
 ## Voz elegida por Kura
