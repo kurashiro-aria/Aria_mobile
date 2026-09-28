@@ -2,6 +2,19 @@
 
 Estado: diseño para una versión posterior a 0.2.36.9. La compilación actual sigue siendo solo texto.
 
+## Voz elegida por Kura
+
+El 22/09/2026 Kura aprobó provisionalmente **Gaby** tras probarla en **ElevenLabs Eleven v3**. El ajuste de referencia anotado fue `pvc_sp100_s50_sb75_v3`; ese nombre no sustituye al identificador `voice_id` que exige la API. Los archivos `ARIA_prueba_Gaby_v3.txt` y `ARIA_Gaby_prueba_emocional_coqueta_v3.txt` eran guiones para pegar en ElevenLabs, no archivos de voz instalables.
+
+Hay dos rutas técnicas, ambas compatibles con el mismo GGUF y la misma personalidad de ARIA:
+
+| Ruta | Sonido | Conexión y datos | Requisito |
+| --- | --- | --- | --- |
+| Gaby exacta mediante API de ElevenLabs | Conserva la voz seleccionada y las etiquetas expresivas de Eleven v3 | Envía el texto final de ARIA al servicio, requiere Internet y créditos/API | `voice_id` de Gaby, cuenta y credencial protegida fuera de la APK. Nunca incluir una clave de API en el repositorio o APK. |
+| Voz local de Android o futuro TTS local | Aproximación a Gaby, no idéntica | Puede funcionar sin red y sin transmitir respuestas | Elegir y escuchar una voz española instalada que no requiera red; ajustar matices con emoción/estilo. |
+
+El plan anterior había asumido una voz local. **La selección de Gaby es la referencia principal de identidad vocal**: antes de llamar a otra voz “la voz de ARIA”, comparar muestras con Gaby en el teléfono de Kura. La síntesis exacta de ElevenLabs no equivale a exportar un modelo para ejecutarlo dentro de la APK. Si más adelante se habilita la ruta en línea, debe ser explícita y opcional, con reproducción interrumpible y una forma segura de gestionar la credencial. El reconocimiento de Kura puede continuar siendo local en cualquiera de las dos rutas.
+
 ## Objetivo y límites
 
 - Mantener el GGUF, Identity Core, memoria, emoción y ExpressionStyle como fuente de la respuesta. La voz pronuncia la respuesta visible que ya aprobó `VisibleReplyFilter` y pasó por `ReplyQuality`; no genera otra respuesta ni lee razonamiento oculto.
