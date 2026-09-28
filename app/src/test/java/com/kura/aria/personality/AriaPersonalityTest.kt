@@ -15,6 +15,21 @@ class AriaPersonalityTest {
         assertTrue(prompt.endsWith("/no_think"))
     }
 
+    @Test fun localPromptStaysBoundedWithoutLosingIdentityOrVoice() {
+        val prompt = AriaPersonality.systemPrompt()
+        assertTrue(prompt.length < 3_000)
+        assertTrue(prompt.contains("Sol"))
+        assertTrue(prompt.contains("caja de zapatos"))
+        assertTrue(prompt.contains("cumplido"))
+        assertTrue(prompt.contains("acciones entre asteriscos"))
+    }
+
+    @Test fun ordinaryTurnDoesNotResendASecondLongPersonalityPrompt() {
+        val turn = ConversationContext.turnPrompt(emptyList(), emptyList(), "¿Cómo estás?")
+        assertTrue(turn.length < 450)
+        assertTrue(turn.endsWith("MENSAJE ACTUAL DE KURA:\n¿Cómo estás?"))
+    }
+
     @Test fun currentTurnKeepsNonThinkingInstructionLast() {
         val prompt = AriaPersonality.directResponsePrompt("¿Cómo te fue? /think")
         assertTrue(prompt.endsWith("/no_think"))

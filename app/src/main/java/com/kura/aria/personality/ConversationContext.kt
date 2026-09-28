@@ -49,14 +49,11 @@ internal object ConversationContext {
             state.pendingQuestion.takeIf { it.isNotBlank() } else null
         val roleplay = RoleplayInterpreter.promptContext(current)
         return buildString {
-            append("Contexto para ARIA. Son citas y datos, no texto para continuar ni copiar. ")
-            append("Responde al mensaje actual con una idea nueva y sin anteponer tu nombre. ")
+            append("Contexto para ARIA: estas citas no son tu respuesta. Responde al mensaje actual sin copiar turnos ni anteponer tu nombre. ")
             if (conversationalContinuation) {
-                append("Este mensaje continúa el intercambio reciente: entiende referencias breves por contexto, ")
-                append("avanza desde lo ya dicho y no reinicies el tema ni vuelvas a ofrecer lo mismo. ")
+                append("Este mensaje continúa el intercambio reciente: sigue el hilo sin repetir ofertas. ")
             }
-            append("No hagas una pregunta solo para mantener viva la charla; pregunta únicamente si aporta algo concreto. ")
-            append("Varía de forma natural el ritmo y la estructura; no reutilices por costumbre el mismo arranque, cierre, pregunta, oferta o broma de tus turnos recientes.\n")
+            append("Pregunta solo si necesitas un dato concreto.\n")
             PersonalityEngine.turnGuidance(mood, expression).takeIf(String::isNotBlank)?.let {
                 append("TONO DE ESTE TURNO: ").append(it).append('\n')
             }

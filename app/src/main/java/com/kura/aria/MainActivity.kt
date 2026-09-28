@@ -60,6 +60,7 @@ class MainActivity : AppCompatActivity() {
     private var busy = false
     private var lastLoadMs: Long? = null
     private var lastGeneration: GenerationStats? = null
+    private var lastPreparationMs: Long? = null
     private var lastContextChars = 0
     private var lastMemoryCount = 0
     private var repeatedReplies = 0
@@ -548,6 +549,7 @@ class MainActivity : AppCompatActivity() {
         val reply = messageView("ARIA", "Preparando respuesta…"); conversation.addView(reply); scrollToBottom()
         uiScope.launch {
             try {
+                val preparationStarted = SystemClock.elapsedRealtime()
                 val previousHistory = withContext(Dispatchers.IO) {
                     val previous = chatHistory.readAll()
                     chatHistory.append("Kura", message)
@@ -562,6 +564,7 @@ class MainActivity : AppCompatActivity() {
                         stylePreferences)
                 }
                 lastContextChars = modelMessage.length
+                lastPreparationMs = SystemClock.elapsedRealtime() - preparationStarted
                 val previewExpression: (String) -> Unit = { visible ->
                     showPortrait(AriaEmotion.fromInteraction(turnMood, turnExpression, message, visible))
                 }
@@ -641,6 +644,8 @@ class MainActivity : AppCompatActivity() {
         val details = buildString {
             append("Carga del modelo y personalidad: ")
             append(lastLoadMs?.let { "${it / 1000.0} s" } ?: "sin medir")
+            append("\nPreparación del turno: ")
+            append(lastPreparationMs?.let { "${it / 1000.0} s" } ?: "sin medir")
             append("\nPrimera palabra visible: ")
             append(generation?.firstVisibleMs?.let { "${it / 1000.0} s" } ?: "sin medir")
             append("\nRespuesta completa: ")
