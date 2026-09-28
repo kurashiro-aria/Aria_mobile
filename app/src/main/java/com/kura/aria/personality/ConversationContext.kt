@@ -23,7 +23,8 @@ internal object ConversationContext {
         val expression = ExpressionResolver.forTurn(current, mood, state.expression, state.updatedAt,
             preferences = stylePreferences)
         val greeting = isStandaloneGreeting(RoleplayInterpreter.spokenText(current))
-        val directFollowUp = !greeting && (MemorySelector.isFollowUp(current) || isQualifiedAssent(current))
+        val directFollowUp = !greeting && (MemorySelector.isFollowUp(current) || isQualifiedAssent(current) ||
+            ConversationPerspective.shortClarification(current, history.lastOrNull()?.takeIf { it.role == "ARIA" }?.text))
         val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
         val currentTerms = MemorySelector.keywords(RoleplayInterpreter.spokenText(current))
         val lastTerms = lastUser?.let { MemorySelector.keywords(RoleplayInterpreter.spokenText(it.text)) }.orEmpty()
@@ -59,6 +60,7 @@ internal object ConversationContext {
             PersonalityEngine.turnGuidance(mood, expression).takeIf(String::isNotBlank)?.let {
                 append("TONO DE ESTE TURNO: ").append(it).append('\n')
             }
+            ConversationPerspective.guidance(current)?.let { append(it).append('\n') }
             if (recentUser.isNotEmpty()) {
                 append("\nLO QUE KURA DIJO ANTES:\n")
                 recentUser.forEach { append(line(it, 140)).append('\n') }

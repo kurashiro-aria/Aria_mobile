@@ -56,4 +56,13 @@ class ReplyQualityTest {
         assertTrue(ReplyQuality.needsRetry(user, null, reply))
         assertFalse(ReplyQuality.copiesKuraAction(user, "*me acomodo el cabello* Eso me tomó por sorpresa."))
     }
+
+    @Test fun retryPreservesWhoIsAddressedInBriefClarification() {
+        val history = listOf(ChatMessage("Kura", "mmm...verte bailar?", 1L),
+            ChatMessage("ARIA", "¿A qué te refieres?", 2L))
+        val prompt = ReplyQuality.retryPrompt(history, "tú con ese sombrero")
+        assertTrue(prompt.contains("REFERENTES:"))
+        assertTrue(prompt.contains("mmm...verte bailar?"))
+        assertFalse(prompt.contains("¿A qué te refieres?"))
+    }
 }

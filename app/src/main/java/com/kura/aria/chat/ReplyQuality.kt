@@ -1,6 +1,7 @@
 package com.kura.aria.chat
 
 import com.kura.aria.personality.RoleplayInterpreter
+import com.kura.aria.personality.ConversationPerspective
 import com.kura.aria.memory.MemorySelector
 import java.text.Normalizer
 
@@ -67,7 +68,10 @@ internal object ReplyQuality {
         // Keep enough of Kura's prior turn to resolve short replies such as "sí" or "exacto",
         // but never paste ARIA's previous answer into the retry prompt: doing so can make the
         // model copy the very response that triggered the retry.
-        val previousKura = history.asReversed().takeIf { MemorySelector.isFollowUp(current) }
+        val previousKura = history.asReversed().takeIf {
+            MemorySelector.isFollowUp(current) || ConversationPerspective.shortClarification(current,
+                history.lastOrNull()?.takeIf { message -> message.role == "ARIA" }?.text)
+        }
             .orEmpty()
             .firstOrNull { it.role == "Kura" && it.text.trim() != current.trim() &&
                 !RoleplayInterpreter.isPureAction(it.text) }
@@ -77,6 +81,7 @@ internal object ReplyQuality {
         append("No repitas ni reformules lo que Kura acaba de decir. ")
         append("No termines ofreciendo probar, intentar o hacer algo salvo que necesites una decisión real para continuar. ")
         append("No repitas una propuesta ni una pregunta anterior. No antepongas ARIA:.\n")
+        ConversationPerspective.guidance(current)?.let { append(it).append('\n') }
         RoleplayInterpreter.promptContext(current)?.let { append(it).append('\n') }
         if (!previousKura.isNullOrBlank()) {
             append("Contexto inmediato de Kura: ").append(previousKura.take(180)).append('\n')
