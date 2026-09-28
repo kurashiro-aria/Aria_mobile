@@ -69,6 +69,8 @@ class MainActivity : AppCompatActivity() {
     private var loadingOverlay: FrameLayout? = null
     private var loadingTimer: Job? = null
     private var loadingProgress: ProgressBar? = null
+    private var loadingStage: TextView? = null
+    private var loadingModelLabel: TextView? = null
     private var wakeButton: Button? = null
 
     private data class GenerationStats(val firstTokenMs: Long?, val firstVisibleMs: Long?, val totalMs: Long, val chunks: Int) {
@@ -224,8 +226,11 @@ class MainActivity : AppCompatActivity() {
         status.setTextColor(Color.parseColor(if (ready) PURPLE else MUTED))
     }
 
-    private fun showLoadingScreen() {
-        if (loadingOverlay != null) return
+    private fun showLoadingScreen(modelName: String? = savedModel()?.name) {
+        if (loadingOverlay != null) {
+            loadingModelLabel?.text = modelName.orEmpty()
+            return
+        }
         val screen = findViewById<View>(android.R.id.content) as FrameLayout
         val overlay = FrameLayout(this).apply { setBackgroundColor(Color.parseColor(BG)) }
         overlay.addView(ImageView(this).apply {
@@ -233,6 +238,22 @@ class MainActivity : AppCompatActivity() {
             scaleType = ImageView.ScaleType.CENTER_CROP
             contentDescription = "ARIA duerme mientras se carga su cerebro"
         }, FrameLayout.LayoutParams(-1, -1))
+        val modelLabel = TextView(this).apply {
+            text = modelName.orEmpty()
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.END
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            background = rounded("#AA15101E", 8f)
+        }
+        loadingModelLabel = modelLabel
+        overlay.addView(modelLabel, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(24)
+            marginEnd = dp(16)
+            width = resources.displayMetrics.widthPixels / 2
+        })
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -252,6 +273,13 @@ class MainActivity : AppCompatActivity() {
             contentDescription = "Carga del cerebro de ARIA"
         }
         controls.addView(loadingProgress, LinearLayout.LayoutParams(-1, dp(12)))
+        loadingStage = TextView(this).apply {
+            text = "Preparando el cerebro"
+            textSize = 15f
+            setTextColor(Color.parseColor(TEXT))
+            gravity = Gravity.CENTER
+        }
+        controls.addView(loadingStage, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
         wakeButton = Button(this).apply {
             text = "DESPERTAR"
             textSize = 17f
@@ -268,10 +296,20 @@ class MainActivity : AppCompatActivity() {
         loadingTimer?.cancel()
         loadingTimer = uiScope.launch {
             while (isActive && loadingOverlay === overlay) {
-                val modelLoading = ::engine.isInitialized && engine.state.value is InferenceEngine.State.LoadingModel
-                loadingProgress?.isIndeterminate = !modelLoading
-                if (modelLoading) loadingProgress?.progress =
-                    (engine.modelLoadProgress.coerceIn(0f, 1f) * 1000).toInt()
+                val state = if (::engine.isInitialized) engine.state.value else null
+                val tensorProgress = if (state is InferenceEngine.State.LoadingModel)
+                    engine.modelLoadProgress.coerceIn(0f, 1f) else 0f
+                // llama.cpp reports tensor mapping/loading only. Context creation and
+                // personality decoding have no measurable total; never assign them a percentage.
+                val loadingTensors = state is InferenceEngine.State.LoadingModel && tensorProgress < 1f
+                loadingProgress?.isIndeterminate = !loadingTensors
+                if (loadingTensors) loadingProgress?.progress = (tensorProgress * 1000).toInt()
+                loadingStage?.text = when {
+                    loadingTensors -> "Cargando el GGUF"
+                    state is InferenceEngine.State.LoadingModel -> "Preparando el contexto"
+                    state is InferenceEngine.State.ProcessingSystemPrompt -> "Preparando la personalidad"
+                    else -> "Preparando el cerebro"
+                }
                 delay(200)
             }
         }
@@ -284,6 +322,7 @@ class MainActivity : AppCompatActivity() {
         if (completed) {
             loadingProgress?.isIndeterminate = false
             loadingProgress?.progress = 1000
+            loadingStage?.text = "ARIA está lista"
             wakeButton?.visibility = View.VISIBLE
             return
         }
@@ -296,6 +335,8 @@ class MainActivity : AppCompatActivity() {
         (overlay.parent as? FrameLayout)?.removeView(overlay)
         loadingOverlay = null
         loadingProgress = null
+        loadingStage = null
+        loadingModelLabel = null
         wakeButton = null
         window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
         if (modelLoaded) scheduleInitiative()
@@ -411,7 +452,7 @@ class MainActivity : AppCompatActivity() {
             if (engine.state.value !is InferenceEngine.State.Initialized) withContext(Dispatchers.IO) { engine.cleanUp() }
             activeModelName = null
             check(engine.state.value is InferenceEngine.State.Initialized) { "Motor no disponible" }
-            showLoadingScreen()
+            showLoadingScreen(model.name)
             setStatus("○ Cargando ${model.name}", false)
             val started = SystemClock.elapsedRealtime()
             engine.loadModel(model.absolutePath)
@@ -474,7 +515,7 @@ class MainActivity : AppCompatActivity() {
                 target
             }
             setStatus("○ Cargando cerebro", false)
-            showLoadingScreen()
+            showLoadingScreen(model.name)
             val loadStarted = SystemClock.elapsedRealtime()
             engine.loadModel(model.absolutePath)
             engine.setSystemPrompt(AriaPersonality.systemPrompt())
