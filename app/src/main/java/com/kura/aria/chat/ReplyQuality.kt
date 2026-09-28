@@ -77,6 +77,7 @@ internal object ReplyQuality {
                 ConversationContext.isQualifiedAssent(current) ||
                 ConversationContext.respondsToPriorTurn(current, it)) }
             ?.takeUnless(::hasTranscript)?.let(ConversationContext::priorReference)
+            ?.takeUnless { normalize(it).matches(Regex("[¿?¡!\\s]*(?:a que te refieres|que quieres decir|como asi)[¿?¡!\\s]*")) }
 
         append("Responde directamente al mensaje actual de Kura con una respuesta nueva y natural en español. ")
         append("No repitas ni reformules lo que Kura acaba de decir. ")
