@@ -89,6 +89,8 @@ class MainActivity : AppCompatActivity() {
         private const val CHAT_PURPLE = "#6F3CC3"
         private const val TEXT = "#F5F1FA"
         private const val MUTED = "#AAA0B8"
+        // The engine is a process singleton; remember what it actually loaded across Activity recreation.
+        private var activeModelName: String? = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -177,8 +179,12 @@ class MainActivity : AppCompatActivity() {
     private fun showAriaMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
             menu.add("Estado de ARIA").isEnabled = false
-            menu.add(if (modelLoaded) "Cerebro: conectado" else "Cerebro: desconectado").isEnabled = false
+            val selected = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null)
+            menu.add(if (modelLoaded) "Cerebro actual: ${activeModelName ?: selected ?: "desconocido"}"
+                else "Cerebro: desconectado").isEnabled = false
+            if (!modelLoaded && selected != null) menu.add("Último seleccionado: $selected").isEnabled = false
             if (!modelLoaded && savedModel() != null) menu.add("Reconectar cerebro")
+            if (ModelSelection.installed(File(filesDir, "models")).isNotEmpty()) menu.add("Elegir cerebro instalado")
             menu.add("Cambiar / cargar cerebro")
             menu.add("Memoria")
             menu.add(if (initiativeEnabled()) "Iniciativa: activada" else "Iniciativa: desactivada")
@@ -191,6 +197,7 @@ class MainActivity : AppCompatActivity() {
             setOnMenuItemClickListener {
                 when (it.title.toString()) {
                     "Cambiar / cargar cerebro" -> chooseModel()
+                    "Elegir cerebro instalado" -> chooseInstalledModel()
                     "Reconectar cerebro" -> uiScope.launch { restoreBrainIfNeeded() }
                     "Memoria" -> showMemoryDialog()
                     "Iniciativa: activada", "Iniciativa: desactivada" -> {
@@ -300,13 +307,19 @@ class MainActivity : AppCompatActivity() {
         busy = true; loadBrain.isEnabled = false; send.isEnabled = false
         try {
             val state = withTimeout(30_000) { engine.state.first { it !is InferenceEngine.State.Uninitialized && it !is InferenceEngine.State.Initializing } }
-            if (state is InferenceEngine.State.ModelReady) {
-                modelLoaded = true; setStatus("● Activa", true)
+            val model = savedModel()
+            if (model == null) {
+                modelLoaded = false
+                val missing = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null)
+                setStatus(if (missing == null) "○ Sin cerebro" else "○ Cerebro anterior no disponible", false)
+                if (missing != null) toast("No encuentro $missing. Elige un cerebro instalado o importa el archivo.")
             } else {
-                val model = savedModel()
-                if (model == null) { modelLoaded = false; setStatus("○ Sin cerebro", false) }
-                else {
+                if (state is InferenceEngine.State.ModelReady && activeModelName == model.name) {
+                    modelLoaded = true; setStatus("● Activa · ${model.name}", true)
+                } else {
                     if (state is InferenceEngine.State.Error) { setStatus("○ Reiniciando motor", false); withContext(Dispatchers.IO) { engine.cleanUp() } }
+                    if (engine.state.value is InferenceEngine.State.ModelReady) withContext(Dispatchers.IO) { engine.cleanUp() }
+                    activeModelName = null
                     check(engine.state.value is InferenceEngine.State.Initialized) { "Motor en estado ${engine.state.value.javaClass.simpleName}; reinicia ARIA." }
                     setStatus("○ Reconectando", false)
                     val loadStarted = SystemClock.elapsedRealtime()
@@ -314,7 +327,8 @@ class MainActivity : AppCompatActivity() {
                     engine.setSystemPrompt(AriaPersonality.systemPrompt())
                     lastLoadMs = SystemClock.elapsedRealtime() - loadStarted
                     if (getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null) == null) rememberModel(model)
-                    modelLoaded = true; setStatus("● Activa", true)
+                    activeModelName = model.name
+                    modelLoaded = true; setStatus("● Activa · ${model.name}", true)
                     if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.restored)
                 }
             }
@@ -332,7 +346,8 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (::engine.isInitialized && !busy && savedModel() != null &&
-            (!modelLoaded || engine.state.value !is InferenceEngine.State.ModelReady)) {
+            (!modelLoaded || engine.state.value !is InferenceEngine.State.ModelReady ||
+                activeModelName != savedModel()?.name)) {
             uiScope.launch { restoreBrainIfNeeded() }
         } else if (::engine.isInitialized && modelLoaded && loadingOverlay == null) {
             scheduleInitiative()
@@ -359,15 +374,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun savedModel(): File? {
-        val modelDir = File(filesDir, "models")
-        val name = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null)
-            ?: return modelDir.listFiles()?.filter {
-                it.isFile && it.canRead() && it.name.endsWith(".gguf", ignoreCase = true) && !it.name.startsWith("backup-")
-            }?.singleOrNull()
-        if (name.contains('/') || name.contains('\\')) return null
-        val file = File(modelDir, name); return file.takeIf { it.isFile && it.canRead() }
-    }
+    private fun savedModel(): File? = ModelSelection.resolve(File(filesDir, "models"),
+        getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null))
 
     private fun rememberModel(model: File) {
         check(getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(LAST_MODEL, model.name).commit()) { "No pude guardar el cerebro seleccionado." }
@@ -379,6 +387,46 @@ class MainActivity : AppCompatActivity() {
             addCategory(Intent.CATEGORY_OPENABLE); type = "application/octet-stream"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/octet-stream", "application/x-gguf", "*/*"))
         }, PICK_GGUF)
+    }
+
+    private fun chooseInstalledModel() {
+        if (busy || !::engine.isInitialized) return
+        val models = ModelSelection.installed(File(filesDir, "models"))
+        if (models.isEmpty()) { toast("No hay cerebros instalados"); return }
+        val selected = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null)
+        val labels = models.map { model ->
+            "${if (model.name == selected) "✓ " else ""}${model.name} · ${model.length() / (1024 * 1024)} MiB"
+        }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("Elegir cerebro instalado")
+            .setItems(labels) { _, index -> uiScope.launch { loadInstalledModel(models[index]) } }
+            .setNegativeButton("Cancelar", null).show()
+    }
+
+    private suspend fun loadInstalledModel(model: File) {
+        if (busy || !model.isFile || !model.canRead()) return
+        if (modelLoaded && activeModelName == model.name && engine.state.value is InferenceEngine.State.ModelReady) return
+        busy = true; modelLoaded = false; loadBrain.isEnabled = false; send.isEnabled = false
+        try {
+            if (engine.state.value !is InferenceEngine.State.Initialized) withContext(Dispatchers.IO) { engine.cleanUp() }
+            activeModelName = null
+            check(engine.state.value is InferenceEngine.State.Initialized) { "Motor no disponible" }
+            showLoadingScreen()
+            setStatus("○ Cargando ${model.name}", false)
+            val started = SystemClock.elapsedRealtime()
+            engine.loadModel(model.absolutePath)
+            engine.setSystemPrompt(AriaPersonality.systemPrompt())
+            rememberModel(model)
+            lastLoadMs = SystemClock.elapsedRealtime() - started
+            activeModelName = model.name
+            modelLoaded = true; setStatus("● Activa · ${model.name}", true)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { setStatus("○ Error de cerebro", false); toast(e.message ?: "No se pudo cargar el cerebro") }
+        finally {
+            hideLoadingScreen(modelLoaded)
+            busy = false; loadBrain.isEnabled = true
+            loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
+            send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
+        }
     }
 
     @Deprecated("Retained for this alpha")
@@ -402,6 +450,7 @@ class MainActivity : AppCompatActivity() {
             setStatus("○ Importando cerebro", false)
             withTimeout(30_000) { engine.state.first { it is InferenceEngine.State.Initialized || it is InferenceEngine.State.ModelReady || it is InferenceEngine.State.Error } }
             if (engine.state.value !is InferenceEngine.State.Initialized) withContext(Dispatchers.IO) { engine.cleanUp() }
+            activeModelName = null
             val model = withContext(Dispatchers.IO) {
                 val dir = File(filesDir, "models").apply { check(isDirectory || mkdirs()) }
                 val partial = File.createTempFile("import-", ".part", dir); temporary = partial
@@ -433,7 +482,8 @@ class MainActivity : AppCompatActivity() {
             modelCommitted = true
             replaced?.delete()
             replaced = null
-            modelLoaded = true; setStatus("● Activa", true)
+            activeModelName = model.name
+            modelLoaded = true; setStatus("● Activa · ${model.name}", true)
             if (chatHistory.readAll().isEmpty()) aria(AriaPersonality.ready)
         } catch (e: TimeoutCancellationException) { setStatus("○ Motor sin responder", false) }
         catch (e: CancellationException) { throw e }
@@ -598,7 +648,8 @@ class MainActivity : AppCompatActivity() {
             append("\nVelocidad aproximada: ")
             append(generation?.approximateTokensPerSecond?.let { String.format(java.util.Locale.US, "%.1f tokens/s", it) }
                 ?: "sin medir")
-            append("\nCerebro: ").append(savedModel()?.name ?: "sin cargar")
+            append("\nCerebro activo: ").append(if (modelLoaded) activeModelName ?: "desconocido" else "sin cargar")
+            append("\nÚltimo seleccionado: ").append(getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null) ?: "ninguno")
             append("\nContexto del último turno: ").append(lastContextChars).append(" caracteres")
             append("\nRecuerdos recuperados: ").append(lastMemoryCount)
             append("\nEstado social: ").append(conversationManager.snapshot().socialMood.name)
