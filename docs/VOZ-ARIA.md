@@ -37,11 +37,12 @@ Para entrada, usar `SpeechRecognizer.isOnDeviceRecognitionAvailable()` y luego `
 
 ## Secuencia de entrega
 
-1. Prototipo en teléfono real: comprobar voz española local, reconocedor local, consumo de RAM con el GGUF residente y tiempo desde pulsar hasta transcripción/reproducción. Sin cambio de firma, applicationId ni datos existentes.
-2. Añadir interfaces y un botón de micrófono opcional. Dictado local a texto editable, permisos en contexto, cancelación y mensajes de error claros. Probar permiso denegado, servicio ausente, silencio, interrupción y cambio de actividad.
-3. Añadir reproducción opcional de respuestas finales con parada manual. Evitar leer el texto provisional, las acciones de Kura, citas del historial o reintentos descartados. Pausar/reducir reproducción mientras escucha el micrófono para impedir que ARIA se transcriba a sí misma.
-4. Usar `VoiceDirection` para variaciones discretas según emoción/estilo, calibradas en español y verificadas con varias voces instaladas. Mantener texto, imagen y voz sincronizados por ID de turno, cancelando eventos tardíos de un turno anterior.
-5. Solo si la calidad local del sistema es insuficiente, evaluar motores de voz empaquetados o descargables con licencia, tamaño y memoria medidos. No acoplar identidad ni recuerdos a esos motores.
+1. Prototipo de voz local en PC con `scripts/voice_openvoice_v2.py`. Requiere una grabación de referencia autorizada, los checkpoints oficiales de OpenVoice V2, MeloTTS y PyTorch según [las instrucciones del proyecto](https://github.com/myshell-ai/OpenVoice/blob/main/docs/USAGE.md). Ejemplo desde la raíz del repositorio: `python scripts/voice_openvoice_v2.py --reference /ruta/voz-autorizada.wav --text "Hola, Kura. ¿Cómo estás?" --output /ruta/aria-prueba.wav --checkpoints /ruta/checkpoints_v2`. La salida y la grabación quedan fuera del repositorio. Esta prueba aún no hace hablar a la APK y no garantiza el timbre exacto de Gaby.
+2. Prototipo en teléfono real: comprobar voz española local, reconocedor local, consumo de RAM con el GGUF residente y tiempo desde pulsar hasta transcripción/reproducción. Sin cambio de firma, applicationId ni datos existentes.
+3. Añadir interfaces y un botón de micrófono opcional. Dictado local a texto editable, permisos en contexto, cancelación y mensajes de error claros. Probar permiso denegado, servicio ausente, silencio, interrupción y cambio de actividad.
+4. Añadir reproducción opcional de respuestas finales con parada manual. Evitar leer el texto provisional, las acciones de Kura, citas del historial o reintentos descartados. Pausar/reducir reproducción mientras escucha el micrófono para impedir que ARIA se transcriba a sí misma.
+5. Usar `VoiceDirection` para variaciones discretas según emoción/estilo, calibradas en español y verificadas con varias voces instaladas. Mantener texto, imagen y voz sincronizados por ID de turno, cancelando eventos tardíos de un turno anterior.
+6. Solo si la calidad local del sistema es insuficiente, evaluar motores de voz empaquetados o descargables con licencia, tamaño y memoria medidos. No acoplar identidad ni recuerdos a esos motores.
 
 ## Criterios de aceptación
 
