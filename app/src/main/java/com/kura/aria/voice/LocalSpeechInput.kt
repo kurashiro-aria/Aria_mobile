@@ -7,20 +7,24 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
-/** Dictation stays on the phone and returns editable text to the chat input. */
+/** Prefers on-device dictation; uses the phone's configured service when unavailable. */
 class LocalSpeechInput(
     context: Context,
     private val onText: (String) -> Unit,
     private val onFinished: (String?) -> Unit,
 ) {
-    private val recognizer: SpeechRecognizer
+    private var recognizer: SpeechRecognizer
     private var closed = false
+    private var usingOnDevice: Boolean
+    val onDevice: Boolean get() = usingOnDevice
 
     init {
-        require(SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
-            "Este teléfono no tiene reconocimiento de voz local disponible"
+        usingOnDevice = SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+        require(usingOnDevice || SpeechRecognizer.isRecognitionAvailable(context)) {
+            "No hay servicio de reconocimiento de voz instalado en el teléfono"
         }
-        recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+        recognizer = if (usingOnDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            else SpeechRecognizer.createSpeechRecognizer(context)
         recognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) = Unit
             override fun onBeginningOfSpeech() = Unit
@@ -42,7 +46,29 @@ class LocalSpeechInput(
             }
 
             override fun onError(error: Int) {
-                if (!closed) onFinished("No pude reconocer la voz en el dispositivo (código $error)")
+                if (closed) return
+                if (usingOnDevice && SpeechRecognizer.isRecognitionAvailable(context) &&
+                    (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+                        error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)) {
+                    recognizer.destroy()
+                    usingOnDevice = false
+                    recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+                    recognizer.setRecognitionListener(this)
+                    start()
+                    return
+                }
+                onFinished(when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
+                        "No escuché palabras claras. Inténtalo de nuevo"
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                        "Activa el permiso de micrófono de ARIA en Android"
+                    SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
+                    SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
+                        "Instala el paquete de reconocimiento de español en el teléfono"
+                    SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+                        "El reconocimiento del teléfono necesita conexión o idioma sin conexión"
+                    else -> "No pude reconocer tu voz (código $error)"
+                })
             }
         })
     }

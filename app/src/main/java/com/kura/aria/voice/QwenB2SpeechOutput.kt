@@ -6,6 +6,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
+import android.os.StatFs
 import com.qwen.tts.studio.engine.QwenEngine
 import java.io.File
 import java.io.FileOutputStream
@@ -25,6 +26,7 @@ class QwenB2SpeechOutput(context: Context, private val onStatus: (String) -> Uni
     @Volatile private var track: AudioTrack? = null
     private var engine: QwenEngine? = null // Accessed only by worker.
     private var profile: File? = null
+    @Volatile private var preparing = false
 
     private data class ModelFile(val name: String, val bytes: Long)
     private val modelFiles = listOf(
@@ -38,16 +40,19 @@ class QwenB2SpeechOutput(context: Context, private val onStatus: (String) -> Uni
 
     /** Called only after the user requests the 884 MB experimental voice package. */
     fun prepare(onReady: (Boolean) -> Unit) {
+        if (preparing) { status("B2 sigue preparando sus archivos; espera el resultado"); return }
+        preparing = true
         worker.execute {
             val result = runCatching {
                 if (profile != null && engine != null) return@runCatching
                 modelDir.mkdirs()
                 modelFiles.forEach { download(it) }
+                status("Archivos listos. Cargando el motor B2; puede tardar varios minutos")
                 val native = engine ?: QwenEngine().also { engine = it }
                 native.setBackendPreference(QwenEngine.BACKEND_CPU)
                 native.setCpuThreads(4)
                 if (!native.loadModels(modelDir.absolutePath, modelFiles[1].name))
-                    error(native.getLastError() ?: "No pude cargar el modelo de voz")
+                    error(native.getLastError() ?: "No pude cargar B2. Cierra otras aplicaciones e inténtalo de nuevo")
                 if (native.getModelCapabilities()?.supportsCloning != true)
                     error("Este modelo no permite crear el perfil B2")
                 val reference = File(modelDir, "aria-b2-reference.wav")
@@ -61,7 +66,9 @@ class QwenB2SpeechOutput(context: Context, private val onStatus: (String) -> Uni
                 }
                 profile = speaker
             }
-            status(result.exceptionOrNull()?.message ?: "Voz B2 lista para probar")
+            preparing = false
+            status(result.exceptionOrNull()?.let { "Error B2: ${it.message ?: it.javaClass.simpleName}" }
+                ?: "Voz B2 lista para probar")
             main.post { if (!closed) onReady(result.isSuccess) }
         }
     }
@@ -72,32 +79,39 @@ class QwenB2SpeechOutput(context: Context, private val onStatus: (String) -> Uni
         val part = File(modelDir, "${model.name}.part")
         if (part.length() > model.bytes) part.delete()
         var offset = part.length()
-        status("Descargando voz B2: ${model.name} (${offset / 1_000_000} MB)")
+        val available = StatFs(modelDir.absolutePath).availableBytes
+        require(available >= model.bytes - offset + 128_000_000L) {
+            "Falta espacio para B2: libera al menos ${(model.bytes - offset + 128_000_000L - available) / 1_000_000 + 1} MB"
+        }
+        status("B2: ${model.name} · ${offset / 1_000_000} / ${model.bytes / 1_000_000} MB")
         val connection = URL(baseUrl + model.name + "?download=true").openConnection() as HttpURLConnection
         connection.connectTimeout = 15_000
         connection.readTimeout = 30_000
         if (offset > 0) connection.setRequestProperty("Range", "bytes=$offset-")
         try {
             val code = connection.responseCode
-            if (code !in listOf(200, 206)) error("Descarga de voz: HTTP $code")
+            if (code !in listOf(200, 206)) error("Descarga de voz: HTTP $code. Revisa la conexión e inténtalo de nuevo")
             if (offset > 0 && code != 206) { part.delete(); offset = 0 }
             connection.inputStream.use { source ->
                 FileOutputStream(part, offset > 0).buffered().use { sink ->
                     val buffer = ByteArray(128 * 1024)
-                    var last = 0L
+                    var lastShown = offset
+                    var lastTime = System.currentTimeMillis()
                     while (true) {
                         val count = source.read(buffer)
                         if (count < 0) break
                         sink.write(buffer, 0, count)
                         offset += count
-                        if (offset / 100_000_000 > last) {
-                            last = offset / 100_000_000
-                            status("Voz B2: ${offset / 1_000_000} / ${model.bytes / 1_000_000} MB")
+                        val now = System.currentTimeMillis()
+                        if (offset - lastShown >= 5_000_000 || now - lastTime >= 2_000) {
+                            lastShown = offset
+                            lastTime = now
+                            status("B2: ${model.name} · ${offset / 1_000_000} / ${model.bytes / 1_000_000} MB")
                         }
                     }
                 }
             }
-            if (part.length() != model.bytes) error("Descarga incompleta de ${model.name}")
+            if (part.length() != model.bytes) error("Descarga incompleta de ${model.name}: ${part.length() / 1_000_000} / ${model.bytes / 1_000_000} MB; toca Probar B2 para continuar")
             if (!part.renameTo(target)) error("No pude guardar ${model.name}")
         } finally { connection.disconnect() }
     }

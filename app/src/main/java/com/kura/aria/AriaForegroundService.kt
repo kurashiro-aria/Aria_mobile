@@ -6,8 +6,16 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.Manifest
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.kura.aria.voice.WakeWordRecognizer
+import com.kura.aria.voice.LocalSpeechOutput
+import com.kura.aria.voice.VoiceDirection
 
 /**
  * Keeps ARIA's process important while the user changes apps so the in-process
@@ -21,7 +29,19 @@ class AriaForegroundService : Service() {
         const val CHANNEL_ID = "aria_background"
         const val NOTIFICATION_ID = 24035
         const val ACTION_STOP = "com.kura.aria.action.STOP_BACKGROUND"
+        const val ACTION_WAKE_ON = "com.kura.aria.action.WAKE_ON"
+        const val ACTION_WAKE_OFF = "com.kura.aria.action.WAKE_OFF"
+        const val ACTION_WAKE_PAUSE = "com.kura.aria.action.WAKE_PAUSE"
+        const val ACTION_WAKE_RESUME = "com.kura.aria.action.WAKE_RESUME"
+        var commandListener: ((String) -> Unit)? = null
+        var pendingCommand: String? = null
     }
+
+    private var wake: WakeWordRecognizer? = null
+    private var wakeAcknowledgement: LocalSpeechOutput? = null
+    private var wakeActive = false
+    private var wakePaused = false
+    private var wakeState = "Di Aria para hablar"
 
     override fun onCreate() {
         super.onCreate()
@@ -30,12 +50,74 @@ class AriaForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            getSharedPreferences("aria_runtime", MODE_PRIVATE).edit()
+                .putBoolean("wake_listening_enabled", false).apply()
+            stopWake()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, notification())
+        when (intent?.action) {
+            ACTION_WAKE_ON -> {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
+                    PackageManager.PERMISSION_GRANTED) return START_STICKY
+                wakeActive = true
+                wakePaused = false
+                showForeground()
+                if (wakeAcknowledgement == null) wakeAcknowledgement = LocalSpeechOutput(this) { }
+                if (wake == null) wake = WakeWordRecognizer(this, onCommand = { command ->
+                    val listener = commandListener
+                    if (listener != null) listener(command)
+                    else {
+                        pendingCommand = command
+                        wakeState = "Escuché un mensaje. Abre ARIA para responder"
+                        showForeground()
+                    }
+                }, onState = { state ->
+                    wakeState = state
+                    showForeground()
+                    if (state == "Dime, Kura, te escucho")
+                        wakeAcknowledgement?.speak("Dime, Kura, te escucho", VoiceDirection(1.02f, 1.03f))
+                },
+                    onFailure = { reason ->
+                        wakeState = reason
+                        getSharedPreferences("aria_runtime", MODE_PRIVATE).edit()
+                            .putBoolean("wake_listening_enabled", false).apply()
+                        stopWake()
+                        showForeground()
+                    })
+                wake?.start()
+            }
+            ACTION_WAKE_OFF -> { stopWake(); showForeground() }
+            ACTION_WAKE_PAUSE -> { wakePaused = true; wake?.stop(); showForeground() }
+            ACTION_WAKE_RESUME -> if (wakeActive) {
+                wakePaused = false
+                wake?.start()
+                showForeground()
+            }
+            else -> showForeground()
+        }
         return START_STICKY
+    }
+
+    override fun onDestroy() { stopWake(); super.onDestroy() }
+
+    private fun stopWake() {
+        wakeActive = false
+        wakePaused = false
+        wake?.close()
+        wake = null
+        wakeAcknowledgement?.close()
+        wakeAcknowledgement = null
+    }
+
+    private fun showForeground() {
+        val type = if (Build.VERSION.SDK_INT >= 34) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                (if (wakeActive) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
+        } else if (wakeActive) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
+        if (type != 0) startForeground(NOTIFICATION_ID, notification(), type)
+        else startForeground(NOTIFICATION_ID, notification())
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -72,7 +154,9 @@ class AriaForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("ARIA está despierta")
-            .setContentText("Su cerebro permanece disponible mientras usas otras aplicaciones")
+            .setContentText(if (wakeActive) {
+                if (wakePaused) "Micrófono en pausa mientras ARIA responde" else wakeState
+            } else "Su cerebro permanece disponible mientras usas otras aplicaciones")
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

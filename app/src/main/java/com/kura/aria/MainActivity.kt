@@ -18,6 +18,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
 import android.widget.*
+import android.speech.SpeechRecognizer
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var conversation: LinearLayout
     private lateinit var scroll: ScrollView
     private lateinit var status: TextView
+    private lateinit var voiceProgress: TextView
     private lateinit var loadBrain: Button
     private lateinit var input: EditText
     private lateinit var send: Button
@@ -89,8 +91,17 @@ class MainActivity : AppCompatActivity() {
     private var samplePlayer: MediaPlayer? = null
     private var lastSpokenReply: Pair<String, AriaEmotion>? = null
     private var voiceInForeground = false
+    private var pendingWakePermission = false
+    private var b2Preparing = false
+    private val wakeCommandListener: (String) -> Unit = { command -> runOnUiThread { acceptWakeCommand(command) } }
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startDictation() else toast("Necesito permiso del micrófono para dictar")
+        if (granted) {
+            if (pendingWakePermission) { pendingWakePermission = false; startWakeListening() }
+            else startDictation()
+        } else {
+            pendingWakePermission = false
+            toast("Necesito permiso del micrófono para escuchar")
+        }
     }
 
     private data class GenerationStats(val firstTokenMs: Long?, val firstVisibleMs: Long?, val totalMs: Long, val chunks: Int) {
@@ -107,6 +118,7 @@ class MainActivity : AppCompatActivity() {
         private const val LAST_INITIATIVE = "last_initiative"
         private const val VOICE_ENABLED = "voice_enabled"
         private const val VOICE_B2 = "voice_b2_experimental"
+        private const val WAKE_ENABLED = "wake_listening_enabled"
         private const val BG = "#100D16"
         private const val PANEL = "#1A1523"
         private const val PANEL_2 = "#241B31"
@@ -140,6 +152,11 @@ class MainActivity : AppCompatActivity() {
         }
         header.addView(identity, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); header.addView(menu)
         root.addView(header)
+        voiceProgress = TextView(this).apply {
+            textSize = 12f; setTextColor(Color.parseColor(PURPLE)); visibility = View.GONE
+            setPadding(0, dp(3), 0, dp(3))
+        }
+        root.addView(voiceProgress)
 
         avatarCard = ImageView(this).apply {
             scaleType = ImageView.ScaleType.MATRIX
@@ -196,6 +213,7 @@ class MainActivity : AppCompatActivity() {
             showPortrait(lastEmotion)
         }
         send.setOnClickListener { sendMessage() }
+        AriaForegroundService.commandListener = wakeCommandListener
         try {
             engine = AiChat.getInferenceEngine(applicationContext)
             if (savedModel() != null && engine.state.value !is InferenceEngine.State.ModelReady)
@@ -253,7 +271,7 @@ class MainActivity : AppCompatActivity() {
                     } ?: toast("Aún no hay una respuesta nueva para leer")
                     "Detener voz" -> { speechOutput?.stop(); b2SpeechOutput?.stop() }
                     "Interfaz" -> toast("Interfaz ARIA Character")
-                    "Ajustes" -> toast("Ajustes: próximamente")
+                    "Ajustes" -> showSettingsDialog()
                     else -> if (it.title?.toString()?.startsWith("Sistema") == true)
                         toast("ARIA ${BuildConfig.VERSION_NAME} • llama.cpp local")
                 }; true
@@ -424,17 +442,21 @@ class MainActivity : AppCompatActivity() {
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
             loadBrain.visibility = if (modelLoaded) View.GONE else View.VISIBLE
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
+            if (modelLoaded) uiScope.launch { delay(100); deliverPendingWakeCommand() }
         }
     }
 
     override fun onResume() {
         super.onResume()
+        if (wakeEnabled() && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED) startWakeListening()
         if (::engine.isInitialized && !busy && savedModel() != null &&
             (!modelLoaded || engine.state.value !is InferenceEngine.State.ModelReady ||
                 activeModelName != savedModel()?.name)) {
             uiScope.launch { restoreBrainIfNeeded() }
         } else if (::engine.isInitialized && modelLoaded && loadingOverlay == null) {
             scheduleInitiative()
+            deliverPendingWakeCommand()
         }
     }
 
@@ -594,6 +616,7 @@ class MainActivity : AppCompatActivity() {
     private fun sendMessage() {
         val message = input.text.toString().trim(); if (message.isEmpty() || !modelLoaded || busy) return
         stopDictation()
+        if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_PAUSE)
         speechOutput?.stop()
         b2SpeechOutput?.stop()
         samplePlayer?.release(); samplePlayer = null
@@ -622,6 +645,12 @@ class MainActivity : AppCompatActivity() {
                 chatHistory.append("Kura", message)
                 chatHistory.append("ARIA", answer)
             }
+            lastSpokenReply = answer to lastEmotion
+            if (voiceEnabled()) {
+                if (b2Enabled()) b2SpeechOutput?.speak(answer)
+                else speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(lastEmotion))
+            }
+            if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_RESUME)
             return
         }
         val stateBefore = conversationManager.snapshot()
@@ -682,7 +711,7 @@ class MainActivity : AppCompatActivity() {
                         conversationManager.record(message, answer, stylePreferences)
                     }
                     lastSpokenReply = answer to lastEmotion
-                    if (voiceEnabled() && voiceInForeground) {
+                    if (voiceEnabled() && (voiceInForeground || wakeEnabled())) {
                         if (b2Enabled()) b2SpeechOutput?.speak(answer)
                         else speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(lastEmotion))
                     }
@@ -694,6 +723,11 @@ class MainActivity : AppCompatActivity() {
                 busy = false; modelLoaded = engine.state.value is InferenceEngine.State.ModelReady; send.isEnabled = modelLoaded; loadBrain.isEnabled = true
                 setStatus(if (modelLoaded) "● Activa" else "○ Cerebro desconectado", modelLoaded)
                 if (!modelLoaded) loadBrain.text = "RECONECTAR CEREBRO 🧠"; scrollToBottom()
+                if (wakeEnabled()) uiScope.launch {
+                    delay(2_000)
+                    wakeService(AriaForegroundService.ACTION_WAKE_RESUME)
+                }
+                uiScope.launch { delay(100); deliverPendingWakeCommand() }
             }
         }
     }
@@ -875,6 +909,98 @@ class MainActivity : AppCompatActivity() {
 
     private fun voiceEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_ENABLED, false)
     private fun b2Enabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_B2, false)
+    private fun wakeEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(WAKE_ENABLED, false)
+
+    private fun wakeService(action: String) {
+        val intent = Intent(this, AriaForegroundService::class.java).setAction(action)
+        if (action == AriaForegroundService.ACTION_WAKE_ON) ContextCompat.startForegroundService(this, intent)
+        else startService(intent)
+    }
+
+    private fun showSettingsDialog() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(8))
+        }
+        val wakeSwitch = Switch(this).apply {
+            text = "Escucha de micrófono siempre activa"
+            isChecked = wakeEnabled()
+        }
+        content.addView(wakeSwitch)
+        content.addView(TextView(this).apply {
+            text = "Di «Aria» y después tu mensaje. Muestra una notificación mientras escucha; el teléfono puede limitar sesiones largas."
+            setPadding(0, 0, 0, dp(16))
+        })
+        val speechSwitch = Switch(this).apply {
+            text = "Voz activa · leer respuestas automáticamente"
+            isChecked = voiceEnabled()
+        }
+        content.addView(speechSwitch)
+        content.addView(TextView(this).apply {
+            text = "Usa B2 si está preparada; de otro modo usa la voz española instalada en Android."
+        })
+        wakeSwitch.setOnCheckedChangeListener { _, checked ->
+            if (checked) enableWakeListening()
+            else {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(WAKE_ENABLED, false).apply()
+                wakeService(AriaForegroundService.ACTION_WAKE_OFF)
+            }
+        }
+        speechSwitch.setOnCheckedChangeListener { _, checked ->
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, checked).apply()
+            if (checked && !b2Enabled()) startVoice()
+            if (!checked) { speechOutput?.stop(); b2SpeechOutput?.stop() }
+        }
+        AlertDialog.Builder(this).setTitle("Ajustes de voz").setView(content)
+            .setPositiveButton("Listo", null).show()
+    }
+
+    private fun enableWakeListening() {
+        if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(this) &&
+            !SpeechRecognizer.isRecognitionAvailable(this)) {
+            toast("Instala un servicio de reconocimiento de voz en Android")
+            return
+        }
+        if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+            AlertDialog.Builder(this).setTitle("Reconocimiento del sistema")
+                .setMessage("Este teléfono no ofrece reconocimiento local. El servicio de voz configurado en Android podría usar internet para procesar el micrófono. ¿Activar la escucha con ese servicio?")
+                .setPositiveButton("Activar") { _, _ -> requestWakePermission() }
+                .setNegativeButton("Cancelar", null).show()
+        } else requestWakePermission()
+    }
+
+    private fun requestWakePermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+            startWakeListening()
+        else { pendingWakePermission = true; microphonePermission.launch(Manifest.permission.RECORD_AUDIO) }
+    }
+
+    private fun startWakeListening() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(WAKE_ENABLED, true).apply()
+        try { wakeService(AriaForegroundService.ACTION_WAKE_ON) }
+        catch (e: Exception) {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(WAKE_ENABLED, false).apply()
+            toast("No pude activar el micrófono: ${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    private fun acceptWakeCommand(command: String) {
+        if (!modelLoaded || busy) {
+            AriaForegroundService.pendingCommand = command
+            toast("ARIA está ocupada. Tu mensaje queda pendiente")
+            return
+        }
+        input.setText(command)
+        input.setSelection(input.text.length)
+        sendMessage()
+    }
+
+    private fun deliverPendingWakeCommand() {
+        if (!modelLoaded || busy) return
+        val command = AriaForegroundService.pendingCommand ?: return
+        AriaForegroundService.pendingCommand = null
+        acceptWakeCommand(command)
+    }
 
     private fun toggleDictation() {
         if (speechInput != null) { stopDictation(); return }
@@ -886,6 +1012,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startDictation() {
+        if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_PAUSE)
         speechOutput?.stop()
         b2SpeechOutput?.stop()
         dictationBase = input.text.toString().trim()
@@ -900,6 +1027,7 @@ class MainActivity : AppCompatActivity() {
                     if (error != null) toast(error)
                 })
             speechInput = listener
+            if (!listener.onDevice) toast("Dictado con el servicio de voz del teléfono")
             microphone.text = "■"
             microphone.contentDescription = "Detener dictado"
             listener.start()
@@ -910,10 +1038,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopDictation() {
+        val wasListening = speechInput != null
         speechInput?.close()
         speechInput = null
         microphone.text = "🎙"
         microphone.contentDescription = "Dictar mensaje en el dispositivo"
+        if (wasListening && wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_RESUME)
     }
 
     private fun startVoice() {
@@ -943,26 +1073,35 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showVoiceDialog() {
-        val checked = voiceEnabled()
         AlertDialog.Builder(this).setTitle("Voz local de ARIA")
-            .setMessage("Voz actual: ${if (b2Enabled() && checked) "B2 experimental" else "Android español"}. B2 necesita descargar 884 MB una vez; luego genera voz local. Al reabrir ARIA, el perfil B2 se carga automáticamente si estaba activado. Puede tardar bastante o fallar mientras el GGUF está cargado. La muestra B2 ya está incluida.")
-            .setPositiveButton(if (checked) "Desactivar voz" else "Activar voz") { _, _ ->
-                val enabled = !checked
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, enabled)
+            .setMessage("Voz actual: ${if (b2Enabled()) "B2 experimental" else "Android español"}. B2 descarga unos 884 MB una vez y luego genera voz local. El avance aparecerá sobre el chat; mantén ARIA abierta para preparar el perfil. La lectura automática se controla en Ajustes.")
+            .setPositiveButton("Usar voz Android") { _, _ ->
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
                     .putBoolean(VOICE_B2, false).apply()
                 b2SpeechOutput?.close(); b2SpeechOutput = null
-                if (enabled) startVoice() else { speechOutput?.close(); speechOutput = null }
+                b2Preparing = false
+                voiceProgress.visibility = View.GONE
+                startVoice()
             }
             .setNeutralButton("Probar B2") { _, _ -> prepareB2Voice(replayLastReply = true) }
             .setNegativeButton("Cerrar", null).show()
     }
 
     private fun prepareB2Voice(replayLastReply: Boolean) {
+        if (b2Preparing) { toast("B2 sigue descargando o cargando; mira el avance sobre el chat"); return }
         val output = b2SpeechOutput ?: QwenB2SpeechOutput(applicationContext) { status ->
-            runOnUiThread { if (!isFinishing && !isDestroyed) toast(status) }
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    voiceProgress.text = status
+                    voiceProgress.visibility = View.VISIBLE
+                    if (status.startsWith("Error B2:") || status == "Voz B2 lista para probar") toast(status)
+                }
+            }
         }.also { b2SpeechOutput = it }
+        b2Preparing = true
         if (replayLastReply) toast("Preparando B2. Mantén ARIA abierta durante la descarga inicial.")
         output.prepare { ready ->
+            b2Preparing = false
             if (ready && b2SpeechOutput === output) {
                 speechOutput?.stop()
                 if (replayLastReply) {
@@ -976,6 +1115,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStart() { super.onStart(); voiceInForeground = true }
-    override fun onStop() { voiceInForeground = false; stopDictation(); speechOutput?.stop(); b2SpeechOutput?.stop(); samplePlayer?.release(); samplePlayer = null; super.onStop() }
-    override fun onDestroy() { speechOutput?.close(); speechOutput = null; b2SpeechOutput?.close(); b2SpeechOutput = null; uiScope.cancel(); super.onDestroy() }
+    override fun onStop() {
+        voiceInForeground = false
+        stopDictation()
+        if (!wakeEnabled() || !voiceEnabled()) { speechOutput?.stop(); b2SpeechOutput?.stop() }
+        samplePlayer?.release(); samplePlayer = null
+        super.onStop()
+    }
+    override fun onDestroy() {
+        if (AriaForegroundService.commandListener === wakeCommandListener)
+            AriaForegroundService.commandListener = null
+        speechOutput?.close(); speechOutput = null
+        b2SpeechOutput?.close(); b2SpeechOutput = null
+        uiScope.cancel()
+        super.onDestroy()
+    }
 }

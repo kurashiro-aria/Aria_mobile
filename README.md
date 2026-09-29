@@ -4,13 +4,15 @@
 
 Aplicación Android experimental con personalidad inicial y modelo GGUF local.
 
+En 0.2.39, Ajustes ofrece lectura automática y escucha optativa de «Aria» con una notificación persistente de micrófono. El reconocimiento local se prefiere; si el teléfono no lo ofrece, la interfaz avisa antes de activar la escucha con su servicio configurado, que podría usar internet. El servicio mantiene vivo el proceso al cambiar de aplicación, pero Android puede cerrarlo por memoria o batería; en ese caso el GGUF guardado se vuelve a cargar al abrir ARIA. B2 muestra el avance de sus dos descargas y conserva partes incompletas para continuarlas al repetir «Probar B2».
+
 La rama `aria-alpha-0.2-local-ai` usa Kotlin y el ejemplo Android de llama.cpp fijado a `26394b4e6749a41c3633db040e0987500a5f7013`, con correcciones locales en `patches/llama-android.patch`.
 
 - Chat y selección/importación de GGUF.
-- Inferencia local; sin permiso de Internet en la aplicación.
+- Inferencia del cerebro local; B2 usa Internet solo para descargar sus modelos una vez.
 - Al reconectar un GGUF guardado, ARIA aparece dormida a pantalla completa antes del chat. La barra sigue el avance de carga que comunica llama.cpp; durante la preparación del contexto y la personalidad, donde no hay una medida de avance, muestra una animación de espera. Al terminar aparece «Despertar» y Kura abre el chat al tocarlo. No se muestra tiempo ni una estimación ficticia. Si no hay cerebro guardado o falla la carga, se muestra el chat para elegir o reconectar uno.
 - Diagnóstico nativo y recuperación tras errores de carga.
-- Historial local persistente, recuerdos explícitos que se pueden guardar, corregir u olvidar, y retratos de expresiones. La voz sigue pendiente.
+- Historial local persistente, recuerdos explícitos que se pueden guardar, corregir u olvidar, retratos de expresiones y voz experimental.
 - La personalidad de ARIA se carga con el GGUF. Cuando el mensaje continúa el hilo, se consideran hasta seis mensajes recientes; el modelo recibe las palabras pertinentes de Kura y, si la respuesta es elíptica, solo la pregunta o afirmación necesaria de ARIA. También puede recibir hasta tres recuerdos explícitos relacionados, fragmentos anteriores del usuario y un tema resumido de sus propias palabras. Un saludo o tema nuevo no arrastra la conversación anterior.
 - El estado de conversación guarda el tema y una pregunta pendiente, además de hasta veinticuatro temas anteriores. Es local, limitado y se actualiza después de una respuesta; no convierte cada frase en un recuerdo permanente. Para corregir un recuerdo: `ARIA, corrige el recuerdo #7: nuevo texto`.
 - El tono del mensaje actual orienta una instrucción breve por turno y la expresión del retrato: alegría, humor, cansancio, frustración, vulnerabilidad o urgencia. Una respuesta corta puede seguir el tono previo; un tema nuevo lo reinicia. Esta señal no se guarda como diagnóstico ni retrasa la carga del modelo.
