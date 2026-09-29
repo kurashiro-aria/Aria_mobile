@@ -6,6 +6,8 @@ Aplicación Android experimental con personalidad inicial y modelo GGUF local.
 
 En 0.2.39, Ajustes ofrece lectura automática y escucha optativa de «Aria» con una notificación persistente de micrófono. El reconocimiento local se prefiere; si el teléfono no lo ofrece, la interfaz avisa antes de activar la escucha con su servicio configurado, que podría usar internet. El servicio mantiene vivo el proceso al cambiar de aplicación, pero Android puede cerrarlo por memoria o batería; en ese caso el GGUF guardado se vuelve a cargar al abrir ARIA. B2 muestra el avance de sus dos descargas y conserva partes incompletas para continuarlas al repetir «Probar B2».
 
+Prueba rápida: abre Ajustes y activa la escucha, di «Aria, hola» o «Aria» seguido de una frase; activa «Voz activa» para que lea sus respuestas. En Voz, «Probar B2» prepara el perfil descargable y muestra su avance encima del chat.
+
 La rama `aria-alpha-0.2-local-ai` usa Kotlin y el ejemplo Android de llama.cpp fijado a `26394b4e6749a41c3633db040e0987500a5f7013`, con correcciones locales en `patches/llama-android.patch`.
 
 - Chat y selección/importación de GGUF.
