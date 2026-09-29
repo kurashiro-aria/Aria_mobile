@@ -16,7 +16,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
 /** Optional, isolated offline synthesizer. Downloads models once; never sends text or audio. */
-class QwenB2SpeechOutput(context: Context, private val onStatus: (String) -> Unit) {
+class QwenB2SpeechOutput(context: Context, private val onStatus: (String) -> Unit,
+                         private val onSpeechFailure: (String) -> Unit) {
     private val app = context.applicationContext
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -122,19 +123,35 @@ class QwenB2SpeechOutput(context: Context, private val onStatus: (String) -> Uni
         track?.pause(); track?.flush()
         worker.execute {
             if (closed || ticket != generation.get()) return@execute
-            val native = engine ?: return@execute
-            val embedding = profile ?: return@execute
+            val native = engine
+            val embedding = profile
+            if (native == null || embedding == null) {
+                main.post { if (!closed && ticket == generation.get()) onSpeechFailure("B2 aún no está preparada") }
+                return@execute
+            }
             val result = runCatching {
                 native.synthesize(text, speakerEmbeddingPath = embedding.absolutePath,
                     params = QwenEngine.NativeParams(languageId = 2054, maxAudioTokens = 512))
-            }.getOrElse { status("Error de voz B2: ${it.message}"); return@execute }
+            }.getOrElse {
+                failSpeech(ticket, it.message ?: it.javaClass.simpleName)
+                return@execute
+            }
             if (!result.success || result.audio == null) {
-                status("Error de voz B2: ${result.errorMsg ?: "sin audio"}")
+                failSpeech(ticket, result.errorMsg ?: "sin audio")
                 return@execute
             }
             if (closed || ticket != generation.get()) return@execute
-            play(result.audio, result.sampleRate, ticket)
+            status("B2 generó audio en ${result.timeMs / 1000.0} s")
+            runCatching { play(result.audio, result.sampleRate, ticket) }
+                .onFailure { failSpeech(ticket, it.message ?: it.javaClass.simpleName) }
         }
+    }
+
+    private fun failSpeech(ticket: Long, reason: String) {
+        main.post { if (!closed && ticket == generation.get()) {
+            onStatus("Error de voz B2: $reason")
+            onSpeechFailure(reason)
+        } }
     }
 
     private fun play(audio: FloatArray, sampleRate: Int, ticket: Long) {

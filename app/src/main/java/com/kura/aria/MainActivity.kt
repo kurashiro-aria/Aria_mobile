@@ -646,10 +646,7 @@ class MainActivity : AppCompatActivity() {
                 chatHistory.append("ARIA", answer)
             }
             lastSpokenReply = answer to lastEmotion
-            if (voiceEnabled()) {
-                if (b2Enabled()) b2SpeechOutput?.speak(answer)
-                else speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(lastEmotion))
-            }
+            if (voiceEnabled()) speakReply(answer, lastEmotion)
             if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_RESUME)
             return
         }
@@ -686,7 +683,8 @@ class MainActivity : AppCompatActivity() {
                 val previewExpression: (String) -> Unit = { visible ->
                     showPortrait(AriaEmotion.fromInteraction(turnMood, turnExpression, message, visible))
                 }
-                var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), 768, reply, message,
+                val tokenBudget = if (message.length > 280) 512 else 384
+                var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), tokenBudget, reply, message,
                     previewExpression)
                 val previousAria = previousHistory.lastOrNull { it.role == "ARIA" }?.text
                 if (ReplyQuality.needsRetry(message, previousAria, answer)) {
@@ -695,7 +693,7 @@ class MainActivity : AppCompatActivity() {
                     showPortrait(AriaEmotion.THINKING)
                     answer = collectVisibleReply(
                         AriaPersonality.directResponsePrompt(ReplyQuality.retryPrompt(previousHistory, message)),
-                        256, reply, message, previewExpression
+                        160, reply, message, previewExpression
                     )
                     if (ReplyQuality.needsRetry(message, previousAria, answer)) {
                         repeatedReplies++
@@ -711,10 +709,7 @@ class MainActivity : AppCompatActivity() {
                         conversationManager.record(message, answer, stylePreferences)
                     }
                     lastSpokenReply = answer to lastEmotion
-                    if (voiceEnabled() && (voiceInForeground || wakeEnabled())) {
-                        if (b2Enabled()) b2SpeechOutput?.speak(answer)
-                        else speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(lastEmotion))
-                    }
+                    if (voiceEnabled() && (voiceInForeground || wakeEnabled())) speakReply(answer, lastEmotion)
                 }
                 else { generationFailures++; reply.text = "No llegué a completar una respuesta. Prueba con una pregunta más corta."; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
             } catch (e: CancellationException) { throw e }
@@ -1052,6 +1047,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun speakReply(answer: String, emotion: AriaEmotion) {
+        if (b2Enabled() && b2SpeechOutput != null) b2SpeechOutput?.speak(answer)
+        else {
+            startVoice()
+            speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(emotion))
+            if (b2Enabled()) voiceProgress.apply {
+                text = "B2 no está preparada; usando voz Android"
+                visibility = View.VISIBLE
+            }
+        }
+    }
+
     private fun playB2Sample() {
         speechOutput?.stop()
         b2SpeechOutput?.stop()
@@ -1074,7 +1081,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showVoiceDialog() {
         AlertDialog.Builder(this).setTitle("Voz local de ARIA")
-            .setMessage("Voz actual: ${if (b2Enabled()) "B2 experimental" else "Android español"}. B2 descarga unos 884 MB una vez y luego genera voz local. El avance aparecerá sobre el chat; mantén ARIA abierta para preparar el perfil. La lectura automática se controla en Ajustes.")
+            .setMessage("Voz actual: ${if (b2Enabled()) "B2 experimental" else "Android español"}. La voz Android no reproduce el timbre B2. El motor B2 usa la muestra elegida como referencia, pero tampoco garantiza una copia exacta. Descarga unos 884 MB una vez; el progreso y cualquier error aparecerán sobre el chat. La lectura automática se controla en Ajustes.")
             .setPositiveButton("Usar voz Android") { _, _ ->
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
                     .putBoolean(VOICE_B2, false).apply()
@@ -1089,15 +1096,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun prepareB2Voice(replayLastReply: Boolean) {
         if (b2Preparing) { toast("B2 sigue descargando o cargando; mira el avance sobre el chat"); return }
-        val output = b2SpeechOutput ?: QwenB2SpeechOutput(applicationContext) { status ->
-            runOnUiThread {
-                if (!isFinishing && !isDestroyed) {
-                    voiceProgress.text = status
-                    voiceProgress.visibility = View.VISIBLE
-                    if (status.startsWith("Error B2:") || status == "Voz B2 lista para probar") toast(status)
+        val output = b2SpeechOutput ?: QwenB2SpeechOutput(applicationContext, { status ->
+            if (!isFinishing && !isDestroyed) {
+                voiceProgress.text = status
+                voiceProgress.visibility = View.VISIBLE
+                if (status.startsWith("Error B2:") || status == "Voz B2 lista para probar") toast(status)
+            }
+        }, { _ ->
+            if (!isFinishing && !isDestroyed && voiceEnabled()) {
+                lastSpokenReply?.let { (text, emotion) ->
+                    startVoice()
+                    speechOutput?.speak(text, AriaVoiceDirector.forEmotion(emotion))
                 }
             }
-        }.also { b2SpeechOutput = it }
+        }).also { b2SpeechOutput = it }
         b2Preparing = true
         if (replayLastReply) toast("Preparando B2. Mantén ARIA abierta durante la descarga inicial.")
         output.prepare { ready ->
