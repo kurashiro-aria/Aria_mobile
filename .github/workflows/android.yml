@@ -90,7 +90,7 @@ jobs:
 
       - name: Test chat response filtering
         env:
-          GITHUB_ACTIONS: ${{ github.ref_name == 'voice-b2-experiment' && 'false' || 'true' }}
+          ARIA_VOICE_PROTOTYPE_BUILD: ${{ github.ref_name == 'voice-b2-experiment' && 'true' || 'false' }}
         run: gradle :app:testDebugUnitTest --stacktrace --console=plain
 
       - name: Summarize unit tests
@@ -109,7 +109,7 @@ jobs:
 
       - name: Build debug APK
         env:
-          GITHUB_ACTIONS: ${{ github.ref_name == 'voice-b2-experiment' && 'false' || 'true' }}
+          ARIA_VOICE_PROTOTYPE_BUILD: ${{ github.ref_name == 'voice-b2-experiment' && 'true' || 'false' }}
         run: gradle :app:assembleDebug --stacktrace --console=plain
 
       - name: Verify final APK certificate and version

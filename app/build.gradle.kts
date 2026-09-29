@@ -26,7 +26,9 @@ android {
     packaging { jniLibs { useLegacyPackaging = true } }
 
     val ariaKeystore = System.getenv("ARIA_SIGNING_KEYSTORE")
-    check(System.getenv("GITHUB_ACTIONS") != "true" || !ariaKeystore.isNullOrBlank()) {
+    val isolatedVoiceBuild = System.getenv("GITHUB_REF_NAME") == "voice-b2-experiment" &&
+        System.getenv("ARIA_VOICE_PROTOTYPE_BUILD") == "true"
+    check(System.getenv("GITHUB_ACTIONS") != "true" || isolatedVoiceBuild || !ariaKeystore.isNullOrBlank()) {
         "CI requires the verified ARIA signing key; refusing an automatically generated debug key."
     }
     if (!ariaKeystore.isNullOrBlank()) {
