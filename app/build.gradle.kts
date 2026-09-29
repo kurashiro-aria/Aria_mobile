@@ -3,7 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val ariaVersionName = "0.2.37-alpha"
+val ariaPreviewBuild = System.getenv("GITHUB_REF_NAME") == "voice-b2-preview"
+val ariaVersionName = if (ariaPreviewBuild) "0.2.37-B2-preview" else "0.2.37-alpha"
 
 android {
     compileOptions {
@@ -26,7 +27,7 @@ android {
     packaging { jniLibs { useLegacyPackaging = true } }
 
     val ariaKeystore = System.getenv("ARIA_SIGNING_KEYSTORE")
-    check(System.getenv("GITHUB_ACTIONS") != "true" || !ariaKeystore.isNullOrBlank()) {
+    check(System.getenv("GITHUB_ACTIONS") != "true" || ariaPreviewBuild || !ariaKeystore.isNullOrBlank()) {
         "CI requires the verified ARIA signing key; refusing an automatically generated debug key."
     }
     if (!ariaKeystore.isNullOrBlank()) {
@@ -39,12 +40,12 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.kura.aria"
+        applicationId = if (ariaPreviewBuild) "com.kura.aria.b2preview" else "com.kura.aria"
         minSdk = 33
         targetSdk = 35
-        versionCode = 53
+        versionCode = if (ariaPreviewBuild) 1 else 53
         versionName = ariaVersionName
-        resValue("string", "app_name", "ARIA Mobile $ariaVersionName")
+        resValue("string", "app_name", if (ariaPreviewBuild) "ARIA B2 Prueba" else "ARIA Mobile $ariaVersionName")
     }
 }
 
