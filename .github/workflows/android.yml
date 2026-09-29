@@ -107,6 +107,33 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace --console=plain
 
+      - name: Check isolated voice libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          apk = Path('app/build/outputs/apk/debug/app-debug.apk')
+          with zipfile.ZipFile(apk) as archive:
+              names = set(archive.namelist())
+              abis = ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64')
+              for abi in abis:
+                  prefix = f'lib/{abi}/'
+                  assert prefix + 'libqwen3_tts_jni.so' in names, abi
+                  assert prefix + 'libai-chat.so' in names, abi
+                  assert prefix + 'libggml-cpu.so' not in names, f'Conflicting voice GGML on {abi}'
+                  Path(f'/tmp/aria-qwen-{abi}.so').write_bytes(
+                      archive.read(prefix + 'libqwen3_tts_jni.so'))
+          PY
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            if readelf -d "/tmp/aria-qwen-${abi}.so" | grep -E 'NEEDED.*libggml'; then
+              echo "::error::Voice depends on shared GGML on ${abi}"
+              exit 1
+            fi
+          done
+
       - name: Verify final APK certificate and version
         shell: bash
         run: bash scripts/verify-apk.sh
