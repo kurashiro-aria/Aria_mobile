@@ -12,6 +12,10 @@ set(GGML_DIR "${QWEN3_TTS_ROOT}/ggml")
 set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+# ARIA's llama.cpp already ships libggml.so and libggml-base.so. Qwen uses a
+# different GGML revision; linking it as shared libraries silently replaces
+# the brain's copies in the APK and prevents the inference engine from starting.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 if (NOT DEFINED QWEN3_ANDROID_OPENMP)
     set(QWEN3_ANDROID_OPENMP OFF)
 endif()
@@ -150,3 +154,5 @@ add_library(qwen3_tts_jni SHARED
 target_include_directories(qwen3_tts_jni PRIVATE "${QWEN3_TTS_ROOT}/src")
 target_compile_definitions(qwen3_tts_jni PRIVATE QWEN3_TTS_STATIC)
 target_link_libraries(qwen3_tts_jni PRIVATE qwen3_tts log)
+# Keep the statically linked Qwen GGML symbols local to the voice library.
+target_link_options(qwen3_tts_jni PRIVATE "-Wl,--exclude-libs,ALL")
