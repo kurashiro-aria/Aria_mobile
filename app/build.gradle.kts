@@ -13,6 +13,12 @@ android {
 
     buildFeatures { buildConfig = true }
 
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt") } }
+
+    defaultConfig {
+        externalNativeBuild { cmake { targets += "qwen3_tts_jni" } }
+    }
+
     namespace = "com.kura.aria"
     compileSdk = 35
 

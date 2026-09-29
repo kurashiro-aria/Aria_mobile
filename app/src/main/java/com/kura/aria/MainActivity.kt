@@ -34,6 +34,7 @@ import com.kura.aria.emotion.AriaEmotion
 import com.kura.aria.emotion.MoodReader
 import com.kura.aria.voice.AriaVoiceDirector
 import com.kura.aria.voice.LocalSpeechOutput
+import com.kura.aria.voice.QwenB2SpeechOutput
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -75,6 +76,7 @@ class MainActivity : AppCompatActivity() {
     private var loadingModelLabel: TextView? = null
     private var wakeButton: Button? = null
     private var speechOutput: LocalSpeechOutput? = null
+    private var b2SpeechOutput: QwenB2SpeechOutput? = null
     private var lastSpokenReply: Pair<String, AriaEmotion>? = null
     private var voiceInForeground = false
 
@@ -91,6 +93,7 @@ class MainActivity : AppCompatActivity() {
         private const val INITIATIVE_ENABLED = "initiative_enabled"
         private const val LAST_INITIATIVE = "last_initiative"
         private const val VOICE_ENABLED = "voice_enabled"
+        private const val VOICE_B2 = "voice_b2_experimental"
         private const val BG = "#100D16"
         private const val PANEL = "#1A1523"
         private const val PANEL_2 = "#241B31"
@@ -166,7 +169,7 @@ class MainActivity : AppCompatActivity() {
         chatHistory = ChatHistory(applicationContext)
         ariaMemory = AriaMemory(applicationContext)
         conversationManager = ConversationManager(applicationContext)
-        if (voiceEnabled()) startVoice()
+        if (voiceEnabled() && !b2Enabled()) startVoice()
         val savedMessages = chatHistory.readAll()
         if (savedMessages.isEmpty()) aria(AriaPersonality.welcome) else savedMessages.forEach { addMessage(it.role, it.text) }
         savedMessages.lastOrNull { it.role == "ARIA" }?.let {
@@ -221,9 +224,10 @@ class MainActivity : AppCompatActivity() {
                     "Personalidad" -> toast("ARIA Personality v2 activa")
                     "Voz" -> showVoiceDialog()
                     "Repetir última respuesta" -> lastSpokenReply?.let { (text, emotion) ->
-                        startVoice(); speechOutput?.speak(text, AriaVoiceDirector.forEmotion(emotion))
+                        if (b2Enabled()) b2SpeechOutput?.speak(text)
+                        else { startVoice(); speechOutput?.speak(text, AriaVoiceDirector.forEmotion(emotion)) }
                     } ?: toast("Aún no hay una respuesta nueva para leer")
-                    "Detener voz" -> speechOutput?.stop()
+                    "Detener voz" -> { speechOutput?.stop(); b2SpeechOutput?.stop() }
                     "Interfaz" -> toast("Interfaz ARIA Character")
                     "Ajustes" -> toast("Ajustes: próximamente")
                     else -> if (it.title?.toString()?.startsWith("Sistema") == true)
@@ -648,8 +652,10 @@ class MainActivity : AppCompatActivity() {
                         conversationManager.record(message, answer, stylePreferences)
                     }
                     lastSpokenReply = answer to lastEmotion
-                    if (voiceEnabled() && voiceInForeground)
-                        speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(lastEmotion))
+                    if (voiceEnabled() && voiceInForeground) {
+                        if (b2Enabled()) b2SpeechOutput?.speak(answer)
+                        else speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(lastEmotion))
+                    }
                 }
                 else { generationFailures++; reply.text = "No llegué a completar una respuesta. Prueba con una pregunta más corta."; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
             } catch (e: CancellationException) { throw e }
@@ -838,6 +844,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun voiceEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_ENABLED, false)
+    private fun b2Enabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_B2, false)
 
     private fun startVoice() {
         if (speechOutput == null) speechOutput = LocalSpeechOutput(applicationContext) { status ->
@@ -848,16 +855,32 @@ class MainActivity : AppCompatActivity() {
     private fun showVoiceDialog() {
         val checked = voiceEnabled()
         AlertDialog.Builder(this).setTitle("Voz local de ARIA")
-            .setMessage("Puede leer las respuestas finales usando una voz española sin conexión instalada en Android. La voz B2 aún necesita un motor local compatible para hablar con su timbre exacto.")
+            .setMessage("Voz actual: ${if (b2Enabled() && checked) "B2 experimental" else "Android español"}. B2 necesita descargar 884 MB una vez; luego genera voz local. Al reabrir ARIA, actívala aquí para probarla. Puede tardar bastante o fallar mientras el GGUF está cargado. La muestra B2 ya está incluida.")
             .setPositiveButton(if (checked) "Desactivar voz" else "Activar voz") { _, _ ->
                 val enabled = !checked
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, enabled).apply()
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, enabled)
+                    .putBoolean(VOICE_B2, false).apply()
+                b2SpeechOutput?.close(); b2SpeechOutput = null
                 if (enabled) startVoice() else { speechOutput?.close(); speechOutput = null }
+            }
+            .setNeutralButton("Probar B2") { _, _ ->
+                val output = b2SpeechOutput ?: QwenB2SpeechOutput(applicationContext) { status ->
+                    runOnUiThread { if (!isFinishing && !isDestroyed) toast(status) }
+                }.also { b2SpeechOutput = it }
+                toast("Preparando B2. Mantén ARIA abierta durante la descarga inicial.")
+                output.prepare { ready ->
+                    if (ready) {
+                        speechOutput?.stop()
+                        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
+                            .putBoolean(VOICE_B2, true).apply()
+                        lastSpokenReply?.first?.let { output.speak(it) }
+                    }
+                }
             }
             .setNegativeButton("Cerrar", null).show()
     }
 
     override fun onStart() { super.onStart(); voiceInForeground = true }
-    override fun onStop() { voiceInForeground = false; speechOutput?.stop(); super.onStop() }
-    override fun onDestroy() { speechOutput?.close(); speechOutput = null; uiScope.cancel(); super.onDestroy() }
+    override fun onStop() { voiceInForeground = false; speechOutput?.stop(); b2SpeechOutput?.stop(); super.onStop() }
+    override fun onDestroy() { speechOutput?.close(); speechOutput = null; b2SpeechOutput?.close(); b2SpeechOutput = null; uiScope.cancel(); super.onDestroy() }
 }
