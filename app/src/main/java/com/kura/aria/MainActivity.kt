@@ -181,7 +181,10 @@ class MainActivity : AppCompatActivity() {
             engine = AiChat.getInferenceEngine(applicationContext)
             if (savedModel() != null && engine.state.value !is InferenceEngine.State.ModelReady)
                 showLoadingScreen()
-            uiScope.launch { restoreBrainIfNeeded() }
+            uiScope.launch {
+                restoreBrainIfNeeded()
+                if (voiceEnabled() && b2Enabled()) prepareB2Voice(replayLastReply = false)
+            }
         } catch (e: LinkageError) {
             hideLoadingScreen(false)
             setStatus("● Error de motor", false)
@@ -567,6 +570,7 @@ class MainActivity : AppCompatActivity() {
     private fun sendMessage() {
         val message = input.text.toString().trim(); if (message.isEmpty() || !modelLoaded || busy) return
         speechOutput?.stop()
+        b2SpeechOutput?.stop()
         AriaMemory.command(message)?.let { command ->
             input.text.clear()
             val answer = try {
@@ -855,7 +859,7 @@ class MainActivity : AppCompatActivity() {
     private fun showVoiceDialog() {
         val checked = voiceEnabled()
         AlertDialog.Builder(this).setTitle("Voz local de ARIA")
-            .setMessage("Voz actual: ${if (b2Enabled() && checked) "B2 experimental" else "Android español"}. B2 necesita descargar 884 MB una vez; luego genera voz local. Al reabrir ARIA, actívala aquí para probarla. Puede tardar bastante o fallar mientras el GGUF está cargado. La muestra B2 ya está incluida.")
+            .setMessage("Voz actual: ${if (b2Enabled() && checked) "B2 experimental" else "Android español"}. B2 necesita descargar 884 MB una vez; luego genera voz local. Al reabrir ARIA, el perfil B2 se carga automáticamente si estaba activado. Puede tardar bastante o fallar mientras el GGUF está cargado. La muestra B2 ya está incluida.")
             .setPositiveButton(if (checked) "Desactivar voz" else "Activar voz") { _, _ ->
                 val enabled = !checked
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, enabled)
@@ -863,21 +867,25 @@ class MainActivity : AppCompatActivity() {
                 b2SpeechOutput?.close(); b2SpeechOutput = null
                 if (enabled) startVoice() else { speechOutput?.close(); speechOutput = null }
             }
-            .setNeutralButton("Probar B2") { _, _ ->
-                val output = b2SpeechOutput ?: QwenB2SpeechOutput(applicationContext) { status ->
-                    runOnUiThread { if (!isFinishing && !isDestroyed) toast(status) }
-                }.also { b2SpeechOutput = it }
-                toast("Preparando B2. Mantén ARIA abierta durante la descarga inicial.")
-                output.prepare { ready ->
-                    if (ready) {
-                        speechOutput?.stop()
-                        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
-                            .putBoolean(VOICE_B2, true).apply()
-                        lastSpokenReply?.first?.let { output.speak(it) }
-                    }
+            .setNeutralButton("Probar B2") { _, _ -> prepareB2Voice(replayLastReply = true) }
+            .setNegativeButton("Cerrar", null).show()
+    }
+
+    private fun prepareB2Voice(replayLastReply: Boolean) {
+        val output = b2SpeechOutput ?: QwenB2SpeechOutput(applicationContext) { status ->
+            runOnUiThread { if (!isFinishing && !isDestroyed) toast(status) }
+        }.also { b2SpeechOutput = it }
+        if (replayLastReply) toast("Preparando B2. Mantén ARIA abierta durante la descarga inicial.")
+        output.prepare { ready ->
+            if (ready && b2SpeechOutput === output) {
+                speechOutput?.stop()
+                if (replayLastReply) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
+                        .putBoolean(VOICE_B2, true).apply()
+                    if (voiceInForeground) lastSpokenReply?.first?.let { output.speak(it) }
                 }
             }
-            .setNegativeButton("Cerrar", null).show()
+        }
     }
 
     override fun onStart() { super.onStart(); voiceInForeground = true }
