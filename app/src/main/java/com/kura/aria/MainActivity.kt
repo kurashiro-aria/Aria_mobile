@@ -422,6 +422,7 @@ class MainActivity : AppCompatActivity() {
             hideLoadingScreen(modelLoaded)
             busy = false; loadBrain.isEnabled = ::engine.isInitialized
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
+            loadBrain.visibility = if (modelLoaded) View.GONE else View.VISIBLE
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
         }
     }
@@ -465,10 +466,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun chooseModel() {
-        if (busy || !::engine.isInitialized) return
+        if (busy || !::engine.isInitialized) { toast("Espera a que ARIA termine de iniciar"); return }
         startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE); type = "application/octet-stream"
-            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/octet-stream", "application/x-gguf", "*/*"))
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*" // Providers disagree on the MIME type for .gguf; inspect the file after selection.
         }, PICK_GGUF)
     }
 
@@ -508,6 +509,7 @@ class MainActivity : AppCompatActivity() {
             hideLoadingScreen(modelLoaded)
             busy = false; loadBrain.isEnabled = true
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
+            loadBrain.visibility = if (modelLoaded) View.GONE else View.VISIBLE
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
         }
     }
@@ -584,6 +586,7 @@ class MainActivity : AppCompatActivity() {
             if (restoreFailed) toast("No pude restaurar el cerebro anterior.")
             temporary?.delete(); busy = false; loadBrain.isEnabled = true
             loadBrain.text = if (savedModel() != null && !modelLoaded) "RECONECTAR CEREBRO 🧠" else if (modelLoaded) "CAMBIAR CEREBRO 🧠" else "CARGAR CEREBRO 🧠"
+            loadBrain.visibility = if (modelLoaded) View.GONE else View.VISIBLE
             send.isEnabled = modelLoaded && engine.state.value is InferenceEngine.State.ModelReady
         }
     }
