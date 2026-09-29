@@ -1,12 +1,15 @@
 package com.kura.aria
 
 import android.app.Activity
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.drawable.GradientDrawable
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
@@ -17,6 +20,8 @@ import android.view.WindowInsets
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.kura.aria.personality.AriaPersonality
@@ -34,6 +39,7 @@ import com.kura.aria.emotion.AriaEmotion
 import com.kura.aria.emotion.MoodReader
 import com.kura.aria.voice.AriaVoiceDirector
 import com.kura.aria.voice.LocalSpeechOutput
+import com.kura.aria.voice.LocalSpeechInput
 import com.kura.aria.voice.QwenB2SpeechOutput
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
@@ -50,6 +56,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadBrain: Button
     private lateinit var input: EditText
     private lateinit var send: Button
+    private lateinit var microphone: Button
     private lateinit var avatarCard: ImageView
     private val portraits = mutableMapOf<Int, Bitmap>()
     private var lastEmotion = AriaEmotion.NEUTRAL
@@ -76,9 +83,15 @@ class MainActivity : AppCompatActivity() {
     private var loadingModelLabel: TextView? = null
     private var wakeButton: Button? = null
     private var speechOutput: LocalSpeechOutput? = null
+    private var speechInput: LocalSpeechInput? = null
+    private var dictationBase = ""
     private var b2SpeechOutput: QwenB2SpeechOutput? = null
+    private var samplePlayer: MediaPlayer? = null
     private var lastSpokenReply: Pair<String, AriaEmotion>? = null
     private var voiceInForeground = false
+    private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startDictation() else toast("Necesito permiso del micrófono para dictar")
+    }
 
     private data class GenerationStats(val firstTokenMs: Long?, val firstVisibleMs: Long?, val totalMs: Long, val chunks: Int) {
         val approximateTokensPerSecond: Double?
@@ -152,6 +165,12 @@ class MainActivity : AppCompatActivity() {
         }
         send = Button(this).apply { text = "➤"; textSize = 20f; isEnabled = false; setTextColor(Color.WHITE); background = rounded(CHAT_PURPLE, 22f) }
         inputRow.addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        microphone = Button(this).apply {
+            text = "🎙"; textSize = 20f; contentDescription = "Dictar mensaje en el dispositivo"
+            setTextColor(Color.WHITE); background = rounded(PANEL_2, 22f)
+            setOnClickListener { toggleDictation() }
+        }
+        inputRow.addView(microphone, LinearLayout.LayoutParams(dp(52), dp(52)).apply { marginStart = dp(8) })
         inputRow.addView(send, LinearLayout.LayoutParams(dp(58), dp(52)).apply { marginStart = dp(8) })
         root.addView(inputRow)
 
@@ -207,6 +226,7 @@ class MainActivity : AppCompatActivity() {
             menu.add("Rendimiento")
             menu.add("Personalidad")
             menu.add("Voz")
+            menu.add("Escuchar muestra B2")
             menu.add("Repetir última respuesta")
             menu.add("Detener voz")
             menu.add("Interfaz")
@@ -226,6 +246,7 @@ class MainActivity : AppCompatActivity() {
                     "Rendimiento" -> showPerformanceDialog()
                     "Personalidad" -> toast("ARIA Personality v2 activa")
                     "Voz" -> showVoiceDialog()
+                    "Escuchar muestra B2" -> playB2Sample()
                     "Repetir última respuesta" -> lastSpokenReply?.let { (text, emotion) ->
                         if (b2Enabled()) b2SpeechOutput?.speak(text)
                         else { startVoice(); speechOutput?.speak(text, AriaVoiceDirector.forEmotion(emotion)) }
@@ -569,8 +590,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun sendMessage() {
         val message = input.text.toString().trim(); if (message.isEmpty() || !modelLoaded || busy) return
+        stopDictation()
         speechOutput?.stop()
         b2SpeechOutput?.stop()
+        samplePlayer?.release(); samplePlayer = null
         AriaMemory.command(message)?.let { command ->
             input.text.clear()
             val answer = try {
@@ -850,9 +873,69 @@ class MainActivity : AppCompatActivity() {
     private fun voiceEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_ENABLED, false)
     private fun b2Enabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_B2, false)
 
+    private fun toggleDictation() {
+        if (speechInput != null) { stopDictation(); return }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        startDictation()
+    }
+
+    private fun startDictation() {
+        speechOutput?.stop()
+        b2SpeechOutput?.stop()
+        dictationBase = input.text.toString().trim()
+        try {
+            val listener = LocalSpeechInput(this,
+                onText = { heard ->
+                    input.setText(listOf(dictationBase, heard).filter { it.isNotBlank() }.joinToString(" "))
+                    input.setSelection(input.text.length)
+                },
+                onFinished = { error ->
+                    stopDictation()
+                    if (error != null) toast(error)
+                })
+            speechInput = listener
+            microphone.text = "■"
+            microphone.contentDescription = "Detener dictado"
+            listener.start()
+        } catch (e: Exception) {
+            stopDictation()
+            toast(e.message ?: "No pude iniciar el dictado local")
+        }
+    }
+
+    private fun stopDictation() {
+        speechInput?.close()
+        speechInput = null
+        microphone.text = "🎙"
+        microphone.contentDescription = "Dictar mensaje en el dispositivo"
+    }
+
     private fun startVoice() {
         if (speechOutput == null) speechOutput = LocalSpeechOutput(applicationContext) { status ->
             runOnUiThread { if (!isFinishing && !isDestroyed) toast(status) }
+        }
+    }
+
+    private fun playB2Sample() {
+        speechOutput?.stop()
+        b2SpeechOutput?.stop()
+        samplePlayer?.release()
+        samplePlayer = null
+        try {
+            val player = MediaPlayer()
+            samplePlayer = player
+            assets.openFd("aria-b2-reference.wav").use { sample ->
+                player.setDataSource(sample.fileDescriptor, sample.startOffset, sample.length)
+            }
+            player.setOnCompletionListener { it.release(); if (samplePlayer === it) samplePlayer = null }
+            player.prepare()
+            player.start()
+        } catch (e: Exception) {
+            samplePlayer?.release(); samplePlayer = null
+            toast("No pude reproducir la muestra B2: ${e.message ?: "audio no disponible"}")
         }
     }
 
@@ -882,13 +965,14 @@ class MainActivity : AppCompatActivity() {
                 if (replayLastReply) {
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
                         .putBoolean(VOICE_B2, true).apply()
-                    if (voiceInForeground) lastSpokenReply?.first?.let { output.speak(it) }
+                    if (voiceInForeground) output.speak(lastSpokenReply?.first
+                        ?: "Hola, Kura. Soy ARIA y estoy aquí contigo.")
                 }
             }
         }
     }
 
     override fun onStart() { super.onStart(); voiceInForeground = true }
-    override fun onStop() { voiceInForeground = false; speechOutput?.stop(); b2SpeechOutput?.stop(); super.onStop() }
+    override fun onStop() { voiceInForeground = false; stopDictation(); speechOutput?.stop(); b2SpeechOutput?.stop(); samplePlayer?.release(); samplePlayer = null; super.onStop() }
     override fun onDestroy() { speechOutput?.close(); speechOutput = null; b2SpeechOutput?.close(); b2SpeechOutput = null; uiScope.cancel(); super.onDestroy() }
 }
