@@ -4,6 +4,8 @@ plugins {
 }
 
 val ariaVersionName = "0.2.41-alpha"
+val cloudEndpoint = providers.gradleProperty("ARIA_CLOUD_ENDPOINT").orElse("").get()
+val cloudClientToken = providers.gradleProperty("ARIA_CLOUD_CLIENT_TOKEN").orElse("").get()
 
 android {
     compileOptions {
@@ -26,8 +28,9 @@ android {
     packaging { jniLibs { useLegacyPackaging = true } }
 
     val ariaKeystore = System.getenv("ARIA_SIGNING_KEYSTORE")
-    check(System.getenv("GITHUB_ACTIONS") != "true" || !ariaKeystore.isNullOrBlank()) {
-        "CI requires the verified ARIA signing key; refusing an automatically generated debug key."
+    val signingBuild = gradle.startParameter.taskNames.any { it.contains("assemble", ignoreCase = true) }
+    check(System.getenv("GITHUB_ACTIONS") != "true" || !signingBuild || !ariaKeystore.isNullOrBlank()) {
+        "CI requires the verified ARIA signing key for APK builds; refusing an automatically generated debug key."
     }
     if (!ariaKeystore.isNullOrBlank()) {
         signingConfigs.getByName("debug") {
@@ -45,6 +48,10 @@ android {
         versionCode = 57
         versionName = ariaVersionName
         resValue("string", "app_name", "ARIA Mobile $ariaVersionName")
+        buildConfigField("String", "ARIA_CLOUD_ENDPOINT",
+            "\"${cloudEndpoint.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "ARIA_CLOUD_CLIENT_TOKEN",
+            "\"${cloudClientToken.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 }
 
