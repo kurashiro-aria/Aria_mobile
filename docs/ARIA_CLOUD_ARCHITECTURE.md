@@ -1,124 +1,142 @@
-# ARIA Cloud architecture — Stage 1
+# ARIA Cloud architecture — Stages 1–2
 
 Branch: `aria-cloud-brain-prototype`
 
-Stage 1 establishes a provider-neutral brain boundary. It does **not** migrate inference, remove local code, add credentials, or change normal user behavior.
-
 ## Baseline and protection
 
-The Cloud prototype was created from commit `6dd516c182e2e9295cd971d526f93eb9944a277a`, which was also the tip of `aria-alpha-0.2-local-ai` at the start of this stage. The local branch is the functional rollback point and must not receive Cloud commits or merges.
+The Cloud prototype was created from commit `6dd516c182e2e9295cd971d526f93eb9944a277a`, the Stage-1 baseline shared with `aria-alpha-0.2-local-ai`. The protected local branch and `main` must not receive Cloud commits or merges.
 
-At the start of Stage 1 the two branches compared as identical. All changes described here belong only to `aria-cloud-brain-prototype`.
+Stage 1 introduced the provider-neutral brain boundary. Stage 2 proves a complete ARIA conversation path without using a GGUF for response generation. No production HTTP client, provider SDK, API key or external LLM is present.
 
-## Current architecture
-
-`MainActivity` currently coordinates UI, GGUF selection/restoration, llama `InferenceEngine`, conversation preparation, generation streaming, reply filtering, emotions, memory, initiative, voice and wake-word behavior. `ConversationBrain` interprets a turn and continuity; `ConversationContext` builds the context/prompt; `AriaPersonality` supplies ARIA identity instructions; llama.cpp performs local text inference.
-
-The native build also contains Qwen3 TTS. That voice implementation has its own GGML/native concerns and must not be confused with the text-brain migration.
-
-## Classification
+## Ownership classification
 
 ### A — ARIA identity: preserve
 
-These are product/character behavior and remain independent of where inference runs:
+`AriaPersonality`, `ConversationBrain`, `ConversationManager`, `ConversationContext`, `AriaMemory`, emotions/mood, `ExpressionResolver`, `RoleplayInterpreter`, initiative policy, `ReplyQuality`, `VisibleReplyFilter`, `ChatHistory`, avatar behavior and useful voice behavior remain ARIA-owned. They are deliberately outside the inference implementation.
 
-- `AriaPersonality`, expression style and personality prompt policy.
-- `ConversationBrain`, `ConversationManager`, `ConversationContext`, perspective and conversation state.
-- `AriaMemory` and memory selection/storage behavior.
-- `AriaEmotion`, `ConversationMood`, `ExpressionResolver` and avatar expression mapping.
-- `RoleplayInterpreter`.
-- `ConversationInitiative` and `InitiativePolicy`.
-- `ReplyQuality` and `VisibleReplyFilter`.
-- `ChatHistory`.
-- UI/avatar behavior.
-- Useful voice direction, speech output/input and wake-word behavior. Qwen B2 remains isolated and is not part of Cloud text inference.
+### B — local brain infrastructure: retained, removable later from Cloud product path
 
-### B — local brain infrastructure: retain now, removable later
+llama.cpp, `InferenceEngine`, GGUF discovery/import/selection/loading, local model persistence, llama JNI/native backends and local-model lifecycle remain in the repository. Stage 2 does not delete or weaken them.
 
-- llama.cpp module and its native libraries/backends.
-- `com.arm.aichat.InferenceEngine` and `AiChat` local-engine acquisition.
-- GGUF discovery, inspection, import, selection and persistence (`ModelSelection`, model folder, `LAST_MODEL`).
-- Local model loading, cleanup, model-ready checks, tensor loading progress and system-prompt loading into llama.
-- JNI/native code that exists solely to run the local text LLM.
-- Logic whose only purpose is keeping/reconnecting the local GGUF model.
+Qwen B2 TTS is separate native voice infrastructure and is explicitly out of scope for this text-brain migration.
 
-None of these are deleted in Stage 1.
+### C — shared/refactor boundary
 
-### C — shared / refactor boundary
+`AriaBrainEngine`, `BrainRequest`, `BrainState`, `BrainPipeline` and final reply processing form the shared seam. Provider-specific transport must remain behind this boundary.
 
-- Generation orchestration in `MainActivity` currently knows llama states and APIs directly.
-- Performance telemetry mixes conversation preparation metrics with GGUF/llama metrics.
-- Loading/status UI is expressed in local-model terms.
-- Prompt preparation is shared ARIA behavior, but transport/inference invocation must sit behind the brain interface.
+## Provider-neutral brain contract
 
-These areas should migrate incrementally. Stage 1 adds the seam without a risky rewrite of `MainActivity`.
+`AriaBrainEngine` exposes `state`, streaming `generate(BrainRequest)` and `close()`. `BrainState` is limited to `Disconnected`, `Connecting`, `Ready`, `Generating` and `Error`.
 
-## New brain boundary
+`BrainRequest` contains simple values only: prepared prompt, maximum output tokens and an optional request identifier. It carries no Android object, GGUF handle, HTTP request, provider model type or credential.
 
-`AriaBrainEngine` is the provider-neutral inference contract. `BrainRequest` carries the prepared prompt and output budget. `BrainState` exposes only ARIA-level lifecycle states: `Disconnected`, `Connecting`, `Ready`, `Generating`, and `Error`. `BrainResponse` is available for non-stream/final metadata as later stages need it.
+`LocalBrainEngine` remains an adapter around llama `InferenceEngine`. `CloudInferenceEngine` remains the future transport seam around `CloudBrainClient`.
 
-`LocalBrainEngine` adapts the existing llama `InferenceEngine` to this contract without changing local loading or model-selection behavior. It demonstrates that llama can live behind the same boundary while the current runtime remains intact.
+## Stage 2 Mock Cloud Brain
 
-`CloudInferenceEngine` implements the same contract using an injected `CloudBrainClient`. `CloudBrainConfig` contains only provider-neutral connection/time-out configuration. There is deliberately no production HTTP implementation, provider SDK, API key, auth header, or real endpoint in Stage 1.
+`MockCloudBrainEngine` implements the exact same `AriaBrainEngine` contract. It:
 
-Target dependency direction:
+- uses no llama.cpp, GGUF, network, API or secret;
+- accepts only `BrainRequest`;
+- records the last request for tests without logging it;
+- simulates latency;
+- transitions `Disconnected -> Connecting -> Ready -> Generating -> Ready`;
+- can deliberately produce `Generating -> Error` using the test marker `[MOCK_ERROR]`;
+- can deliberately produce an empty stream with `[MOCK_EMPTY]`;
+- returns to `Ready` after coroutine cancellation;
+- deliberately returns deterministic text rather than pretending to be an AI.
+
+The special markers are development/test behavior and are not a provider protocol.
+
+## Stage 2 development runtime
+
+The Cloud prototype branch has an explicit development launcher, `CloudMockActivity`, labelled **ARIA Cloud • Mock**. `MainActivity` and the complete local GGUF runtime remain in the APK but are not the launcher for this branch during Stage 2.
+
+This makes the proof unambiguous: opening the Stage-2 Cloud build does not select, restore or load a GGUF before enabling conversation. Readiness comes from `AriaBrainEngine.state == BrainState.Ready`, not `InferenceEngine.State.ModelReady`.
+
+This launcher switch is intentionally branch-specific and temporary. It is not presented as a production user setting.
+
+## Proven conversation flow
+
+The Stage-2 development path is:
 
 ```text
-ARIA identity / conversation preparation
-              |
-              v
-       AriaBrainEngine
-        /           \
-       v             v
-LocalBrainEngine   CloudInferenceEngine
-       |             |
-   llama.cpp      CloudBrainClient
-                     |
-               provider adapter (future)
+User
+ -> ConversationBrain
+ -> ConversationContext + AriaPersonality
+ -> relevant AriaMemory
+ -> mood / ExpressionResolver
+ -> BrainPipeline -> BrainRequest
+ -> AriaBrainEngine
+ -> MockCloudBrainEngine
+ -> VisibleReplyFilter / ReplyQuality
+ -> ConversationManager
+ -> ChatHistory
+ -> emotion / avatar
+ -> existing Android speech output when voice is enabled
 ```
 
-`ConversationBrain` must never import HTTP clients, provider SDKs, API-key handling, or provider model names.
+`ConversationBrain` still interprets intent, continuity and roleplay. `ConversationContext` still assembles recent history and relevant memories. `BrainPipeline` wraps that prepared ARIA context in the same direct-response personality instruction used by the local path. The Mock never owns personality, memory, emotions, history or reply policy.
 
-## Target Cloud conversation flow
+A generated answer is recorded through `ChatHistory` and `ConversationManager`, processed by `AriaEmotion`, reflected by the avatar and can reach the existing `LocalSpeechOutput`. Voice B2 itself is not changed.
 
-1. User input enters existing ARIA conversation handling.
-2. `ConversationBrain` interprets continuity/intent/roleplay.
-3. Memory, personality, mood/expression and `ConversationContext` prepare the ARIA prompt.
-4. The prepared prompt becomes a `BrainRequest`.
-5. `AriaBrainEngine` generates chunks, regardless of Local/Cloud implementation.
-6. Existing `VisibleReplyFilter` and `ReplyQuality` validate visible output.
-7. Existing emotion/expression logic, history, memory/manager recording and optional voice handle the final ARIA reply.
+## Instrumentation
 
-The Cloud provider therefore supplies inference capacity; it does not become ARIA's identity layer.
+The Stage-2 launcher measures in memory only:
+
+- BrainRequest preparation time;
+- delay until generation starts;
+- total generation time;
+- final provider-neutral state;
+- exception class when generation fails.
+
+Raw user prompts, memories and future credentials are not logged by this instrumentation.
+
+## Local dependencies still present
+
+The original `MainActivity` still contains local-only lifecycle code for:
+
+- acquiring `AiChat.getInferenceEngine`;
+- `InferenceEngine.State.ModelReady` and other llama states;
+- GGUF import/inspection/selection/restoration;
+- `loadModel`, `cleanUp` and `setSystemPrompt`;
+- tensor/model-loading progress UI;
+- local performance metrics and active GGUF naming.
+
+Those dependencies remain intentionally untouched so Stage 2 does not destabilize the proven local implementation. The Stage-2 Cloud launcher bypasses them rather than deleting them.
+
+The repository and Gradle build still include the `:llama` module and native libraries. Therefore Stage 2 proves **runtime generation without GGUF**, not yet an APK physically stripped of llama/GGUF infrastructure.
+
+## Tests added for Stage 2
+
+`MockCloudBrainEngineTest` covers deterministic response/request capture, `Ready -> Generating -> Ready`, simulated error, cancellation, empty response, readiness without llama `ModelReady`, provider-neutral request preparation and generation without a GGUF path.
+
+Existing tests are retained unchanged.
 
 ## Security boundaries
 
-- No API keys or secrets in source, resources, commits, logs, prompts, tests or `CloudBrainConfig`.
-- Mobile clients should not embed long-lived provider credentials. A later architecture should prefer an ARIA-controlled server/broker or short-lived credentials.
-- Cloud transport must use TLS and explicit timeouts.
-- Provider adapters must be replaceable and must not leak provider-specific response/state types into conversation code.
-- Define in a later stage what memories/history are sent remotely; default to the minimum context required for a turn.
-- Do not log raw private conversation/memory payloads by default.
-- Local fallback, retries and cancellation must not duplicate user turns or corrupt `ChatHistory`.
+- No API keys or secrets in source, resources, commits, logs, prompts or tests.
+- The Mock performs no network access.
+- Future provider credentials must not be embedded in the mobile client as long-lived secrets.
+- Provider response/state types must never leak into `ConversationBrain`.
+- Remote context policy must minimize history/memory disclosure.
+- Retries/cancellation must not duplicate turns or corrupt history.
 
-## Migration strategy
+## Stage 3 replacement points — not implemented here
 
-1. **Stage 1 (this stage):** add contracts, Cloud seam, local adapter, tests and documentation. Preserve behavior and all local infrastructure.
-2. Later: route generation orchestration through `AriaBrainEngine` while keeping `LocalBrainEngine` as the active implementation; verify parity on device.
-3. Add a real Cloud transport behind `CloudBrainClient`, with credentials outside the app/provider-neutral layer.
-4. Add an explicit runtime/config choice and Cloud-specific status/telemetry without changing identity components.
-5. After Cloud parity and rollback testing, remove GGUF/llama text infrastructure only from the Cloud product path. Keep the protected local branch untouched.
+Stage 3 should replace the Mock transport with a real provider-neutral remote client while preserving `AriaBrainEngine`, `BrainRequest` and the ARIA-owned preparation/finalization pipeline. It must also decide authentication, privacy/minimum-context policy, timeout/retry/cancellation semantics and Cloud lifecycle UI.
 
-## Risks detected
+Before removing llama/GGUF from a Cloud artifact, parity must be verified and Qwen B2's separate native GGML requirements must be protected.
 
-- `MainActivity` is large and currently owns both identity orchestration and local-engine lifecycle; a broad edit would have high regression risk.
-- UI readiness (`modelLoaded`, send-button state, loading overlay) is directly tied to `InferenceEngine.State.ModelReady` and GGUF semantics.
-- System-prompt handling is currently performed as part of local model loading. Cloud must not accidentally duplicate personality/context or alter role assignment.
-- Streaming filtering/retry logic depends on chunk behavior; provider adapters must preserve cancellation and ordered chunks.
-- Native Qwen3 TTS and llama.cpp use different GGML revisions. Removing or changing native libraries during the text migration could break voice even if Cloud inference works.
-- Wake-word/foreground-service flows can initiate turns while Activity state changes; Cloud cancellation/reconnection must be designed around that lifecycle.
-- Cloud privacy, authentication, cost/rate limits and offline behavior are intentionally unresolved in Stage 1 and must be explicit before production use.
+## Risks
 
-## Stage 1 stop condition
+- There are temporarily two Activities: the preserved local `MainActivity` and the Stage-2 `CloudMockActivity`. Shared orchestration should later be extracted so both front ends cannot drift.
+- The original `MainActivity` remains highly coupled to llama lifecycle and GGUF UI. This is known debt, not hidden by the Mock proof.
+- Mock output cannot validate conversational quality, tokenization or real network streaming behavior.
+- A real provider may stream differently; `VisibleReplyFilter`, cancellation and retry behavior require parity testing.
+- Wake-word/foreground-service integration still assumes parts of the local lifecycle and needs deliberate Cloud integration later.
+- Qwen B2 and llama use native GGML components with different concerns; removing native text dependencies without checking voice can break TTS.
 
-Stage 1 is complete when the provider-neutral brain types and Cloud seam exist, the local adapter demonstrates compatibility, tests cover the new boundary, this migration document exists, and no local infrastructure or protected branch has been modified. No real Cloud provider is connected in this stage.
+## Stage 2 stop condition
+
+Stage 2 stops when the explicit Mock Cloud launcher can run the ARIA-owned preparation and finalization pipeline through `AriaBrainEngine` without loading a GGUF for response generation, with state/error/cancellation tests and documentation in place. No HTTP provider is connected, llama/GGUF are not removed, and Stage 3 is not started.
