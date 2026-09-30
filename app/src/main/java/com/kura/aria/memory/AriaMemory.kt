@@ -2,7 +2,7 @@ package com.kura.aria.memory
 
 import android.content.Context
 import org.json.JSONArray
-import org.json.JSONObject
+import java.io.File
 import java.text.Normalizer
 import com.kura.aria.personality.RelationshipState
 import com.kura.aria.personality.StylePreferences
@@ -18,87 +18,90 @@ data class Memory(
     val updatedAt: Long = timestamp,
     val active: Boolean = true,
     val lastUsed: Long = 0L,
-    val accessCount: Int = 0
+    val accessCount: Int = 0,
+    val confidence: Float = 1f,
+    val entities: List<String> = emptyList(),
+    val conversationId: String? = null,
+    val schemaVersion: Int = 1
 )
 
 /** Explicit, private on-device memories. Conversation history remains separate. */
 class AriaMemory(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("aria_memories_v2", Context.MODE_PRIVATE)
+    private val database = AriaMemoryDatabase(context)
 
-    @Synchronized fun recallAll(): List<Memory> = MemoryFacts.current(read())
+    init { migrateLegacyOnce() }
+
+    @Synchronized fun recallAll(): List<Memory> = buildList {
+        var offset = 0
+        do {
+            val page = database.page(offset, 250)
+            addAll(page); offset += page.size
+        } while (page.size == 250)
+    }.let(MemoryFacts::current)
 
     /** Only Kura's explicitly stored preferences can bias future expression. */
-    @Synchronized internal fun stylePreferences(): StylePreferences = RelationshipState.from(recallAll())
+    @Synchronized internal fun stylePreferences(): StylePreferences = RelationshipState.from(
+        database.activeByTypes(setOf("preferencia_conversacion"), 50))
 
     @Synchronized fun remember(text: String, categoryHint: String? = null): Memory {
         val content = text.trim().replace(Regex("\\s+"), " ")
         require(content.length in 3..240) { "El recuerdo debe tener entre 3 y 240 caracteres." }
-        val current = read()
         val key = MemoryFacts.key(content)
-        val old = current.filter { key != null && MemoryFacts.key(it.content) == key }
-            .maxByOrNull { it.updatedAt }
-            ?: current.firstOrNull { MemoryFacts.normalize(it.content) == MemoryFacts.normalize(content) }
+        val old = database.findDuplicate(key, MemoryFacts.normalize(content))
         val now = System.currentTimeMillis()
         val item = if (old == null) {
-            require(current.size < 50) { "Llegué al límite de 50 recuerdos. Borra uno antes de añadir otro." }
-            Memory(prefs.getLong("next_id", 1L), content, category = categoryHint ?: MemoryFacts.category(content),
+            Memory(0, content, category = categoryHint ?: MemoryFacts.category(content),
                 tags = MemorySelector.keywords(content).take(8), timestamp = now)
         } else old.copy(content = content, category = categoryHint ?: MemoryFacts.category(content),
             tags = MemorySelector.keywords(content).take(8), updatedAt = now, active = true)
-        val items = current.filterNot { it.id == item.id || (key != null && MemoryFacts.key(it.content) == key) } + item
-        persist(items, if (old == null) item.id + 1 else prefs.getLong("next_id", 1L))
-        return item
+        return if (old == null) database.insert(item, key) else item.also { database.update(it, key) }
     }
 
     @Synchronized fun correct(id: Long, text: String): Memory? {
         val content = text.trim().replace(Regex("\\s+"), " ")
         require(content.length in 3..240) { "El recuerdo debe tener entre 3 y 240 caracteres." }
-        val current = read()
-        val old = current.firstOrNull { it.id == id } ?: return null
+        val old = database.findById(id) ?: return null
         val changed = old.copy(content = content, category = MemoryFacts.category(content),
             tags = MemorySelector.keywords(content).take(8),
             updatedAt = System.currentTimeMillis(), active = true)
-        val key = MemoryFacts.key(content)
-        persist(current.filterNot { it.id == id || (key != null && MemoryFacts.key(it.content) == key) } + changed)
-        return changed
+        return changed.takeIf { database.update(it, MemoryFacts.key(content)) }
     }
 
     @Synchronized fun forget(id: Long): Boolean {
-        val current = read()
-        if (current.none { it.id == id }) return false
-        persist(current.filterNot { it.id == id })
-        return true
+        return database.archive(id)
     }
 
     @Synchronized fun relevantTo(message: String, previousUserMessages: List<String> = emptyList()): List<Memory> {
-        val current = read()
-        val selected = MemorySelector.select(current, message, previousUserMessages)
+        val currentTerms = MemorySelector.keywords(message)
+        val priorTerms = if (MemorySelector.isFollowUp(message)) previousUserMessages.takeLast(2)
+            .flatMap(MemorySelector::keywords).toSet() else emptySet()
+        val candidates = database.candidates(currentTerms + priorTerms)
+        val selected = MemorySelector.select(candidates, message, previousUserMessages)
         if (selected.isEmpty()) return selected
-        val ids = selected.map { it.id }.toSet()
         val now = System.currentTimeMillis()
-        val updated = current.map { if (it.id in ids) it.copy(lastUsed = now,
-            accessCount = (it.accessCount + 1).coerceAtMost(1_000_000)) else it }
-        persist(updated)
-        val byId = updated.associateBy { it.id }
-        return selected.mapNotNull { byId[it.id] }
+        database.markUsed(selected.map { it.id }, now)
+        return selected.map { it.copy(lastUsed = now, accessCount = (it.accessCount + 1).coerceAtMost(1_000_000)) }
     }
 
-    private fun persist(items: List<Memory>, nextId: Long = prefs.getLong("next_id", 1L)) {
-        val data = JSONArray()
-        items.forEach { data.put(JSONObject().put("id", it.id).put("content", it.content)
-            .put("category", it.category).put("importance", it.importance)
-            .put("timestamp", it.timestamp).put("source", it.source)
-            .put("tags", JSONArray(it.tags)).put("updatedAt", it.updatedAt).put("active", it.active)
-            .put("lastUsed", it.lastUsed).put("accessCount", it.accessCount)) }
-        check(prefs.edit().putString("items", data.toString()).putLong("next_id", nextId).commit()) {
-            "No pude guardar la memoria local."
-        }
+    fun count(): Long = database.count()
+    fun page(offset: Int, limit: Int = 250): List<Memory> = database.page(offset, limit)
+    fun restore(memory: Memory): Memory {
+        require(memory.content.isNotBlank() && memory.schemaVersion <= 1)
+        val key = MemoryFacts.key(memory.content)
+        val old = database.findDuplicate(key, MemoryFacts.normalize(memory.content))
+        val restored = memory.copy(id = old?.id ?: 0, updatedAt = maxOf(memory.updatedAt, old?.updatedAt ?: 0))
+        return if (old == null) database.insert(restored, key) else restored.also { database.update(it, key) }
     }
+    fun storageBytes(): Long = database.readableDatabase.path?.let { File(it).length() } ?: 0L
+    fun addSummary(content: String, sourceCount: Int, start: Long, end: Long) =
+        database.addSummary(content, sourceCount, start, end)
 
-    private fun read(): List<Memory> {
+    private fun migrateLegacyOnce() {
+        if (prefs.getBoolean("sqlite_migration_v1", false)) return
         val data = try { JSONArray(prefs.getString("items", "[]")) }
-            catch (e: Exception) { throw IllegalStateException("La memoria local no se pudo leer.", e) }
-        return (0 until data.length()).mapNotNull { index ->
+            catch (_: Exception) { JSONArray() }
+        (0 until data.length()).mapNotNull { index ->
             val obj = data.optJSONObject(index) ?: return@mapNotNull null
             val id = obj.optLong("id")
             val content = obj.optString("content")
@@ -110,7 +113,11 @@ class AriaMemory(context: Context) {
                 (0 until tags.length()).map { tags.optString(it) },
                 obj.optLong("updatedAt", obj.optLong("timestamp")), obj.optBoolean("active", true),
                 obj.optLong("lastUsed", 0L), obj.optInt("accessCount", 0).coerceAtLeast(0))
+        }.filter { it.active }.forEach { legacy ->
+            if (database.findDuplicate(MemoryFacts.key(legacy.content), MemoryFacts.normalize(legacy.content)) == null)
+                database.insert(legacy.copy(id = 0), MemoryFacts.key(legacy.content))
         }
+        check(prefs.edit().putBoolean("sqlite_migration_v1", true).commit())
     }
 
     companion object {
