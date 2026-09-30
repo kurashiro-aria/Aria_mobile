@@ -105,9 +105,11 @@ jobs:
           PY
 
       - name: Build debug APK
+        if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
         run: gradle :app:assembleDebug --stacktrace --console=plain
 
       - name: Check isolated voice libraries
+        if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -139,10 +141,12 @@ jobs:
           done
 
       - name: Verify final APK certificate and version
+        if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
         shell: bash
         run: bash scripts/verify-apk.sh
 
       - name: Name versioned APK
+        if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
         id: apk-name
         shell: bash
         run: |
@@ -153,6 +157,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Upload ARIA APK
+        if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
         uses: actions/upload-artifact@v4
         with:
           name: ARIA-Mobile-${{ steps.apk-name.outputs.version }}

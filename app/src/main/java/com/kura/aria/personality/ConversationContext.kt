@@ -1,7 +1,6 @@
 package com.kura.aria.personality
 
 import com.kura.aria.chat.ChatMessage
-import com.kura.aria.chat.ReplyQuality
 import com.kura.aria.emotion.MoodReader
 import com.kura.aria.memory.Memory
 import com.kura.aria.memory.MemorySelector
@@ -15,77 +14,59 @@ internal object ConversationContext {
     /** One bounded user turn: recent dialogue, sourced memories, then the real user message. */
     fun turnPrompt(history: List<ChatMessage>, memories: List<Memory>, current: String,
                    state: ConversationState = ConversationState(),
-                   stylePreferences: StylePreferences = StylePreferences()): String {
+                   stylePreferences: StylePreferences = StylePreferences(),
+                   understood: ConversationTurn = ConversationBrain.interpret(history, current, state)): String {
         require(current.isNotBlank())
-        val lastUser = history.lastOrNull { it.role == "Kura" }
-        val mood = MoodReader.forTurn(current, state.topic.ifBlank { lastUser?.text.orEmpty() },
+        val mood = MoodReader.forTurn(current, state.topic,
             state.socialMood, state.updatedAt, carriedTurns = state.socialTurns)
         val expression = ExpressionResolver.forTurn(current, mood, state.expression, state.updatedAt,
             preferences = stylePreferences)
-        val greeting = isStandaloneGreeting(RoleplayInterpreter.spokenText(current))
-        val lastAria = history.lastOrNull()?.takeIf { it.role == "ARIA" }?.text
-        val directFollowUp = !greeting && (MemorySelector.isFollowUp(current) || isQualifiedAssent(current) ||
-            ConversationPerspective.shortClarification(current, lastAria) ||
-            respondsToPriorTurn(current, lastAria))
-        val returnsToTopic = current.trim().matches(Regex("(?i)^(?:volvamos|retomemos|regresemos)\\b.*"))
-        val currentTerms = MemorySelector.keywords(RoleplayInterpreter.spokenText(current))
-        val lastTerms = lastUser?.let { MemorySelector.keywords(RoleplayInterpreter.spokenText(it.text)) }.orEmpty()
-        val ariaTerms = lastAria?.let(MemorySelector::keywords).orEmpty()
-        val lexicalContinuation = !greeting && lastUser != null &&
-            (currentTerms.intersect(lastTerms).isNotEmpty() || currentTerms.intersect(ariaTerms).isNotEmpty())
-        val conversationalContinuation = !greeting && !returnsToTopic && lastUser != null &&
-            history.takeLast(4).any { it.role == "ARIA" } &&
-            (directFollowUp || lexicalContinuation)
-        val recentWindow = if (conversationalContinuation) history.takeLast(6) else emptyList()
-        val recentUser = recentWindow.filter { it.role == "Kura" &&
-            !RoleplayInterpreter.isPureAction(it.text) }
-        val previousAria = if (conversationalContinuation && !returnsToTopic)
-            recentWindow.lastOrNull { it.role == "ARIA" }?.text
-                ?.takeUnless(ReplyQuality::hasTranscript)?.let(::priorReference)
-            else null
-        val earlier = if (greeting || RoleplayInterpreter.isPureAction(current)) emptyList()
-            else relatedEarlier(history.dropLast(recentWindow.size), current)
-        val mediumTopic = if (greeting || RoleplayInterpreter.isPureAction(current)) null
-            else state.relevantTopic(current)?.takeIf { topic ->
-            recentUser.none { it.text.take(160) == topic } && earlier.none { it.text.take(160) == topic }
-        }
-        val pending = if (directFollowUp && !returnsToTopic && previousAria == null)
-            state.pendingQuestion.takeIf { it.isNotBlank() } else null
-        val roleplay = RoleplayInterpreter.promptContext(current)
+        val roleplay = if (understood.roleplay.isNotEmpty()) RoleplayInterpreter.promptContext(current) else null
         return buildString {
             append("Contexto para ARIA: estas citas no son tu respuesta. Responde al mensaje actual sin copiar turnos ni anteponer tu nombre. ")
-            if (conversationalContinuation) {
-                append("Este mensaje continúa el intercambio reciente: sigue el hilo sin repetir ofertas. ")
+            if (understood.continuity == TurnContinuity.CONTINUES) {
+                append("Este mensaje continúa el intercambio reciente; usa sus referentes sin repetir lo ya dicho. ")
             }
-            if (isQualifiedAssent(current)) append("Kura ya aceptó y precisó su elección; incorpórala sin volver a preguntarla. ")
-            else if (respondsToPriorTurn(current, lastAria)) append("Es una reacción o precisión a tu último turno; tenla en cuenta antes de seguir. ")
-            append("Pregunta solo si necesitas un dato concreto.\n")
+            if (understood.intent == ConversationIntent.ANSWER)
+                append("Kura respondió a una pregunta; continúa desde su elección. ")
+            if (isQualifiedAssent(current) && understood.intent == ConversationIntent.ANSWER)
+                append("Kura ya aceptó y precisó su elección; incorpórala sin volver a preguntarla. ")
+            append("Pregunta si aporta algo; también puedes comentar, reaccionar o cerrar sin pregunta.\n")
             PersonalityEngine.turnGuidance(mood, expression).takeIf(String::isNotBlank)?.let {
                 append("TONO DE ESTE TURNO: ").append(it).append('\n')
             }
             ConversationPerspective.guidance(current)?.let { append(it).append('\n') }
-            if (recentUser.isNotEmpty()) {
-                append("\nLO QUE KURA DIJO ANTES:\n")
-                recentUser.forEach { append(line(it, 140)).append('\n') }
-            }
-            if (previousAria != null) {
-                append("\nREFERENCIA A TU ÚLTIMA INTERVENCIÓN (ya dicha, úsala solo para entender qué sigue; no la repitas):\n")
-                append(previousAria).append('\n')
-            } else if (pending != null) {
+            if (understood.recent.isNotEmpty()) {
+                val priorUser = understood.recent.filter { it.role == "Kura" }
+                if (priorUser.isNotEmpty()) {
+                    append("\nLO QUE KURA DIJO ANTES:\n")
+                    priorUser.forEach { append(line(it, 140)).append('\n') }
+                }
+                val priorAria = understood.recent.filter { it.role == "ARIA" }
+                if (priorAria.isNotEmpty()) {
+                    append("\nREFERENCIA A INTERVENCIONES DE ARIA (ya dichas, no las repitas):\n")
+                    priorAria.forEach { append("• «").append(priorReference(it.text)).append("»\n") }
+                }
+            } else if (understood.pendingQuestion != null) {
                 append("\nPREGUNTA PENDIENTE DE ARIA (ya dicha, no la repitas):\n")
-                append(pending).append('\n')
+                append(understood.pendingQuestion).append('\n')
             }
-            if (mediumTopic != null) {
+            if (understood.relevantTopic != null) {
                 append("\nTEMA ANTERIOR MENCIONADO POR KURA (resumen literal, no respuesta):\n")
-                append(mediumTopic).append('\n')
+                append(understood.relevantTopic).append('\n')
             }
-            if (!greeting && memories.isNotEmpty()) {
+            if (understood.continuity == TurnContinuity.RETURNS_TO_TOPIC &&
+                understood.relevantTopic == null) {
+                val earlier = relatedEarlier(history, understood.spokenText)
+                if (earlier.isNotEmpty()) {
+                    append("\nFragmentos anteriores del historial (no guardados):\n")
+                    earlier.forEach { append("  ").append(line(it, 120)).append('\n') }
+                }
+            }
+            if (understood.intent != ConversationIntent.SOCIAL &&
+                understood.intent != ConversationIntent.ROLEPLAY_ACTION && memories.isNotEmpty()) {
                 append("\nDATOS QUE KURA ELIGIÓ GUARDAR (úsalos solo si cambian de verdad la respuesta; no los fuerces ni menciones esta lista):\n")
                 memories.take(3).forEach { append("• ${memoryLine(it)}\n") }
-            }
-            if (earlier.isNotEmpty()) {
-                append("\nFragmentos anteriores del historial (no guardados):\n")
-                earlier.forEach { append("  ").append(line(it, 120)).append('\n') }
             }
             roleplay?.let {
                 append("\nCONTEXTO DE ESCENA FICTICIA:\n").append(it).append('\n')

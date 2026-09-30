@@ -27,6 +27,8 @@ import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.kura.aria.personality.AriaPersonality
 import com.kura.aria.personality.ConversationContext
+import com.kura.aria.personality.ConversationBrain
+import com.kura.aria.personality.ConversationIntent
 import com.kura.aria.personality.ConversationManager
 import com.kura.aria.personality.ExpressionResolver
 import com.kura.aria.personality.RoleplayInterpreter
@@ -670,13 +672,17 @@ class MainActivity : AppCompatActivity() {
                     chatHistory.append("Kura", message)
                     previous
                 }
+                val turn = withContext(Dispatchers.Default) {
+                    ConversationBrain.interpret(previousHistory, message, stateBefore)
+                }
                 val modelMessage = withContext(Dispatchers.IO) {
-                    val recentUserMessages = previousHistory.filter { it.role == "Kura" }
-                        .map { it.text }.takeLast(2)
-                    val relevant = ariaMemory.relevantTo(message, recentUserMessages)
+                    val recentUserMessages = turn.recent.filter { it.role == "Kura" }
+                        .map { com.kura.aria.personality.RoleplayInterpreter.spokenText(it.text) }
+                    val relevant = if (turn.intent == ConversationIntent.ROLEPLAY_ACTION)
+                        emptyList() else ariaMemory.relevantTo(turn.spokenText, recentUserMessages)
                     lastMemoryCount = relevant.size
                     ConversationContext.turnPrompt(previousHistory, relevant, message, stateBefore,
-                        stylePreferences)
+                        stylePreferences, turn)
                 }
                 lastContextChars = modelMessage.length
                 lastPreparationMs = SystemClock.elapsedRealtime() - preparationStarted
@@ -692,7 +698,8 @@ class MainActivity : AppCompatActivity() {
                     reply.text = "Ajustando respuesta…"
                     showPortrait(AriaEmotion.THINKING)
                     answer = collectVisibleReply(
-                        AriaPersonality.directResponsePrompt(ReplyQuality.retryPrompt(previousHistory, message)),
+                        AriaPersonality.directResponsePrompt(ReplyQuality.retryPrompt(
+                            turn.recent, message)),
                         160, reply, message, previewExpression
                     )
                     if (ReplyQuality.needsRetry(message, previousAria, answer)) {
