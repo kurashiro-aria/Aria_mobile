@@ -70,12 +70,14 @@ jobs:
           java-version: '17'
 
       - name: Restore existing ARIA signing key
+        if: env.ARIA_BUILD_APK == 'true'
         uses: actions/cache/restore@v4
         with:
           path: ~/.android/debug.keystore
           key: aria-mobile-alpha-debug-signing-v1
 
       - name: Prepare verified signing key
+        if: env.ARIA_BUILD_APK == 'true'
         env:
           ARIA_DEBUG_KEYSTORE_BASE64: ${{ secrets.ARIA_DEBUG_KEYSTORE_BASE64 }}
         shell: bash
