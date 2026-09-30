@@ -31,8 +31,8 @@ internal object ReplyQuality {
         if (source.size >= 2 && source == candidateWords) return true
         val answer = candidateWords.take(32)
         if (source.size < 8 || answer.size < 8) return false
-        val candidateStart = normalize(candidate).trim()
-        if (candidateStart.startsWith("ah entiendo") || candidateStart.startsWith("entiendo entonces")) {
+        if (answer.take(2) == listOf("ah", "entiendo") ||
+            answer.take(2) == listOf("entiendo", "entonces")) {
             val fragments = source.windowed(5).map { it.joinToString(" ") }.toSet()
             if (answer.windowed(5).any { it.joinToString(" ") in fragments }) return true
         }
