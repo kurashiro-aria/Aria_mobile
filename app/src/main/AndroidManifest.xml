@@ -8,9 +8,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <queries>
-        <intent>
-            <action android:name="android.speech.RecognitionService" />
-        </intent>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
     </queries>
 
     <application
@@ -20,8 +18,9 @@
         android:allowBackup="true"
         android:supportsRtl="true">
 
+        <!-- Stage 2 Cloud branch only: explicit development launcher. No GGUF is required. -->
         <activity
-            android:name=".MainActivity"
+            android:name=".CloudMockActivity"
             android:screenOrientation="portrait"
             android:exported="true">
             <intent-filter>
@@ -29,6 +28,9 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <!-- Retained unchanged local UI/runtime for rollback and later parity work. -->
+        <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="false" />
 
         <service
             android:name=".AriaForegroundService"
