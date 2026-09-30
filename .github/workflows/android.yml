@@ -1,4 +1,5 @@
 name: Build ARIA Android
+run-name: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'full' || github.event_name == 'push' && (github.ref_name == 'aria-alpha-0.2-local-ai' || github.ref_name == 'aria-cloud-brain-prototype') && contains(github.event.head_commit.message, '[build-apk]') && !contains(github.event.head_commit.message, '[tests-only]')) && 'TESTS + APK' || 'TESTS ONLY' }} · ${{ github.ref_name }}
 
 on:
   push:
@@ -6,6 +7,7 @@ on:
       - main
       - aria-alpha-0.2-local-ai
       - voice-b2-experiment
+      - aria-cloud-brain-prototype
   workflow_dispatch:
     inputs:
       mode:
@@ -20,13 +22,23 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ARIA_BUILD_APK: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' || github.event_name == 'push' && (github.ref_name == 'aria-alpha-0.2-local-ai' || github.ref_name == 'aria-cloud-brain-prototype') && contains(github.event.head_commit.message, '[build-apk]') && !contains(github.event.head_commit.message, '[tests-only]') }}
 
     steps:
+      - name: Show execution mode
+        run: |
+          if [[ "$ARIA_BUILD_APK" == "true" ]]; then
+            echo 'TESTS + APK' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'TESTS ONLY' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Checkout ARIA
         uses: actions/checkout@v4
 
       - name: Fetch pinned llama.cpp
-        if: github.ref_name == 'aria-alpha-0.2-local-ai' || github.ref_name == 'voice-b2-experiment'
+        if: github.ref_name == 'aria-alpha-0.2-local-ai' || github.ref_name == 'voice-b2-experiment' || github.ref_name == 'aria-cloud-brain-prototype'
         run: |
           git clone --filter=blob:none --no-checkout https://github.com/ggml-org/llama.cpp.git llama.cpp
           git -C llama.cpp checkout 26394b4e6749a41c3633db040e0987500a5f7013
@@ -45,7 +57,7 @@ jobs:
           git -C llama.cpp apply ../patches/aria-model-load-progress.patch
 
       - name: Fetch pinned Qwen3-TTS runtime
-        if: github.ref_name == 'aria-alpha-0.2-local-ai' || github.ref_name == 'voice-b2-experiment'
+        if: github.ref_name == 'aria-alpha-0.2-local-ai' || github.ref_name == 'voice-b2-experiment' || github.ref_name == 'aria-cloud-brain-prototype'
         run: |
           git clone --filter=blob:none https://github.com/Danmoreng/qwen3-tts.cpp.git qwen3-tts.cpp
           git -C qwen3-tts.cpp checkout 4562731dc612cb87b4cd1eedac275a17d1078773
@@ -114,11 +126,11 @@ jobs:
           PY
 
       - name: Build debug APK
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
+        if: env.ARIA_BUILD_APK == 'true'
         run: gradle :app:assembleDebug --stacktrace --console=plain
 
       - name: Check isolated voice libraries
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
+        if: env.ARIA_BUILD_APK == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -150,12 +162,12 @@ jobs:
           done
 
       - name: Verify final APK certificate and version
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
+        if: env.ARIA_BUILD_APK == 'true'
         shell: bash
         run: bash scripts/verify-apk.sh
 
       - name: Name versioned APK
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
+        if: env.ARIA_BUILD_APK == 'true'
         id: apk-name
         shell: bash
         run: |
@@ -168,7 +180,7 @@ jobs:
           echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
 
       - name: Upload ARIA APK
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
+        if: env.ARIA_BUILD_APK == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ARIA-Mobile-${{ steps.apk-name.outputs.version }}-${{ steps.apk-name.outputs.short_sha }}
