@@ -17,7 +17,8 @@ internal object ConversationContext {
                    stylePreferences: StylePreferences = StylePreferences(),
                    understood: ConversationTurn = ConversationBrain.interpret(history, current, state)): String {
         require(current.isNotBlank())
-        val mood = MoodReader.forTurn(current, state.topic,
+        val lastUser = history.lastOrNull { it.role == "Kura" }
+        val mood = MoodReader.forTurn(current, state.topic.ifBlank { lastUser?.text.orEmpty() },
             state.socialMood, state.updatedAt, carriedTurns = state.socialTurns)
         val expression = ExpressionResolver.forTurn(current, mood, state.expression, state.updatedAt,
             preferences = stylePreferences)
