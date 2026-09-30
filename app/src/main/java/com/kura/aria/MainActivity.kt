@@ -1019,8 +1019,9 @@ class MainActivity : AppCompatActivity() {
                 },
                 onFinished = { error ->
                     stopDictation()
-                    if (error != null) toast(error)
-                })
+                    if (error != null && !error.startsWith("Falta el modelo español")) toast(error)
+                },
+                onMissingLanguage = { showSpeechSetupDialog() })
             speechInput = listener
             if (!listener.onDevice) toast("Dictado con el servicio de voz del teléfono")
             microphone.text = "■"
@@ -1039,6 +1040,31 @@ class MainActivity : AppCompatActivity() {
         microphone.text = "🎙"
         microphone.contentDescription = "Dictar mensaje en el dispositivo"
         if (wasListening && wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_RESUME)
+    }
+
+    private fun showSpeechSetupDialog() {
+        AlertDialog.Builder(this).setTitle("Falta reconocimiento en español")
+            .setMessage("El micrófono usa el servicio de reconocimiento del teléfono. ARIA ya tiene permiso, pero ese servicio no tiene español disponible. Puedes pedir la descarga del modelo o instalar español desde los ajustes de voz de Android. La voz B2 se configura por separado.")
+            .setPositiveButton("Descargar español") { _, _ ->
+                if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+                    toast("El servicio local no está disponible; abre Ajustes de voz")
+                    return@setPositiveButton
+                }
+                try {
+                    val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+                    recognizer.triggerModelDownload(LocalSpeechInput.spanishIntent())
+                    toast("Descarga solicitada. Revisa las notificaciones y vuelve a probar el micrófono")
+                    uiScope.launch { delay(5_000); recognizer.destroy() }
+                } catch (e: Exception) {
+                    toast("El servicio no inició la descarga: ${e.message ?: e.javaClass.simpleName}")
+                }
+            }
+            .setNeutralButton("Ajustes de voz") { _, _ ->
+                val intent = Intent("android.settings.VOICE_INPUT_SETTINGS")
+                if (intent.resolveActivity(packageManager) != null) startActivity(intent)
+                else toast("Busca «Reconocimiento de voz sin conexión» en Ajustes de Android")
+            }
+            .setNegativeButton("Cerrar", null).show()
     }
 
     private fun startVoice() {
@@ -1081,7 +1107,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showVoiceDialog() {
         AlertDialog.Builder(this).setTitle("Voz local de ARIA")
-            .setMessage("Voz actual: ${if (b2Enabled()) "B2 experimental" else "Android español"}. La voz Android no reproduce el timbre B2. El motor B2 usa la muestra elegida como referencia, pero tampoco garantiza una copia exacta. Descarga unos 884 MB una vez; el progreso y cualquier error aparecerán sobre el chat. La lectura automática se controla en Ajustes.")
+            .setMessage("Voz actual: ${if (b2Enabled()) "B2 experimental" else "Android español"}. La voz Android no reproduce el timbre B2. El motor B2 usa la muestra elegida como referencia, pero tampoco garantiza una copia exacta. Descarga unos 884 MB una vez; el progreso de la generación y cualquier error aparecerán sobre el chat. La lectura automática se controla en Ajustes.")
             .setPositiveButton("Usar voz Android") { _, _ ->
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
                     .putBoolean(VOICE_B2, false).apply()

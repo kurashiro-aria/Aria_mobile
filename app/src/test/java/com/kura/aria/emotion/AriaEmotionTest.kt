@@ -20,6 +20,8 @@ class AriaEmotionTest {
         assertEquals(AriaEmotion.PLAYFUL, AriaEmotion.fromReply("Jeje, te pillé."))
         assertEquals(AriaEmotion.SERIOUS, AriaEmotion.fromReply("Esto es importante, ten cuidado."))
         assertEquals(AriaEmotion.TIRED, AriaEmotion.fromReply("Tengo sueño, estoy cansada."))
+        assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromReply("Me apunto a ese helado."))
+        assertEquals(AriaEmotion.SURPRISED, AriaEmotion.fromReply("¿En serio? No lo sabía."))
     }
 
     @Test fun portraitRespondsToTheSituationInsteadOfAnUnrelatedHappyWord() {

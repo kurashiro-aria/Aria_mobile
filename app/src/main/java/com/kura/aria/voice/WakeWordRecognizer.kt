@@ -81,6 +81,11 @@ class WakeWordRecognizer(
                     onFailure("El micrófono no tiene permiso")
                     return
                 }
+                if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+                    error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
+                    onFailure("Falta español en el reconocimiento del teléfono. Abre el micrófono del chat para descargarlo")
+                    return
+                }
                 failures++
                 if (failures >= 8 && error != SpeechRecognizer.ERROR_NO_MATCH &&
                     error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {

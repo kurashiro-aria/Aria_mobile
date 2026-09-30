@@ -17,6 +17,14 @@ class ReplyQualityTest {
         assertFalse(ReplyQuality.repeats(prior, "Uf, busca sombra y toma algo frío. Hoy está pesado."))
     }
 
+    @Test fun rejectsParaphraseSeenInKurasScreenshot() {
+        val user = "sí hace calor, aunque cada vez es menos"
+        val echo = "Ah, entiendo. Entonces es que hace calor, aunque cada vez es menos. ¿Y tú qué haces?"
+        assertTrue(ReplyQuality.needsRetry(user, null, echo))
+        assertFalse(ReplyQuality.needsRetry(user, null,
+            "Uf, un helado suena bien. Yo elegiría uno de limón."))
+    }
+
     @Test fun sharingFoodWordsDoesNotDiscardAUsefulReply() {
         assertFalse(ReplyQuality.echoesUser("sí,jamón y queso",
             "Perfecto, un pan tostado con jamón y queso. Eso suena bien."))

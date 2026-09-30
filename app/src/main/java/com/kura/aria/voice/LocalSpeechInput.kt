@@ -12,6 +12,7 @@ class LocalSpeechInput(
     context: Context,
     private val onText: (String) -> Unit,
     private val onFinished: (String?) -> Unit,
+    private val onMissingLanguage: () -> Unit = {},
 ) {
     private var recognizer: SpeechRecognizer
     private var closed = false
@@ -57,6 +58,8 @@ class LocalSpeechInput(
                     start()
                     return
                 }
+                if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+                    error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) onMissingLanguage()
                 onFinished(when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
                         "No escuché palabras claras. Inténtalo de nuevo"
@@ -64,7 +67,7 @@ class LocalSpeechInput(
                         "Activa el permiso de micrófono de ARIA en Android"
                     SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
                     SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
-                        "Instala el paquete de reconocimiento de español en el teléfono"
+                        "Falta el modelo español en el servicio de reconocimiento de Android"
                     SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
                         "El reconocimiento del teléfono necesita conexión o idioma sin conexión"
                     else -> "No pude reconocer tu voz (código $error)"
@@ -74,13 +77,16 @@ class LocalSpeechInput(
     }
 
     fun start() {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        recognizer.startListening(spanishIntent())
+    }
+
+    companion object {
+        fun spanishIntent() = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-MX")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         }
-        recognizer.startListening(intent)
     }
 
     fun close() {

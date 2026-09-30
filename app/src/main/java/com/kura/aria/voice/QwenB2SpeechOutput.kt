@@ -23,6 +23,8 @@ class QwenB2SpeechOutput(context: Context, private val onStatus: (String) -> Uni
     private val main = Handler(Looper.getMainLooper())
     private val modelDir = File(app.filesDir, "aria-voice-qwen3")
     private val generation = AtomicLong()
+    private val finishedSynthesis = AtomicLong()
+    private val speechTimeoutMs = 45_000L
     @Volatile private var closed = false
     @Volatile private var track: AudioTrack? = null
     private var engine: QwenEngine? = null // Accessed only by worker.
@@ -121,26 +123,44 @@ class QwenB2SpeechOutput(context: Context, private val onStatus: (String) -> Uni
         if (closed || text.isBlank()) return
         val ticket = generation.incrementAndGet()
         track?.pause(); track?.flush()
+        status("B2: preparando audio…")
+        main.postDelayed({
+            if (!closed && ticket == generation.get() && finishedSynthesis.get() != ticket) {
+                generation.incrementAndGet()
+                onStatus("Error de voz B2: tardó más de 45 s; usando voz Android")
+                onSpeechFailure("La síntesis B2 tardó demasiado")
+            }
+        }, speechTimeoutMs)
         worker.execute {
             if (closed || ticket != generation.get()) return@execute
             val native = engine
             val embedding = profile
             if (native == null || embedding == null) {
-                main.post { if (!closed && ticket == generation.get()) onSpeechFailure("B2 aún no está preparada") }
+                failSpeech(ticket, "B2 aún no está preparada")
                 return@execute
+            }
+            var lastProgress = 0
+            native.setProgressCallback { tokens, _ ->
+                if (tokens - lastProgress >= 12) {
+                    lastProgress = tokens
+                    if (ticket == generation.get()) status("B2: generando audio · $tokens fragmentos")
+                }
             }
             val result = runCatching {
                 native.synthesize(text, speakerEmbeddingPath = embedding.absolutePath,
-                    params = QwenEngine.NativeParams(languageId = 2054, maxAudioTokens = 512))
+                    params = QwenEngine.NativeParams(languageId = 2054, maxAudioTokens = 256))
             }.getOrElse {
+                native.setProgressCallback(null)
                 failSpeech(ticket, it.message ?: it.javaClass.simpleName)
                 return@execute
             }
+            native.setProgressCallback(null)
             if (!result.success || result.audio == null) {
                 failSpeech(ticket, result.errorMsg ?: "sin audio")
                 return@execute
             }
             if (closed || ticket != generation.get()) return@execute
+            finishedSynthesis.set(ticket)
             status("B2 generó audio en ${result.timeMs / 1000.0} s")
             runCatching { play(result.audio, result.sampleRate, ticket) }
                 .onFailure { failSpeech(ticket, it.message ?: it.javaClass.simpleName) }
@@ -148,7 +168,7 @@ class QwenB2SpeechOutput(context: Context, private val onStatus: (String) -> Uni
     }
 
     private fun failSpeech(ticket: Long, reason: String) {
-        main.post { if (!closed && ticket == generation.get()) {
+        main.post { if (!closed && generation.compareAndSet(ticket, ticket + 1)) {
             onStatus("Error de voz B2: $reason")
             onSpeechFailure(reason)
         } }
