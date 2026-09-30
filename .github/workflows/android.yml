@@ -7,6 +7,15 @@ on:
       - aria-alpha-0.2-local-ai
       - voice-b2-experiment
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Choose tests only or tests and a signed APK'
+        type: choice
+        options:
+          - full
+          - tests-only
+        default: full
+        required: true
 
 jobs:
   build:
@@ -105,11 +114,11 @@ jobs:
           PY
 
       - name: Build debug APK
-        if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
         run: gradle :app:assembleDebug --stacktrace --console=plain
 
       - name: Check isolated voice libraries
-        if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -141,25 +150,27 @@ jobs:
           done
 
       - name: Verify final APK certificate and version
-        if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
         shell: bash
         run: bash scripts/verify-apk.sh
 
       - name: Name versioned APK
-        if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
         id: apk-name
         shell: bash
         run: |
           set -euo pipefail
           version="$(python3 -c 'import json; print(json.load(open("app/build/outputs/apk/debug/output-metadata.json"))["elements"][0]["versionName"])')"
+          short_sha="${GITHUB_SHA::7}"
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk "dist/ARIA-Mobile-${version}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/ARIA-Mobile-${version}-${short_sha}.apk"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
 
       - name: Upload ARIA APK
-        if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ARIA-Mobile-${{ steps.apk-name.outputs.version }}
+          name: ARIA-Mobile-${{ steps.apk-name.outputs.version }}-${{ steps.apk-name.outputs.short_sha }}
           path: dist/ARIA-Mobile-*.apk
           if-no-files-found: error
