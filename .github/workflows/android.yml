@@ -121,6 +121,9 @@ jobs:
 
       - name: Build debug APK
         if: env.ARIA_BUILD_APK == 'true'
+        env:
+          ORG_GRADLE_PROJECT_ARIA_CLOUD_ENDPOINT: ${{ vars.ARIA_CLOUD_ENDPOINT }}
+          ORG_GRADLE_PROJECT_ARIA_CLOUD_CLIENT_TOKEN: ${{ secrets.ARIA_CLOUD_CLIENT_TOKEN }}
         run: gradle :app:assembleDebug --stacktrace --console=plain
 
       - name: Check isolated voice libraries

@@ -93,13 +93,14 @@ internal class AriaMemoryDatabase(context: Context) :
             null, null, "updated_at DESC", "1").use { if (it.moveToFirst()) it.memory() else null }
     }
 
-    fun candidates(terms: Set<String>, limit: Int = 60): List<Memory> {
+    fun candidates(terms: Set<String>, limit: Int = MemoryRetrievalPolicy.MAX_CANDIDATES): List<Memory> {
         if (terms.isEmpty()) return emptyList()
-        val query = terms.take(12).joinToString(" OR ") { "\"${it.replace("\"", "") }\"" }
+        val query = terms.take(MemoryRetrievalPolicy.MAX_QUERY_TERMS)
+            .joinToString(" OR ") { "\"${it.replace("\"", "") }\"" }
         return readableDatabase.rawQuery("""SELECT m.* FROM memory_fts f
             JOIN memories m ON m.id=f.docid WHERE memory_fts MATCH ? AND m.archived=0
             ORDER BY m.importance DESC,m.updated_at DESC LIMIT ?""",
-            arrayOf(query, limit.coerceIn(1, 200).toString())).use { cursor -> cursor.toMemories() }
+            arrayOf(query, MemoryRetrievalPolicy.clampCandidateLimit(limit).toString())).use { cursor -> cursor.toMemories() }
     }
 
     fun activeByTypes(types: Set<String>, limit: Int = 100): List<Memory> {

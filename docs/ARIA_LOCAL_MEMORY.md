@@ -21,3 +21,11 @@ La base activa aún usa el cifrado de almacenamiento del sistema Android y el ai
 ## Límites actuales
 
 La extracción automática solo acepta patrones locales de alta confianza: preferencias explícitas, algunos hechos personales, proyectos y experiencias fechadas. Todo mensaje continúa en el historial, pero las frases casuales y roleplay no se convierten en memoria permanente. Las tablas de relaciones y summaries están creadas; la generación automática de summaries todavía debe programarse como trabajo de mantenimiento cuando exista suficiente material.
+## Escala y consolidación
+
+La búsqueda FTS/SQLite devuelve como máximo 60 candidatos indexados antes del ranking local.
+El límite se aplica en SQL y también existe como política reutilizable para futuros índices, por
+lo que el crecimiento de la base no implica cargarla completa en RAM. Los lotes de 50 elementos
+quedan marcados como umbral de consolidación; la tabla `memory_summaries` conserva resúmenes sin
+eliminar los originales. La generación automática del texto resumido queda pendiente hasta poder
+hacerla sin una inferencia Cloud adicional ni reglas que inventen contenido.
