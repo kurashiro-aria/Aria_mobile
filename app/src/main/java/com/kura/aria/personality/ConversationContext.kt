@@ -38,15 +38,11 @@ internal object ConversationContext {
             }
             ConversationPerspective.guidance(current)?.let { append(it).append('\n') }
             if (understood.recent.isNotEmpty()) {
-                val priorUser = understood.recent.filter { it.role == "Kura" }
-                if (priorUser.isNotEmpty()) {
-                    append("\nLO QUE KURA DIJO ANTES:\n")
-                    priorUser.forEach { append(line(it, 140)).append('\n') }
-                }
-                val priorAria = understood.recent.filter { it.role == "ARIA" }
-                if (priorAria.isNotEmpty()) {
-                    append("\nREFERENCIA A INTERVENCIONES DE ARIA (ya dichas, no las repitas):\n")
-                    priorAria.forEach { append("• «").append(priorReference(it.text)).append("»\n") }
+                append("\nINTERCAMBIO INMEDIATO (ya ocurrió; no lo repitas):\n")
+                understood.recent.forEach { prior ->
+                    if (prior.role == "Kura") append("Kura dijo: ").append(line(prior, 140))
+                    else append("ARIA dijo: «").append(priorReference(prior.text)).append('»')
+                    append('\n')
                 }
             } else if (understood.pendingQuestion != null) {
                 append("\nPREGUNTA PENDIENTE DE ARIA (ya dicha, no la repitas):\n")

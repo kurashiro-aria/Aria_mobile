@@ -27,6 +27,8 @@ class ConversationBrainTest {
         assertTrue(prompt.contains("¿Quieres un refresco?"))
         assertTrue(prompt.contains("¿De qué sabor?"))
         assertTrue(prompt.contains("Hace calor."))
+        assertTrue(prompt.indexOf("¿Quieres un refresco?") < prompt.indexOf("Kura dijo: • «Sí.»"))
+        assertTrue(prompt.indexOf("Kura dijo: • «Sí.»") < prompt.indexOf("¿De qué sabor?"))
         assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\nSí, uno de uva."))
     }
 
