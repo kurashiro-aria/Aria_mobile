@@ -50,8 +50,8 @@ El workflow `Build ARIA Android` descarga la revisión fijada del motor, prepara
 
 ## Flujo de desarrollo Sol + Work + Kura
 
-- **Sol:** inspecciona código, hace cambios pequeños y commits en `aria-alpha-0.2-local-ai` cuando la conexión de GitHub permite escritura, revisa los tests automáticos y diagnostica fallos. No necesita crear credenciales en el repositorio.
+- **Sol:** inspecciona código, hace cambios pequeños y commits en `aria-alpha-0.2-local-ai` cuando la conexión de GitHub permite escritura, revisa los tests automáticos y diagnostica fallos. Si necesita una APK, añade `[build-apk]` al mensaje del commit y comprueba el artifact en Actions. No necesita crear credenciales en el repositorio.
 - **Work:** realiza auditorías grandes, refactors complejos y revisiones profundas o cambios de varios archivos cuando conviene.
 - **Kura:** prueba la APK en el teléfono, informa el comportamiento y, cuando hace falta una versión instalable, abre **Actions → Build ARIA Android → Run workflow**, elige `aria-alpha-0.2-local-ai` y deja `mode=full`.
 
-Cada `push` ejecuta **TESTS ONLY**. El mensaje del commit no cambia el modo. La ejecución manual `mode=tests-only` también termina después de las pruebas; `mode=full` ejecuta pruebas y después construye, verifica la firma existente y sube la APK como artifact `ARIA-Mobile-<version>-<shortSHA>`. El nombre y el resumen de cada ejecución muestran **TESTS ONLY** o **TESTS + APK**.
+Cada `push` ejecuta **TESTS ONLY**, salvo en esta rama si el mensaje del commit contiene `[build-apk]`: entonces ejecuta **TESTS + APK** tras pasar las pruebas. `[tests-only]` tiene prioridad si aparecen ambas marcas. La ejecución manual `mode=tests-only` también termina después de las pruebas; `mode=full` ejecuta pruebas y después construye, verifica la firma existente y sube la APK como artifact `ARIA-Mobile-<version>-<shortSHA>`. El nombre y el resumen de cada ejecución muestran **TESTS ONLY** o **TESTS + APK**. El commit de un cambio de workflow también puede disparar la ruta de compilación, por lo que Sol debe usar `[build-apk]` solo cuando quiera probar una APK.
