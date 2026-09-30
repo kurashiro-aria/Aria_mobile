@@ -61,6 +61,34 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Accept Android SDK licenses
+        run: yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+
+      - name: Install native Android toolchain
+        run: ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager "ndk;29.0.13113456" "cmake;3.31.6"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Test chat response filtering
+        run: gradle :app:testDebugUnitTest --stacktrace --console=plain
+
+      - name: Summarize unit tests
+        run: |
+          python3 - <<'PY'
+          import glob
+          import xml.etree.ElementTree as ET
+          files = glob.glob('app/build/test-results/testDebugUnitTest/TEST-*.xml')
+          assert files, 'Missing JUnit XML results'
+          suites = [ET.parse(path).getroot() for path in files]
+          total = sum(int(s.get('tests', '0')) for s in suites)
+          failed = sum(int(s.get('failures', '0')) + int(s.get('errors', '0')) for s in suites)
+          print(f'ARIA unit tests: {total} completed, {failed} failed')
+          assert total >= 58 and failed == 0
+          PY
+
       - name: Restore existing ARIA signing key
         if: env.ARIA_BUILD_APK == 'true'
         uses: actions/cache/restore@v4
@@ -90,34 +118,6 @@ jobs:
           test "$actual" = "$expected" || { echo "::error::Signing key fingerprint mismatch"; exit 1; }
           echo "ARIA_SIGNING_KEYSTORE=$signing_path" >> "$GITHUB_ENV"
           echo "ARIA signing SHA256: $actual"
-
-      - name: Accept Android SDK licenses
-        run: yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
-
-      - name: Install native Android toolchain
-        run: ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager "ndk;29.0.13113456" "cmake;3.31.6"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Test chat response filtering
-        run: gradle :app:testDebugUnitTest --stacktrace --console=plain
-
-      - name: Summarize unit tests
-        run: |
-          python3 - <<'PY'
-          import glob
-          import xml.etree.ElementTree as ET
-          files = glob.glob('app/build/test-results/testDebugUnitTest/TEST-*.xml')
-          assert files, 'Missing JUnit XML results'
-          suites = [ET.parse(path).getroot() for path in files]
-          total = sum(int(s.get('tests', '0')) for s in suites)
-          failed = sum(int(s.get('failures', '0')) + int(s.get('errors', '0')) for s in suites)
-          print(f'ARIA unit tests: {total} completed, {failed} failed')
-          assert total >= 58 and failed == 0
-          PY
 
       - name: Build debug APK
         if: env.ARIA_BUILD_APK == 'true'
