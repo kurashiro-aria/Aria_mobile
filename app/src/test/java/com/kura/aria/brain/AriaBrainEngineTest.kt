@@ -3,8 +3,7 @@ package com.kura.aria.brain
 import com.kura.aria.brain.cloud.CloudBrainClient
 import com.kura.aria.brain.cloud.CloudBrainConfig
 import com.kura.aria.brain.cloud.CloudInferenceEngine
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
+import com.kura.aria.brain.cloud.CloudBrainResult
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -19,14 +18,17 @@ class AriaBrainEngineTest {
 
     @Test fun cloudEngineUsesInjectedClientWithoutProviderKnowledge() = runBlocking {
         val client = object : CloudBrainClient {
-            override fun stream(request: BrainRequest): Flow<String> = flowOf("Ho", "la")
+            override suspend fun health() = true
+            override suspend fun respond(request: BrainRequest) = CloudBrainResult(
+                BrainResponse("Hola", request.requestId)
+            )
         }
         val engine: AriaBrainEngine = CloudInferenceEngine(
             CloudBrainConfig(endpoint = "https://example.invalid/aria"), client
         ).also { (it as CloudInferenceEngine).connect() }
 
         assertEquals(BrainState.Ready, engine.state)
-        assertEquals(listOf("Ho", "la"), engine.generate(BrainRequest("saluda", 32)).toList())
+        assertEquals(listOf("Hola"), engine.generate(BrainRequest("saluda", 32, "generated")).toList())
         assertEquals(BrainState.Ready, engine.state)
         engine.close()
         assertEquals(BrainState.Disconnected, engine.state)
