@@ -26,8 +26,8 @@ internal data class ConversationTurn(
 )
 
 internal object ConversationBrain {
-    private val explicitReturn = Regex("^(?:volvamos|retomemos|regresemos)\\b")
-    private val deictic = Regex("\\b(?:eso|esto|esa|ese|esos|esas|el otro|la otra|ese mismo|esa misma|lo que dijiste|lo anterior|y despues|y entonces)\\b")
+    private val explicitReturn = Regex("^(?:(?:bueno|vale|ok|ya|jaja\\w*)[,;.!]?\\s+)*(?:volvamos|retomemos|regresemos)\\b")
+    private val deictic = Regex("\\b(?:eso|esto|esa|ese|esos|esas|el otro|la otra|ese mismo|esa misma|lo que dijiste|lo que hablamos antes|lo anterior|y despues|y entonces)\\b")
     private val choice = Regex("^(?:(?:si|no|claro|vale|exacto|ok|dale|por supuesto)[,;:]?\\s+)?(?:uno|una|el otro|la otra|ese mismo|esa misma|de [a-z]+)\\b")
     private val socialReaction = Regex("^(?:me gusta|me encanta|suena|que rico|perfecto|genial|buena idea|jaja)\\b")
 
@@ -43,7 +43,7 @@ internal object ConversationBrain {
         val question = lastAria?.let { ConversationContext.priorQuestion(it.text) }
             ?: state.pendingQuestion.takeIf { history.isEmpty() && it.isNotBlank() }
         val returns = explicitReturn.containsMatchIn(normalized)
-        val bareAssent = normalized.matches(Regex("^(?:si|no|vale|claro|exacto|ok|dale)[.!\\s]*$"))
+        val bareAssent = normalized.matches(Regex("^(?:si|no|vale|claro|exacto|ok|dale|puede ser)[.!\\s]*$"))
         val reference = deictic.containsMatchIn(normalized) ||
             (MemorySelector.isFollowUp(spoken) && !bareAssent) ||
             (ConversationContext.isQualifiedAssent(spoken) && question != null) ||
@@ -90,7 +90,8 @@ internal object ConversationBrain {
             .filter { it.role == "ARIA" || !RoleplayInterpreter.isPureAction(it.text) }
         else emptyList()
         val topic = if (continuity == TurnContinuity.RETURNS_TO_TOPIC)
-            state.relevantTopic(spoken) else null
+            state.relevantTopic(spoken) ?: state.earlierTopics.lastOrNull()
+                ?.takeUnless(RoleplayInterpreter::hasRoleplay) else null
         return ConversationTurn(intent, continuity, spoken, recent, topic,
             if (answer && lastAria == null) question else null,
             reference || answer, actions, state)
