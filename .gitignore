@@ -8,3 +8,5 @@ llama.cpp/
 checkpoints_v2/
 voice-samples/
 processed/
+
+backend/__pycache__/

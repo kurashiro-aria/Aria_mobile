@@ -7,6 +7,8 @@ import com.kura.aria.brain.BrainState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class CloudBrainConfig(
     val endpoint: String,
@@ -42,6 +44,7 @@ class CloudInferenceEngine(val config: CloudBrainConfig, private val client: Clo
     override val state: BrainState get() = currentState
     @Volatile var lastServerProcessingMs: Long? = null; private set
     @Volatile var lastModel: String? = null; private set
+    private val requestMutex = Mutex()
 
     suspend fun connect(): Boolean {
         currentState = BrainState.Connecting
@@ -56,7 +59,7 @@ class CloudInferenceEngine(val config: CloudBrainConfig, private val client: Clo
         check(currentState == BrainState.Ready) { "Cloud brain is not ready" }
         currentState = BrainState.Generating
         try {
-            val result = client.respond(request)
+            val result = requestMutex.withLock { client.respond(request) }
             val response = result.response
             if (response.requestId != request.requestId) throw CloudBrainException.InvalidResponse("La respuesta no corresponde a esta solicitud")
             if (response.text.isBlank()) throw CloudBrainException.InvalidResponse("ARIA recibió una respuesta vacía")

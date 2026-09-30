@@ -16,8 +16,7 @@ internal data class ConversationState(
     val updatedAt: Long = 0L,
     val socialMood: ConversationMood = ConversationMood.NEUTRAL,
     val socialTurns: Int = 0,
-    val expression: ExpressionState = ExpressionState(),
-    val initiativePending: Boolean = false
+    val expression: ExpressionState = ExpressionState()
 ) {
     fun afterExchange(user: String, reply: String, now: Long = System.currentTimeMillis(),
                       stylePreferences: StylePreferences = StylePreferences()): ConversationState {
@@ -33,11 +32,6 @@ internal data class ConversationState(
         } else earlierTopics
         val question = if (substantive && !RoleplayInterpreter.hasRoleplay(user))
             ConversationContext.priorQuestion(reply).orEmpty() else ""
-        // Ordinary offers/questions are answered in the active chat, not reminders.
-        // Only an explicit proposal to resume later leaves an initiative-eligible thread.
-        val deferred = substantive && question.isNotBlank() &&
-            Regex("(?i)\\b(?:retomamos|seguimos\\s+(?:luego|despues|mas tarde))\\b")
-                .containsMatchIn(question)
         val idleExpired = updatedAt > 0L && now - updatedAt > 30L * 60L * 1000L
         val observedMood = MoodReader.forTurn(user, topic, socialMood, updatedAt, now, socialTurns)
         val nextExpression = ExpressionResolver.forTurn(user, observedMood, expression, updatedAt, now,
@@ -63,7 +57,7 @@ internal data class ConversationState(
         }
         return copy(topic = nextTopic, pendingQuestion = question, earlierTopics = earlier,
             updatedAt = now, socialMood = mood, expression = nextExpression,
-            socialTurns = nextSocialTurns, initiativePending = deferred)
+            socialTurns = nextSocialTurns)
     }
 
     fun relevantTopic(message: String): String? {
@@ -100,8 +94,7 @@ internal class ConversationManager(context: Context) {
                     .filterNot(ConversationContext::isQualifiedAssent).takeLast(24),
                 obj.optLong("updatedAt"), mood, obj.optInt("socialTurns", 0).coerceIn(0, 3),
                 ExpressionState(style, obj.optDouble("expressionIntensity", 0.0).toFloat().coerceIn(0f, 1f),
-                    obj.optInt("expressionTurns", 0).coerceIn(0, 5), obj.optBoolean("expressionRequested", false)),
-                !staleTopic && obj.optBoolean("initiativePending", false))
+                    obj.optInt("expressionTurns", 0).coerceIn(0, 5), obj.optBoolean("expressionRequested", false)))
         } catch (_: Exception) { ConversationState() }
     }
 
@@ -109,7 +102,6 @@ internal class ConversationManager(context: Context) {
                              stylePreferences: StylePreferences = StylePreferences()) {
         val state = snapshot().afterExchange(user, reply, stylePreferences = stylePreferences)
         val obj = JSONObject().put("topic", state.topic).put("pendingQuestion", state.pendingQuestion)
-            .put("initiativePending", state.initiativePending)
             .put("earlierTopics", JSONArray(state.earlierTopics)).put("updatedAt", state.updatedAt)
             .put("socialMood", state.socialMood.name).put("socialTurns", state.socialTurns)
             .put("expressionStyle", state.expression.style.name)

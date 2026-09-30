@@ -73,12 +73,8 @@ class MainActivity : AppCompatActivity() {
     private var modelLoaded = false
     private var busy = false
     private var lastLoadMs: Long? = null
-    private var lastModelMs: Long? = null
-    private var lastPersonalityMs: Long? = null
     private var lastGeneration: GenerationStats? = null
     private var lastPreparationMs: Long? = null
-    private var lastBrainMs: Long? = null
-    private var lastPromptMs: Long? = null
     private var lastContextChars = 0
     private var lastMemoryCount = 0
     private var repeatedReplies = 0
@@ -211,7 +207,7 @@ class MainActivity : AppCompatActivity() {
         chatHistory = ChatHistory(applicationContext)
         ariaMemory = AriaMemory(applicationContext)
         conversationManager = ConversationManager(applicationContext)
-        if (voiceEnabled()) startVoice()
+        if (voiceEnabled() && !b2Enabled()) startVoice()
         val savedMessages = chatHistory.readAll()
         if (savedMessages.isEmpty()) aria(AriaPersonality.welcome) else savedMessages.forEach { addMessage(it.role, it.text) }
         savedMessages.lastOrNull { it.role == "ARIA" }?.let {
@@ -224,7 +220,10 @@ class MainActivity : AppCompatActivity() {
             engine = AiChat.getInferenceEngine(applicationContext)
             if (savedModel() != null && engine.state.value !is InferenceEngine.State.ModelReady)
                 showLoadingScreen()
-            uiScope.launch { restoreBrainIfNeeded() }
+            uiScope.launch {
+                restoreBrainIfNeeded()
+                if (voiceEnabled() && b2Enabled()) prepareB2Voice(replayLastReply = false)
+            }
         } catch (e: LinkageError) {
             hideLoadingScreen(false)
             setStatus("● Error de motor", false)
@@ -428,9 +427,7 @@ class MainActivity : AppCompatActivity() {
                     setStatus("○ Reconectando", false)
                     val loadStarted = SystemClock.elapsedRealtime()
                     engine.loadModel(model.absolutePath)
-                    lastModelMs = SystemClock.elapsedRealtime() - loadStarted
                     engine.setSystemPrompt(AriaPersonality.systemPrompt())
-                    lastPersonalityMs = SystemClock.elapsedRealtime() - loadStarted - (lastModelMs ?: 0L)
                     lastLoadMs = SystemClock.elapsedRealtime() - loadStarted
                     if (getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null) == null) rememberModel(model)
                     activeModelName = model.name
@@ -477,9 +474,6 @@ class MainActivity : AppCompatActivity() {
                 !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return@launch
             val now = System.currentTimeMillis()
             val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-            val latest = withContext(Dispatchers.IO) { chatHistory.readAll().lastOrNull() }
-            if (busy || !modelLoaded || !initiativeEnabled()) return@launch
-            if (latest?.role != "ARIA" || latest.timestamp <= 0L || now - latest.timestamp < 2L * 60L * 60L * 1000L) return@launch
             val suggestion = InitiativePolicy.suggestion(conversationManager.snapshot(), true, now,
                 prefs.getLong(LAST_INITIATIVE, 0L), Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) ?: return@launch
             withContext(Dispatchers.IO) { chatHistory.append("ARIA", suggestion) }
@@ -623,7 +617,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun sendMessage() {
         val message = input.text.toString().trim(); if (message.isEmpty() || !modelLoaded || busy) return
-        initiativeJob?.cancel()
         stopDictation()
         if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_PAUSE)
         speechOutput?.stop()
@@ -679,12 +672,9 @@ class MainActivity : AppCompatActivity() {
                     chatHistory.append("Kura", message)
                     previous
                 }
-                val brainStarted = SystemClock.elapsedRealtime()
                 val turn = withContext(Dispatchers.Default) {
                     ConversationBrain.interpret(previousHistory, message, stateBefore)
                 }
-                lastBrainMs = SystemClock.elapsedRealtime() - brainStarted
-                val promptStarted = SystemClock.elapsedRealtime()
                 val modelMessage = withContext(Dispatchers.IO) {
                     val recentUserMessages = turn.recent.filter { it.role == "Kura" }
                         .map { com.kura.aria.personality.RoleplayInterpreter.spokenText(it.text) }
@@ -694,7 +684,6 @@ class MainActivity : AppCompatActivity() {
                     ConversationContext.turnPrompt(previousHistory, relevant, message, stateBefore,
                         stylePreferences, turn)
                 }
-                lastPromptMs = SystemClock.elapsedRealtime() - promptStarted
                 lastContextChars = modelMessage.length
                 lastPreparationMs = SystemClock.elapsedRealtime() - preparationStarted
                 val previewExpression: (String) -> Unit = { visible ->
@@ -787,19 +776,10 @@ class MainActivity : AppCompatActivity() {
             append(lastLoadMs?.let { "${it / 1000.0} s" } ?: "sin medir")
             append("\nPreparación del turno: ")
             append(lastPreparationMs?.let { "${it / 1000.0} s" } ?: "sin medir")
-            append("\nCarga GGUF: ").append(lastModelMs?.let { "${it / 1000.0} s" } ?: "sin medir")
-            append("\nPersonalidad: ").append(lastPersonalityMs?.let { "${it / 1000.0} s" } ?: "sin medir")
-            append("\nConversation Brain: ").append(lastBrainMs?.let { "${it / 1000.0} s" } ?: "sin medir")
-            append("\nPrompt y recuerdos: ").append(lastPromptMs?.let { "${it / 1000.0} s" } ?: "sin medir")
-            append("\nPrefill + primer fragmento: ")
-            append(generation?.firstTokenMs?.let { "${it / 1000.0} s" } ?: "sin medir")
             append("\nPrimera palabra visible: ")
             append(generation?.firstVisibleMs?.let { "${it / 1000.0} s" } ?: "sin medir")
             append("\nRespuesta completa: ")
             append(generation?.let { "${it.totalMs / 1000.0} s" } ?: "sin medir")
-            append("\nGeneración tras primer fragmento: ")
-            append(generation?.let { stats -> stats.firstTokenMs?.let { first ->
-                "${(stats.totalMs - first) / 1000.0} s" } } ?: "sin medir")
             append("\nVelocidad aproximada: ")
             append(generation?.approximateTokensPerSecond?.let { String.format(java.util.Locale.US, "%.1f tokens/s", it) }
                 ?: "sin medir")
@@ -930,8 +910,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun voiceEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_ENABLED, false)
-    // B2 is paused. Ignore legacy preferences without deleting them; keep the runtime for later.
-    private fun b2Enabled() = false
+    private fun b2Enabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_B2, false)
     private fun wakeEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(WAKE_ENABLED, false)
 
     private fun wakeService(action: String) {
@@ -960,7 +939,7 @@ class MainActivity : AppCompatActivity() {
         }
         content.addView(speechSwitch)
         content.addView(TextView(this).apply {
-            text = "B2 experimental está pausada. La lectura usa la voz española instalada en Android."
+            text = "Usa B2 si está preparada; de otro modo usa la voz española instalada en Android."
         })
         wakeSwitch.setOnCheckedChangeListener { _, checked ->
             if (checked) enableWakeListening()
@@ -1135,7 +1114,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showVoiceDialog() {
         AlertDialog.Builder(this).setTitle("Voz local de ARIA")
-            .setMessage("B2 experimental está pausada para dedicar los recursos a la conversación. Puedes escuchar la muestra B2 en el menú. La lectura automática usa la voz española de Android.")
+            .setMessage("Voz actual: ${if (b2Enabled()) "B2 experimental" else "Android español"}. La voz Android no reproduce el timbre B2. El motor B2 usa la muestra elegida como referencia, pero tampoco garantiza una copia exacta. Descarga unos 884 MB una vez; el progreso de la generación y cualquier error aparecerán sobre el chat. La lectura automática se controla en Ajustes.")
             .setPositiveButton("Usar voz Android") { _, _ ->
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
                     .putBoolean(VOICE_B2, false).apply()
@@ -1144,12 +1123,11 @@ class MainActivity : AppCompatActivity() {
                 voiceProgress.visibility = View.GONE
                 startVoice()
             }
+            .setNeutralButton("Probar B2") { _, _ -> prepareB2Voice(replayLastReply = true) }
             .setNegativeButton("Cerrar", null).show()
     }
 
     private fun prepareB2Voice(replayLastReply: Boolean) {
-        // Intentionally inaccessible while B2 is paused (including old saved preferences).
-        if (!b2Enabled()) return
         if (b2Preparing) { toast("B2 sigue descargando o cargando; mira el avance sobre el chat"); return }
         val output = b2SpeechOutput ?: QwenB2SpeechOutput(applicationContext, { status ->
             if (!isFinishing && !isDestroyed) {

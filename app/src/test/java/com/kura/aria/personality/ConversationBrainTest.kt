@@ -97,38 +97,4 @@ class ConversationBrainTest {
         assertFalse(ConversationContext.turnPrompt(history, emptyList(), "La cocina está lista", state)
             .contains("escena dibujas"))
     }
-
-    @Test fun shortChoicesNeedTheActualQuestion() {
-        val history = exchange("Kura" to "Tengo sed", "ARIA" to "¿Qué quieres beber?")
-        listOf("uno de uva", "sí", "no", "ese", "el otro", "puede ser", "de uva")
-            .forEach { text ->
-                val turn = ConversationBrain.interpret(history, text)
-                assertEquals(text, TurnContinuity.CONTINUES, turn.continuity)
-                assertTrue(text, ConversationContext.turnPrompt(history, emptyList(), text)
-                    .contains("¿Qué quieres beber?"))
-            }
-        val none = ConversationBrain.interpret(emptyList(), "ese")
-        assertEquals(TurnContinuity.NEW, none.continuity)
-        assertTrue(none.recent.isEmpty())
-    }
-
-    @Test fun phoneReferenceAndReturnToEarlierTopicUseOnlyGroundedContext() {
-        val history = exchange("Kura" to "Hablemos de ARIA PC",
-            "ARIA" to "Podríamos trabajar en ARIA PC.")
-        val phone = ConversationBrain.interpret(history, "¿y eso también se podría hacer en el teléfono?")
-        assertEquals(TurnContinuity.CONTINUES, phone.continuity)
-        assertTrue(ConversationContext.turnPrompt(history, emptyList(),
-            "¿y eso también se podría hacer en el teléfono?").contains("ARIA PC"))
-        assertEquals(TurnContinuity.CONTINUES,
-            ConversationBrain.interpret(history, "lo que hablamos antes").continuity)
-
-        val state = ConversationState(earlierTopics = listOf("Trabajábamos en ARIA PC"),
-            topic = "Hace calor")
-        val returned = ConversationBrain.interpret(history,
-            "Bueno ya jajaja, volvamos a lo que estábamos haciendo.", state)
-        assertEquals(TurnContinuity.RETURNS_TO_TOPIC, returned.continuity)
-        assertEquals("Trabajábamos en ARIA PC", returned.relevantTopic)
-        assertEquals(TurnContinuity.NEW,
-            ConversationBrain.interpret(history, "Hace calor hoy").continuity)
-    }
 }

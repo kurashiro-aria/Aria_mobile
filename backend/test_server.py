@@ -24,7 +24,7 @@ class BackendTest(unittest.TestCase):
 
     def test_respond_preserves_request_id(self):
         payload = json.dumps({"requestId":"abc","message":"prepared", "generation":{"maxOutputTokens":384}}).encode()
-        req = urllib.request.Request(self.base + "/v1/brain/respond", data=payload, headers={"Content-Type":"application/json"}, method="POST")
+        req = urllib.request.Request(self.base + "/v1/brain/respond", data=payload, headers={"Content-Type":"application/json", "X-ARIA-Protocol":"1"}, method="POST")
         with urllib.request.urlopen(req) as r:
             body = json.load(r)
             self.assertEqual("abc", body["requestId"])
@@ -32,6 +32,13 @@ class BackendTest(unittest.TestCase):
 
     def test_invalid_request(self):
         payload = json.dumps({"message":"missing id"}).encode()
+        req = urllib.request.Request(self.base + "/v1/brain/respond", data=payload, headers={"X-ARIA-Protocol":"1"}, method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(400, cm.exception.code)
+
+    def test_protocol_header_is_required(self):
+        payload = json.dumps({"requestId": "abc", "message": "hello"}).encode()
         req = urllib.request.Request(self.base + "/v1/brain/respond", data=payload, method="POST")
         with self.assertRaises(urllib.error.HTTPError) as cm:
             urllib.request.urlopen(req)

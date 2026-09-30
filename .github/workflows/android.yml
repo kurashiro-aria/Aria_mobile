@@ -1,5 +1,4 @@
 name: Build ARIA Android
-run-name: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'full' || github.event_name == 'push' && github.ref_name == 'aria-alpha-0.2-local-ai' && contains(github.event.head_commit.message, '[build-apk]') && !contains(github.event.head_commit.message, '[tests-only]')) && 'TESTS + APK' || 'TESTS ONLY' }} · ${{ github.ref_name }}
 
 on:
   push:
@@ -21,18 +20,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      ARIA_BUILD_APK: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' || github.event_name == 'push' && github.ref_name == 'aria-alpha-0.2-local-ai' && contains(github.event.head_commit.message, '[build-apk]') && !contains(github.event.head_commit.message, '[tests-only]') }}
 
     steps:
-      - name: Show execution mode
-        run: |
-          if [[ "$ARIA_BUILD_APK" == "true" ]]; then
-            echo 'TESTS + APK' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'TESTS ONLY' >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       - name: Checkout ARIA
         uses: actions/checkout@v4
 
@@ -125,11 +114,11 @@ jobs:
           PY
 
       - name: Build debug APK
-        if: env.ARIA_BUILD_APK == 'true'
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
         run: gradle :app:assembleDebug --stacktrace --console=plain
 
       - name: Check isolated voice libraries
-        if: env.ARIA_BUILD_APK == 'true'
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -161,12 +150,12 @@ jobs:
           done
 
       - name: Verify final APK certificate and version
-        if: env.ARIA_BUILD_APK == 'true'
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
         shell: bash
         run: bash scripts/verify-apk.sh
 
       - name: Name versioned APK
-        if: env.ARIA_BUILD_APK == 'true'
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
         id: apk-name
         shell: bash
         run: |
@@ -179,7 +168,7 @@ jobs:
           echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
 
       - name: Upload ARIA APK
-        if: env.ARIA_BUILD_APK == 'true'
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' }}
         uses: actions/upload-artifact@v4
         with:
           name: ARIA-Mobile-${{ steps.apk-name.outputs.version }}-${{ steps.apk-name.outputs.short_sha }}
