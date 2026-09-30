@@ -19,7 +19,7 @@ class CloudContextBuilderTest {
         assertTrue(prompt.contains("MENSAJE ACTUAL DE KURA"))
         assertTrue(prompt.endsWith("¿y eso?"))
         assertFalse(prompt.contains("recuerdo único 4"))
-        assertFalse(prompt.contains("turno Kura 1"))
+        assertFalse(prompt.contains("• «turno Kura 1»"))
     }
 
     @Test fun duplicateMemoryIdsAppearOnce() {

@@ -10,15 +10,16 @@ internal object LocalMemoryProcessor {
         if (RoleplayInterpreter.hasRoleplay(userMessage)) return null
         val text = userMessage.trim().replace(Regex("\\s+"), " ").trimEnd('.', '!', '?')
         if (text.length !in 8..240) return null
+        val normalized = MemoryFacts.normalize(text)
         val type = when {
             Regex("(?i)^(?:yo )?prefiero\\b|^(?:a mi )?me gusta\\b|^no me gusta\\b|^odio\\b")
-                .containsMatchIn(text) -> "preferencia"
+                .containsMatchIn(normalized) -> "preferencia"
             Regex("(?i)^mi (?:telefono|celular|nombre|perro|gato|madre|padre|herman[oa]) (?:es|se llama)\\b")
-                .containsMatchIn(text) -> "hecho"
+                .containsMatchIn(normalized) -> "hecho"
             Regex("(?i)^(?:estoy|estamos) (?:trabajando|haciendo|creando) (?:en )?(?:el )?(?:proyecto|app|aplicacion)\\b")
-                .containsMatchIn(text) -> "proyecto"
+                .containsMatchIn(normalized) -> "proyecto"
             Regex("(?i)^(?:hoy|ayer) (?:fui|hicimos|terminamos|comenzamos|paso|ocurrio)\\b")
-                .containsMatchIn(text) -> "experiencia"
+                .containsMatchIn(normalized) -> "experiencia"
             else -> return null
         }
         return Candidate(text, type, 0.9f)
