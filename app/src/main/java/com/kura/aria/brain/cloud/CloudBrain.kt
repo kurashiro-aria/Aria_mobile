@@ -12,6 +12,7 @@ import kotlinx.coroutines.sync.withLock
 
 data class CloudBrainConfig(
     val endpoint: String,
+    val clientToken: String = "",
     val connectTimeoutMs: Long = 15_000,
     val readTimeoutMs: Long = 90_000,
     val writeTimeoutMs: Long = 30_000,
@@ -35,6 +36,7 @@ sealed class CloudBrainException(message: String, cause: Throwable? = null) : Ex
     class Unauthorized : CloudBrainException("Servidor de ARIA rechazó la conexión")
     class NotFound : CloudBrainException("Servidor de ARIA no disponible")
     class RateLimited : CloudBrainException("Servidor de ARIA está ocupado; prueba nuevamente")
+    class DuplicateRequest : CloudBrainException("Esta solicitud ya fue procesada")
     class ServerUnavailable : CloudBrainException("Servidor de ARIA no disponible")
     class InvalidResponse(reason: String) : CloudBrainException(reason)
 }

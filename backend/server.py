@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Small ARIA backend boundary. Provider keys stay in the server environment."""
-import json, os, time, urllib.request, urllib.error
+import json, os, time, urllib.request, urllib.error, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HOST=os.getenv('ARIA_BACKEND_HOST','0.0.0.0'); PORT=int(os.getenv('ARIA_BACKEND_PORT','8787')); MAX_BODY=256*1024
 class ProviderError(Exception):
@@ -32,6 +32,10 @@ def provider_from_environment():
     raise RuntimeError('unsupported_provider')
 try: PROVIDER,PROVIDER_NAME=provider_from_environment(); STARTUP_ERROR=None
 except Exception as error: PROVIDER,PROVIDER_NAME,STARTUP_ERROR=None,'unavailable',str(error)
+CLIENT_TOKEN=os.getenv('ARIA_CLIENT_TOKEN','')
+if PROVIDER_NAME!='mock' and not CLIENT_TOKEN: STARTUP_ERROR='ARIA_CLIENT_TOKEN is required for a real provider'
+RATE_LIMIT=int(os.getenv('ARIA_RATE_LIMIT_PER_MINUTE','30'))
+REQUEST_LOCK=threading.Lock(); RECENT_REQUESTS={}; RATE_BUCKETS={}
 class Handler(BaseHTTPRequestHandler):
     server_version='AriaBackend/1'
     def log_message(self,fmt,*args): print('%s - %s'%(self.address_string(),fmt%args))
@@ -44,11 +48,22 @@ class Handler(BaseHTTPRequestHandler):
         if self.path!='/v1/brain/respond': return self.send_json(404,{'error':'not_found'})
         request_id=None
         try:
+            if CLIENT_TOKEN and self.headers.get('X-ARIA-Client')!=CLIENT_TOKEN: return self.send_json(401,{'error':'unauthorized'})
+            now=time.monotonic(); client=self.client_address[0]
+            with REQUEST_LOCK:
+                bucket=[stamp for stamp in RATE_BUCKETS.get(client,[]) if now-stamp<60]
+                if len(bucket)>=RATE_LIMIT: return self.send_json(429,{'error':'rate_limited'})
+                bucket.append(now); RATE_BUCKETS[client]=bucket
+                stale=[key for key,stamp in RECENT_REQUESTS.items() if now-stamp>600]
+                for key in stale: RECENT_REQUESTS.pop(key,None)
             if self.headers.get('X-ARIA-Protocol')!='1': return self.send_json(400,{'error':'unsupported_protocol'})
             length=int(self.headers.get('Content-Length','0'))
             if length<=0 or length>MAX_BODY: return self.send_json(400,{'error':'invalid_body'})
             request=json.loads(self.rfile.read(length).decode()); request_id=request.get('requestId'); message=request.get('message'); generation=request.get('generation',{})
             if not isinstance(request_id,str) or not request_id.strip() or len(request_id)>100: return self.send_json(400,{'error':'request_id_required'})
+            with REQUEST_LOCK:
+                if request_id in RECENT_REQUESTS: return self.send_json(409,{'error':'duplicate_request','requestId':request_id})
+                RECENT_REQUESTS[request_id]=now
             if not isinstance(message,str) or not message.strip() or len(message)>MAX_BODY: return self.send_json(400,{'error':'message_required'})
             max_tokens=generation.get('maxOutputTokens',384)
             if not isinstance(max_tokens,int) or isinstance(max_tokens,bool) or not 1<=max_tokens<=4096: return self.send_json(400,{'error':'invalid_generation'})

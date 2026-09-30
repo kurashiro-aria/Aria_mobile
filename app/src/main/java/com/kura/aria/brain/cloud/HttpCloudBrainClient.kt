@@ -33,6 +33,7 @@ class HttpCloudBrainClient(private val config: CloudBrainConfig, private val all
         when (code) {
             400 -> throw CloudBrainException.BadRequest(); 401, 403 -> throw CloudBrainException.Unauthorized()
             404 -> throw CloudBrainException.NotFound(); 429 -> throw CloudBrainException.RateLimited()
+            409 -> throw CloudBrainException.DuplicateRequest()
             in 500..599 -> throw CloudBrainException.ServerUnavailable(); !in 200..299 -> throw CloudBrainException.ServerUnavailable()
         }
         val json = try { JSONObject(text) } catch (t: Throwable) { throw CloudBrainException.InvalidResponse("Respuesta inválida del servidor") }
@@ -47,6 +48,7 @@ class HttpCloudBrainClient(private val config: CloudBrainConfig, private val all
                 coroutineContext.ensureActive(); connection = URL(config.endpoint.trimEnd('/') + path).openConnection() as HttpURLConnection
                 connection.requestMethod = method; connection.connectTimeout = config.connectTimeoutMs.toInt(); connection.readTimeout = config.readTimeoutMs.toInt()
                 connection.setRequestProperty("Accept", "application/json"); connection.setRequestProperty("X-ARIA-Protocol", "1")
+                if (config.clientToken.isNotBlank()) connection.setRequestProperty("X-ARIA-Client", config.clientToken)
                 if (body != null) { connection.doOutput = true; connection.setRequestProperty("Content-Type", "application/json; charset=utf-8"); connection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(body) } }
                 coroutineContext.ensureActive(); val code = connection.responseCode
                 val stream = if (code in 200..299) connection.inputStream else connection.errorStream

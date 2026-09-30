@@ -44,4 +44,13 @@ class BackendTest(unittest.TestCase):
             urllib.request.urlopen(req)
         self.assertEqual(400, cm.exception.code)
 
+    def test_duplicate_request_is_rejected(self):
+        payload = json.dumps({"requestId": "duplicate-test", "message": "hello"}).encode()
+        headers = {"X-ARIA-Protocol": "1"}
+        with urllib.request.urlopen(urllib.request.Request(self.base + "/v1/brain/respond", data=payload, headers=headers, method="POST")):
+            pass
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(urllib.request.Request(self.base + "/v1/brain/respond", data=payload, headers=headers, method="POST"))
+        self.assertEqual(409, cm.exception.code)
+
 if __name__ == "__main__": unittest.main()
