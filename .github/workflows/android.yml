@@ -1,4 +1,5 @@
 name: Build ARIA Android
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'full' && 'TESTS + APK' || 'TESTS ONLY' }} · ${{ github.ref_name }}
 
 on:
   push:
@@ -22,6 +23,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Show execution mode
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.mode }}" == "full" ]]; then
+            echo 'TESTS + APK' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'TESTS ONLY' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Checkout ARIA
         uses: actions/checkout@v4
 

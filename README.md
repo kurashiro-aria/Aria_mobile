@@ -44,3 +44,11 @@ Para volver a un estado anterior, consulta [los puntos de restauración](docs/RE
 Consulta [la revisión estática](docs/REVISION-ALPHA-0.2.1.md) y [la personalidad](docs/PERSONALIDAD-ALPHA-0.2.2.md) para ver el desarrollo inicial. Los extractos de historial son limitados por tamaño y coincidencia de palabras; no equivalen a la comprensión ni la capacidad de memoria de un modelo remoto grande.
 
 El workflow `Build ARIA Android` descarga la revisión fijada del motor, prepara sus dependencias y aplica el parche antes de compilar. Puede iniciarse manualmente con `workflow_dispatch` seleccionando la rama Alpha. Un checkout del repositorio por sí solo no incluye el motor descargado por ese workflow.
+
+## Flujo de desarrollo Sol + Work + Kura
+
+- **Sol:** inspecciona código, hace cambios pequeños y commits en `aria-alpha-0.2-local-ai` cuando la conexión de GitHub permite escritura, revisa los tests automáticos y diagnostica fallos. No necesita crear credenciales en el repositorio.
+- **Work:** realiza auditorías grandes, refactors complejos y revisiones profundas o cambios de varios archivos cuando conviene.
+- **Kura:** prueba la APK en el teléfono, informa el comportamiento y, cuando hace falta una versión instalable, abre **Actions → Build ARIA Android → Run workflow**, elige `aria-alpha-0.2-local-ai` y deja `mode=full`.
+
+Cada `push` ejecuta **TESTS ONLY**. El mensaje del commit no cambia el modo. La ejecución manual `mode=tests-only` también termina después de las pruebas; `mode=full` ejecuta pruebas y después construye, verifica la firma existente y sube la APK como artifact `ARIA-Mobile-<version>-<shortSHA>`. El nombre y el resumen de cada ejecución muestran **TESTS ONLY** o **TESTS + APK**.
