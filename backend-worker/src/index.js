@@ -81,7 +81,18 @@ async function callGemini(message, maxTokens, env, fetchImpl) {
       body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: message }] }], generationConfig: { maxOutputTokens: maxTokens } }),
       signal: controller.signal,
     });
-    if (!response.ok) throw Object.assign(new Error(response.status === 429 ? "provider_rate_limited" : "provider_request_failed"), { status: response.status === 429 ? 429 : 502 });
+    if (!response.ok) {
+      const providerError = response.status === 429
+        ? "provider_rate_limited"
+        : response.status === 401 || response.status === 403
+          ? "provider_unauthorized"
+          : response.status === 404
+            ? "provider_model_not_found"
+            : response.status === 400
+              ? "provider_bad_request"
+              : "provider_request_failed";
+      throw Object.assign(new Error(providerError), { status: response.status === 429 ? 429 : 502 });
+    }
     let payload;
     try { payload = await response.json(); } catch { throw Object.assign(new Error("provider_invalid_response"), { status: 502 }); }
     const text = payload?.candidates?.[0]?.content?.parts?.map((part) => part?.text || "").join("").trim();
@@ -103,7 +114,7 @@ async function handle(request, env, fetchImpl, now) {
   if (url.pathname === "/health" || url.pathname === "/v1/health") {
     return json(env.ARIA_LLM_API_KEY ? 200 : 503, { status: env.ARIA_LLM_API_KEY ? "ok" : "unavailable", protocol: 1, provider: env.ARIA_LLM_PROVIDER || "gemini" });
   }
-  if (url.pathname !== "/v1/brain/respond") return json(404, { error: "not_found" });
+  if (url.pathname !== "/v1/brain/respond" && url.pathname !== "/v1/chat") return json(404, { error: "not_found" });
   if (request.method !== "POST") return json(405, { error: "method_not_allowed" }, { allow: "POST" });
   if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") return json(415, { error: "content_type_required" });
   if (env.ARIA_CLOUD_CLIENT_TOKEN && !constantTimeEqual(request.headers.get("X-ARIA-Client"), env.ARIA_CLOUD_CLIENT_TOKEN)) return json(401, { error: "unauthorized" });
@@ -122,7 +133,7 @@ async function handle(request, env, fetchImpl, now) {
     return json(200, { requestId: body.requestId, reply: result.text, model: result.model, provider: "gemini", finishReason: "stop", gatewayProcessingMs: Math.max(0, now() - started) });
   } catch (error) {
     const status = Number.isInteger(error?.status) ? error.status : 500;
-    return json(status, { error: ["provider_rate_limited", "provider_timeout", "provider_request_failed", "provider_invalid_response", "provider_empty_response", "provider_unavailable"].includes(error?.message) ? error.message : "internal_error", requestId: body.requestId });
+    return json(status, { error: ["provider_rate_limited", "provider_timeout", "provider_request_failed", "provider_unauthorized", "provider_model_not_found", "provider_bad_request", "provider_invalid_response", "provider_empty_response", "provider_unavailable"].includes(error?.message) ? error.message : "internal_error", requestId: body.requestId });
   }
 }
 
