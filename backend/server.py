@@ -23,9 +23,70 @@ class OpenAICompatibleProvider(LlmProvider):
         except (KeyError,IndexError,TypeError,AttributeError) as error: raise ProviderError(502,'provider_invalid_response') from error
         if not text: raise ProviderError(502,'provider_empty_response')
         return text
+
+class GeminiProvider(LlmProvider):
+    def __init__(self):
+        self.api_key = os.environ['ARIA_LLM_API_KEY']
+        self.model = os.getenv('ARIA_LLM_MODEL', 'gemini-2.5-flash')
+        self.timeout = float(os.getenv('ARIA_LLM_TIMEOUT_SECONDS', '90'))
+
+    def generate(self, message, max_tokens):
+        url = (
+            'https://generativelanguage.googleapis.com/v1beta/models/'
+            + self.model
+            + ':generateContent'
+        )
+
+        body = json.dumps({
+            'contents': [{
+                'role': 'user',
+                'parts': [{'text': message}]
+            }],
+            'generationConfig': {
+                'maxOutputTokens': max_tokens
+            }
+        }).encode()
+
+        req = urllib.request.Request(
+            url,
+            body,
+            {
+                'x-goog-api-key': self.api_key,
+                'Content-Type': 'application/json'
+            },
+            method='POST'
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                payload = json.load(response)
+        except urllib.error.HTTPError as error:
+            raise ProviderError(
+                429 if error.code == 429 else 502,
+                'provider_request_failed'
+            ) from error
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise ProviderError(504, 'provider_timeout') from error
+
+        try:
+            text = payload['candidates'][0]['content']['parts'][0]['text'].strip()
+        except (KeyError, IndexError, TypeError, AttributeError) as error:
+            raise ProviderError(502, 'provider_invalid_response') from error
+
+        if not text:
+            raise ProviderError(502, 'provider_empty_response')
+
+        return text
+
+
 def provider_from_environment():
     name=os.getenv('ARIA_LLM_PROVIDER','mock').lower()
     if name=='mock': return MockProvider(),'mock'
+    if name=='gemini':
+        if not os.getenv('ARIA_LLM_API_KEY'):
+            raise RuntimeError('ARIA_LLM_API_KEY is required for Gemini')
+        model=os.getenv('ARIA_LLM_MODEL','gemini-2.5-flash')
+        return GeminiProvider(),model
     if name in ('openai','openai-compatible'):
         if not os.getenv('ARIA_LLM_API_KEY') or not os.getenv('ARIA_LLM_BASE_URL'): raise RuntimeError('ARIA_LLM_API_KEY and ARIA_LLM_BASE_URL are required')
         return OpenAICompatibleProvider(),os.getenv('ARIA_LLM_MODEL','gpt-4o-mini')
