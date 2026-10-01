@@ -1,0 +1,39 @@
+name: ARIA Cloud Gateway
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy the Worker after tests
+        type: boolean
+        default: false
+        required: true
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: backend-worker
+    steps:
+      - name: Require Cloud prototype branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "aria-cloud-brain-prototype" || {
+            echo "::error::This workflow may deploy only aria-cloud-brain-prototype (got $GITHUB_REF_NAME)"
+            exit 1
+          }
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Deploy ARIA Cloud Gateway
+        if: inputs.deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
+          npx --yes wrangler deploy

@@ -1,0 +1,14 @@
+name = "aria-cloud-gateway"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[vars]
+ARIA_LLM_PROVIDER = "gemini"
+ARIA_LLM_MODEL = "gemini-2.5-flash"
+ARIA_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+ARIA_RATE_LIMIT_PER_MINUTE = "30"
+
+# Set secrets with `wrangler secret put`; never commit their values.
+# ARIA_LLM_API_KEY
+# ARIA_CLOUD_CLIENT_TOKEN
