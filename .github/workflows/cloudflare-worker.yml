@@ -1,0 +1,60 @@
+name: ARIA Cloud Gateway
+run-name: ARIA Cloud Gateway · ${{ inputs.deploy && 'DEPLOY' || 'TESTS ONLY' }} · ${{ inputs.source_branch }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: Branch containing the Worker code
+        type: choice
+        options:
+          - aria-cloud-brain-prototype
+        default: aria-cloud-brain-prototype
+        required: true
+      deploy:
+        description: Deploy the Worker after tests
+        type: boolean
+        default: true
+        required: true
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: backend-worker
+    steps:
+      - name: Require the Cloud prototype source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.source_branch }}" = "aria-cloud-brain-prototype"
+
+      - name: Checkout Worker source branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_branch }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test ARIA Cloud Gateway
+        run: npm test
+
+      - name: Deploy Worker and configure Gemini secret
+        if: inputs.deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ARIA_LLM_API_KEY: ${{ secrets.ARIA_LLM_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$ARIA_LLM_API_KEY"
+          npx --yes wrangler deploy
+          printf '%s' "$ARIA_LLM_API_KEY" | npx --yes wrangler secret put ARIA_LLM_API_KEY
