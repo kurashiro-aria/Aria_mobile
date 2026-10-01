@@ -22,9 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    defaults:
-      run:
-        working-directory: backend-worker
     steps:
       - name: Require the Cloud prototype source
         shell: bash
@@ -43,10 +40,12 @@ jobs:
           node-version: 22
 
       - name: Test ARIA Cloud Gateway
+        working-directory: backend-worker
         run: npm test
 
       - name: Deploy Worker and configure Gemini secret
         if: inputs.deploy
+        working-directory: backend-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
