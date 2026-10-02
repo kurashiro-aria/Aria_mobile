@@ -1,5 +1,8 @@
 name: ARIA Cloud Gateway
 on:
+  push:
+    branches: [aria-cloud-brain-prototype]
+    paths: ['.github/workflows/cloudflare-worker.yml']
   workflow_dispatch:
     inputs:
       deploy:
@@ -9,6 +12,7 @@ on:
         required: true
 jobs:
   gateway:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[secure-cloud-gateway-once]')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,14 +33,29 @@ jobs:
         working-directory: backend-worker
         run: npm test
       - name: Deploy ARIA Cloud Gateway
-        if: inputs.deploy
+        if: inputs.deploy || github.event_name == 'push'
         working-directory: backend-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ARIA_CLOUD_CLIENT_TOKEN: ${{ secrets.ARIA_CLOUD_CLIENT_TOKEN }}
         run: |
-          test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID" && test -n "$ARIA_CLOUD_CLIENT_TOKEN"
+          printf '%s' "$ARIA_CLOUD_CLIENT_TOKEN" | npx --yes wrangler secret put ARIA_CLOUD_CLIENT_TOKEN
           npx --yes wrangler deploy
+      - name: Verify gateway rejects missing token
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 5
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 30 \
+            -X POST "https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev/v1/voice/synthesize" \
+            -H "Content-Type: application/json" \
+            -H "X-ARIA-Protocol: 1" \
+            --data '{"requestId":"auth-smoke-'"$GITHUB_RUN_ID"'","text":"Hola","emotion":"neutral","intensity":0.2,"expressionStyle":"natural","voiceId":"Leda"}')"
+          test "$status" = "401" || { echo "::error::Gateway accepted a request without authentication (HTTP $status)"; exit 1; }
+          echo "Gateway authentication verified: missing token rejected with HTTP 401"
       - name: Verify real Cloud Voice audio
         if: inputs.deploy
         env:
