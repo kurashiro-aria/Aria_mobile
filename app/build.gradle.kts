@@ -4,7 +4,7 @@ plugins {
 }
 
 val ariaVersionName = "0.2.41-alpha"
-val cloudEndpoint = providers.gradleProperty("ARIA_CLOUD_ENDPOINT").orElse("").get()
+val cloudEndpoint = providers.gradleProperty("ARIA_CLOUD_ENDPOINT").orElse("https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev").get()
 val cloudClientToken = providers.gradleProperty("ARIA_CLOUD_CLIENT_TOKEN").orElse("").get()
 
 android {
