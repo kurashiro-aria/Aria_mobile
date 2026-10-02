@@ -950,7 +950,7 @@ class MainActivity : AppCompatActivity() {
                     "replay-${java.util.UUID.randomUUID()}", answer, direction, voiceId))
                 cloudVoicePlayer.play(cloudVoicePlayer.cache(cacheKey, result.audio))
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Throwable) { toast("Voz no disponible sin conexión") }
+            catch (error: Throwable) { toast(cloudVoiceErrorMessage(error)) }
         }
     }
     private fun user(message: String) = addMessage("Kura", message)
@@ -1226,7 +1226,7 @@ class MainActivity : AppCompatActivity() {
                     // Cloud Voice is the configured automatic voice. Never silently
                     // substitute Android TTS: that masks endpoint/configuration errors
                     // and produces a different identity than the selected Cloud voice.
-                    toast("Voz Cloud no disponible; mantengo la respuesta escrita")
+                    toast(cloudVoiceErrorMessage(error))
                 }
             }
             return
@@ -1234,6 +1234,14 @@ class MainActivity : AppCompatActivity() {
         // Keep text chat fully usable when Cloud Brain/Voice is not connected.
         // Android TTS remains available only through the explicit local voice controls.
         toast("Conecta ARIA Cloud para reproducir la voz de Leda")
+    }
+
+    private fun cloudVoiceErrorMessage(error: Throwable): String = when (error) {
+        is CloudVoiceException.Rejected -> "Voz Cloud rechazó la autenticación; mantengo el texto"
+        is CloudVoiceException.NoConnection -> "Voz Cloud sin conexión; mantengo el texto"
+        is CloudVoiceException.Timeout -> "Voz Cloud tardó demasiado; mantengo el texto"
+        is CloudVoiceException.InvalidAudio -> "Voz Cloud devolvió audio inválido; mantengo el texto"
+        else -> "Voz Cloud no disponible; mantengo el texto"
     }
 
     private fun playB2Sample() {
