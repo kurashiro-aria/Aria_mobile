@@ -16,7 +16,7 @@ internal data class CloudVoiceDirection(
 internal data class CloudVoiceCandidate(val id: String, val description: String)
 
 object AriaVoiceDirector {
-    val cloudCandidates = listOf(
+    internal val cloudCandidates = listOf(
         CloudVoiceCandidate("Leda", "juvenil"),
         CloudVoiceCandidate("Achernar", "suave"),
         CloudVoiceCandidate("Vindemiatrix", "gentil"),
