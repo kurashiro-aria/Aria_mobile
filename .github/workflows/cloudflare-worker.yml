@@ -1,8 +1,5 @@
 name: ARIA Cloud Gateway
 on:
-  push:
-    branches: [aria-cloud-brain-prototype]
-    paths: ['.github/workflows/cloudflare-worker.yml']
   workflow_dispatch:
     inputs:
       deploy:
@@ -12,7 +9,6 @@ on:
         required: true
 jobs:
   gateway:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[deploy-cloud-voice-once]')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,27 +38,21 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
           npx --yes wrangler deploy
       - name: Verify real Cloud Voice audio
-        if: inputs.deploy || github.event_name == 'push'
+        if: inputs.deploy
         env:
           ARIA_CLOUD_CLIENT_TOKEN: ${{ secrets.ARIA_CLOUD_CLIENT_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           test -n "$ARIA_CLOUD_CLIENT_TOKEN"
-          sleep 5
           request_id="voice-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          http_status="$(curl --silent --show-error --max-time 120 --write-out '%{http_code}' \
+          curl --fail-with-body --silent --show-error --max-time 60 \
             -X POST "https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev/v1/voice/synthesize" \
             -H "Content-Type: application/json" \
             -H "X-ARIA-Protocol: 1" \
             -H "X-ARIA-Client: $ARIA_CLOUD_CLIENT_TOKEN" \
-            --data "{\"requestId\":\"$request_id\",\"text\":\"Hola Kura.\",\"emotion\":\"neutral\",\"intensity\":0.2,\"expressionStyle\":\"natural\",\"voiceId\":\"Leda\"}" \
-            --output /tmp/aria-cloud-voice.wav)"
-          if [ "$http_status" != "200" ]; then
-            echo "Cloud Voice smoke failed with HTTP $http_status"
-            cat /tmp/aria-cloud-voice.wav
-            exit 1
-          fi
+            --data "{\"requestId\":\"$request_id\",\"text\":\"Hola Kura. Esta es una prueba segura de ARIA Cloud.\",\"emotion\":\"neutral\",\"intensity\":0.2,\"expressionStyle\":\"natural\",\"voiceId\":\"Leda\"}" \
+            --output /tmp/aria-cloud-voice.wav
           python3 - <<'PY'
           from pathlib import Path
           audio = Path('/tmp/aria-cloud-voice.wav').read_bytes()
