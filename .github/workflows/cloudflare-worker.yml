@@ -1,8 +1,5 @@
 name: ARIA Cloud Gateway
 on:
-  push:
-    branches: [aria-cloud-brain-prototype]
-    paths: ['.github/workflows/cloudflare-worker.yml']
   workflow_dispatch:
     inputs:
       deploy:
@@ -12,7 +9,6 @@ on:
         required: true
 jobs:
   gateway:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[stream-cloud-voice-once]')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -33,7 +29,7 @@ jobs:
         working-directory: backend-worker
         run: npm test
       - name: Deploy ARIA Cloud Gateway
-        if: inputs.deploy || github.event_name == 'push'
+        if: inputs.deploy
         working-directory: backend-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -44,7 +40,7 @@ jobs:
           printf '%s' "$ARIA_CLOUD_CLIENT_TOKEN" | npx --yes wrangler secret put ARIA_CLOUD_CLIENT_TOKEN
           npx --yes wrangler deploy
       - name: Verify real Cloud Voice audio
-        if: inputs.deploy || github.event_name == 'push'
+        if: inputs.deploy
         env:
           ARIA_CLOUD_CLIENT_TOKEN: ${{ secrets.ARIA_CLOUD_CLIENT_TOKEN }}
         shell: bash
@@ -52,7 +48,7 @@ jobs:
           set -euo pipefail
           test -n "$ARIA_CLOUD_CLIENT_TOKEN"
           request_id="voice-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          curl --fail-with-body --silent --show-error --max-time 120 \
+          curl --fail-with-body --silent --show-error --max-time 60 \
             -X POST "https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev/v1/voice/synthesize" \
             -H "Content-Type: application/json" \
             -H "X-ARIA-Protocol: 1" \
