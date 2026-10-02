@@ -731,7 +731,8 @@ class MainActivity : AppCompatActivity() {
                     reply.text = "Ajustando respuesta…"
                     showPortrait(AriaEmotion.THINKING)
                     answer = collectVisibleReply(
-                        ReplyQuality.retryPrompt(turn.recent, message),
+                        CloudContextBuilder.retry(modelMessage,
+                            ReplyQuality.retryPrompt(turn.recent, message)),
                         160, reply, message, previewExpression
                     )
                     if (ReplyQuality.needsRetry(message, previousAria, answer)) {
@@ -753,7 +754,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 else { generationFailures++; reply.text = "No llegué a completar una respuesta. Prueba con una pregunta más corta."; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { generationFailures++; reply.text = "Error al pensar: ${e.javaClass.simpleName}: ${e.message ?: "sin detalle"}"; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
+            catch (e: Exception) {
+                generationFailures++
+                reply.text = CloudInferenceEngine.userMessage(e)
+                lastEmotion = AriaEmotion.CONFUSED
+                showPortrait(lastEmotion)
+            }
             finally {
                 busy = false; modelLoaded = cloudBrain.state == BrainState.Ready; send.isEnabled = modelLoaded; loadBrain.isEnabled = !modelLoaded
                 setStatus(if (modelLoaded) "● Activa" else "○ Cerebro desconectado", modelLoaded)
@@ -821,7 +827,10 @@ class MainActivity : AppCompatActivity() {
             append("\nTiempo del servidor: ").append(if (::cloudBrain.isInitialized) cloudBrain.lastServerProcessingMs?.let { "$it ms" } ?: "sin medir" else "sin medir")
             append("\nContexto del último turno: ").append(lastContextChars).append(" caracteres")
             append("\nRecuerdos recuperados: ").append(lastMemoryCount)
-            append("\nEstado social: ").append(conversationManager.snapshot().socialMood.name)
+            val conversationState = conversationManager.snapshot()
+            append("\nEstado social: ").append(conversationState.socialMood.name)
+            append("\nEstilo expresivo: ").append(conversationState.expression.style.name)
+            append("\nAvatar actual: ").append(lastEmotion.label)
             append("\nRepeticiones detectadas: ").append(repeatedReplies)
             append("\nFallos de respuesta: ").append(generationFailures)
         }

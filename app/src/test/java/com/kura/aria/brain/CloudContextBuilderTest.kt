@@ -68,4 +68,43 @@ class CloudContextBuilderTest {
         assertTrue(prompt.endsWith(current))
         assertFalse(prompt.contains("dato ajeno"))
     }
+
+    @Test fun retryPreservesIdentityPersonalityMemoryEmotionAndCurrentMessage() {
+        val current = "sí, sigamos con eso"
+        val history = listOf(
+            ChatMessage("Kura", "Estoy arreglando ARIA", 1),
+            ChatMessage("ARIA", "¿Quieres que sigamos con calma?", 2)
+        )
+        val state = ConversationState(
+            socialMood = com.kura.aria.emotion.ConversationMood.PLAYFUL,
+            expression = ExpressionState(ExpressionStyle.AFFECTIONATE, 0.8f, requestedByKura = true)
+        )
+        val turn = ConversationBrain.interpret(history, current, state)
+        val initial = CloudContextBuilder.build(history,
+            listOf(Memory(3, "Kura prefiere que ARIA sea cercana")), current,
+            state, StylePreferences(), turn)
+        val retry = CloudContextBuilder.retry(initial,
+            "Da una respuesta nueva sin repetir la anterior.")
+
+        assertTrue(retry.contains("IDENTIDAD Y PERSONALIDAD ESTABLE DE ARIA"))
+        assertTrue(retry.contains("Eres ARIA"))
+        assertTrue(retry.contains("TONO DE ESTE TURNO"))
+        assertTrue(retry.contains("Kura prefiere que ARIA sea cercana"))
+        assertTrue(retry.contains("MENSAJE ACTUAL DE KURA:\n$current"))
+        assertTrue(retry.contains("INSTRUCCIÓN DE REINTENTO"))
+        assertTrue(retry.length <= CloudContextLimits().maxCharacters)
+    }
+
+    @Test fun boundedRetryKeepsIdentityAndNewestTurnContext() {
+        val marker = "\nMENSAJE ACTUAL DE KURA:\n"
+        val base = "IDENTIDAD Y PERSONALIDAD ESTABLE DE ARIA:\nEres ARIA\n" +
+            "x".repeat(5_000) + "\nTONO DE ESTE TURNO: juguetona" + marker + "hola"
+        val retry = CloudContextBuilder.retry(base, "No repitas.", maxCharacters = 1_200)
+
+        assertTrue(retry.startsWith("IDENTIDAD Y PERSONALIDAD ESTABLE DE ARIA"))
+        assertTrue(retry.contains("TONO DE ESTE TURNO"))
+        assertTrue(retry.contains("MENSAJE ACTUAL DE KURA:\nhola"))
+        assertTrue(retry.contains("INSTRUCCIÓN DE REINTENTO"))
+        assertTrue(retry.length <= 1_200)
+    }
 }

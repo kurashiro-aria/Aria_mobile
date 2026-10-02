@@ -32,4 +32,30 @@ internal object CloudContextBuilder {
         val headBudget = (limits.maxCharacters - marker.length - tail.length).coerceAtLeast(0)
         return prompt.take(headBudget).trimEnd() + marker + tail
     }
+
+    /**
+     * Adds a corrective instruction without dropping ARIA's identity or the live turn context.
+     * A retry is still an ARIA turn: it must carry personality, memories and expression just as
+     * the first request does.
+     */
+    fun retry(basePrompt: String, retryInstruction: String,
+              maxCharacters: Int = CloudContextLimits().maxCharacters): String {
+        require(maxCharacters >= 1_000)
+        val marker = "\nMENSAJE ACTUAL DE KURA:\n"
+        val currentBlock = if (basePrompt.contains(marker))
+            marker + basePrompt.substringAfterLast(marker) else ""
+        val context = if (currentBlock.isNotEmpty()) basePrompt.substringBeforeLast(marker) else basePrompt
+        val correction = "\n\nINSTRUCCIÓN DE REINTENTO:\n${retryInstruction.trim()}"
+        val contextBudget = (maxCharacters - currentBlock.length - correction.length).coerceAtLeast(0)
+        val boundedContext = when {
+            context.length <= contextBudget -> context
+            contextBudget == 0 -> ""
+            else -> {
+                val identityBudget = minOf(contextBudget, 2_800)
+                val tailBudget = (contextBudget - identityBudget - 5).coerceAtLeast(0)
+                context.take(identityBudget).trimEnd() + "\n[…]\n" + context.takeLast(tailBudget).trimStart()
+            }
+        }
+        return (boundedContext + currentBlock + correction).take(maxCharacters)
+    }
 }
