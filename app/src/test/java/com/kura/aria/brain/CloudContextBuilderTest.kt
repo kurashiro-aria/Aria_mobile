@@ -39,7 +39,8 @@ class CloudContextBuilderTest {
         val state = ConversationState(
             topic = "ARIA Mobile",
             socialMood = com.kura.aria.emotion.ConversationMood.PLAYFUL,
-            expression = ExpressionState(ExpressionStyle.PLAYFUL, 0.6f)
+            updatedAt = System.currentTimeMillis(),
+            expression = ExpressionState(ExpressionStyle.PLAYFUL, 0.6f, requestedByKura = true)
         )
         val current = "Sí, hagámoslo con calma"
         val turn = ConversationBrain.interpret(history, current, state)
