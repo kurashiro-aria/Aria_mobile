@@ -113,7 +113,7 @@ jobs:
             exit 1
           fi
           chmod 600 "$signing_path"
-          expected="24A83E6CAE643A11B30E1102166EC4F8B4CECDD4614F7BA5A1E7CBEBC16CDE17"
+          expected="2321B43077CD25D11D9D78312E9EDB920441FD4847B406DD6E30774815E59921"
           actual="$(keytool -J-Duser.language=en -list -v -keystore "$signing_path" -storepass android -alias androiddebugkey | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':')"
           test "$actual" = "$expected" || { echo "::error::Signing key fingerprint mismatch"; exit 1; }
           echo "ARIA_SIGNING_KEYSTORE=$signing_path" >> "$GITHUB_ENV"
