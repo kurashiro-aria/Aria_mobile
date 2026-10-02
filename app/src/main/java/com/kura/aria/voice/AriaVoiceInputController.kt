@@ -24,12 +24,16 @@ class AriaVoiceInputController(
             if (speaking || session.state == VoiceInputState.SPEAKING) return@start
             wakeStartedAt = nowMs()
             val accepted = session.wake(detection.command)
-            emit()
-            onAcknowledgement(acknowledgement())
             if (accepted.command != null) {
+                emit()
+                onAcknowledgement(acknowledgement())
                 onCommand(accepted.command)
             } else {
-                session.acknowledgeFinished()
+                // AriaListeningSession resolves a command-less wake to LISTENING
+                // immediately. Surface the acknowledgement phase explicitly so
+                // diagnostics/UI observers still receive the complete transition.
+                emit(VoiceInputState.ACKNOWLEDGING)
+                onAcknowledgement(acknowledgement())
                 speech.startListening()
                 emit()
             }
@@ -83,12 +87,13 @@ class AriaVoiceInputController(
 
     private fun acknowledgement() = listOf("¿Sí, Kura?", "Dime Kura, te escucho.", "Te escucho.", "¿Qué necesitas?").first()
 
-    private fun emit() {
+    private fun emit(stateOverride: VoiceInputState? = null) {
+        val emittedState = stateOverride ?: session.state
         onState(VoiceInputDiagnostics(
-            state = session.state,
+            state = emittedState,
             lastWakeAtMs = session.lastWakeAtMs,
             lastError = lastError,
-            wakeToListeningMs = if (session.state == VoiceInputState.LISTENING && wakeStartedAt != null)
+            wakeToListeningMs = if (emittedState == VoiceInputState.LISTENING && wakeStartedAt != null)
                 nowMs() - wakeStartedAt!! else null
         ))
     }
