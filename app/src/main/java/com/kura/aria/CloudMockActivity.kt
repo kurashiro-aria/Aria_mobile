@@ -1,6 +1,7 @@
 package com.kura.aria
 
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.Gravity
@@ -72,6 +73,7 @@ class CloudMockActivity : AppCompatActivity() {
         addView(TextView(this@CloudMockActivity).apply {
             text = "ARIA"
             textSize = 26f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
             maxLines = 1
         })
@@ -83,6 +85,8 @@ class CloudMockActivity : AppCompatActivity() {
         addView(status, LinearLayout.LayoutParams(-1, dp(34)))
         addView(Button(this@CloudMockActivity).apply {
             text = "DATOS DE ARIA"
+            setTextColor(Color.WHITE)
+            background = rounded("#5A5860", 8)
             setOnClickListener { showDataDialog() }
         }, LinearLayout.LayoutParams(-1, dp(52)))
         avatar = ImageView(this@CloudMockActivity).apply {
@@ -105,18 +109,27 @@ class CloudMockActivity : AppCompatActivity() {
         input = EditText(this@CloudMockActivity).apply {
             hint = "Habla con ARIA..."
             setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
+            setHintTextColor(Color.parseColor("#AAA0B8"))
+            background = rounded("#1A1523", 18)
             setPadding(dp(14), dp(8), dp(14), dp(8))
             maxLines = 3
         }
         send = Button(this@CloudMockActivity).apply {
             text = "➤"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            background = rounded("#6F3CC3", 18)
             isEnabled = false
             setOnClickListener { sendMessage() }
         }
         row.addView(input, LinearLayout.LayoutParams(0, dp(52), 1f))
         row.addView(send, LinearLayout.LayoutParams(dp(58), dp(52)).apply { marginStart = dp(8) })
         addView(row, LinearLayout.LayoutParams(-1, dp(58)))
+    }
+
+    private fun rounded(fill: String, radius: Int) = GradientDrawable().apply {
+        setColor(Color.parseColor(fill))
+        cornerRadius = dp(radius).toFloat()
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
@@ -176,7 +189,21 @@ class CloudMockActivity : AppCompatActivity() {
         }
     }
 
-    private fun addMessage(role:String,text:String)=TextView(this).apply{this.text=text;textSize=16f;setTextColor(Color.WHITE);setPadding(12,10,12,10);gravity=if(role=="Kura")Gravity.END else Gravity.START;conversation.addView(this)}
+    private fun addMessage(role:String,text:String)=TextView(this).apply {
+        this.text = text
+        textSize = 16f
+        setTextColor(if (role == "Kura") Color.parseColor("#100D16") else Color.WHITE)
+        setPadding(dp(14), dp(10), dp(14), dp(10))
+        gravity = if (role == "Kura") Gravity.END else Gravity.START
+        background = rounded(if (role == "Kura") "#FFFFFF" else "#6F3CC3", 16)
+        layoutParams = LinearLayout.LayoutParams(-2, -2).apply {
+            gravity = if (role == "Kura") Gravity.END else Gravity.START
+            topMargin = dp(4); bottomMargin = dp(4)
+            marginStart = if (role == "Kura") dp(42) else 0
+            marginEnd = if (role == "Kura") 0 else dp(42)
+        }
+        conversation.addView(this)
+    }
     private fun showDataDialog(){
         val size=memory.storageBytes(); val details="Recuerdos: ${memory.count()}\nHistorial: ${history.count()} mensajes\nAlmacenamiento de memoria: ${size/1024} KiB\n\nLos backups se cifran con la contraseña que elijas."
         androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Datos de ARIA").setMessage(details)
