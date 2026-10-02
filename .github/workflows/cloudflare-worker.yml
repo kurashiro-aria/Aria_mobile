@@ -1,5 +1,8 @@
 name: ARIA Cloud Gateway
 on:
+  push:
+    branches: [aria-cloud-brain-prototype]
+    paths: ['.github/workflows/cloudflare-worker.yml']
   workflow_dispatch:
     inputs:
       deploy:
@@ -9,6 +12,7 @@ on:
         required: true
 jobs:
   gateway:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[deploy-cloud-voice-once]')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,7 +33,7 @@ jobs:
         working-directory: backend-worker
         run: npm test
       - name: Deploy ARIA Cloud Gateway
-        if: inputs.deploy
+        if: inputs.deploy || github.event_name == 'push'
         working-directory: backend-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -38,7 +42,7 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
           npx --yes wrangler deploy
       - name: Verify real Cloud Voice audio
-        if: inputs.deploy
+        if: inputs.deploy || github.event_name == 'push'
         env:
           ARIA_CLOUD_CLIENT_TOKEN: ${{ secrets.ARIA_CLOUD_CLIENT_TOKEN }}
         shell: bash
