@@ -44,6 +44,12 @@ import com.kura.aria.voice.AriaVoiceDirector
 import com.kura.aria.voice.LocalSpeechOutput
 import com.kura.aria.voice.LocalSpeechInput
 import com.kura.aria.voice.QwenB2SpeechOutput
+import com.kura.aria.brain.BrainPipeline
+import com.kura.aria.brain.BrainState
+import com.kura.aria.brain.CloudContextBuilder
+import com.kura.aria.brain.cloud.CloudBrainConfig
+import com.kura.aria.brain.cloud.CloudInferenceEngine
+import com.kura.aria.brain.cloud.HttpCloudBrainClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -66,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     private var lastEmotion = AriaEmotion.NEUTRAL
     private var displayedEmotion: AriaEmotion? = null
     private lateinit var engine: InferenceEngine
+    private lateinit var cloudBrain: CloudInferenceEngine
     private lateinit var chatHistory: ChatHistory
     private lateinit var ariaMemory: AriaMemory
     private lateinit var conversationManager: ConversationManager
@@ -136,6 +143,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.parseColor(BG)
         window.navigationBarColor = Color.parseColor(BG)
+        window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -195,11 +203,16 @@ class MainActivity : AppCompatActivity() {
 
         loadBrain = Button(this).apply {
             text = "CARGAR CEREBRO 🧠"; isEnabled = false; visibility = View.GONE
-            setOnClickListener { if (!busy && savedModel() != null && !modelLoaded) uiScope.launch { restoreBrainIfNeeded() } else chooseModel() }
+            setOnClickListener { connectCloudBrain() }
         }
         root.addView(loadBrain)
         val screen = FrameLayout(this).apply {
             addView(root, FrameLayout.LayoutParams(-1, -1))
+            setOnApplyWindowInsetsListener { _, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars())
+                root.setPadding(dp(18), dp(14) + bars.top, dp(18), dp(14) + bars.bottom)
+                insets
+            }
         }
         setContentView(screen)
         showPortrait(AriaEmotion.NEUTRAL)
@@ -216,31 +229,14 @@ class MainActivity : AppCompatActivity() {
         }
         send.setOnClickListener { sendMessage() }
         AriaForegroundService.commandListener = wakeCommandListener
-        try {
-            engine = AiChat.getInferenceEngine(applicationContext)
-            if (savedModel() != null && engine.state.value !is InferenceEngine.State.ModelReady)
-                showLoadingScreen()
-            uiScope.launch {
-                restoreBrainIfNeeded()
-                if (voiceEnabled() && b2Enabled()) prepareB2Voice(replayLastReply = false)
-            }
-        } catch (e: LinkageError) {
-            hideLoadingScreen(false)
-            setStatus("● Error de motor", false)
-            loadBrain.isEnabled = false
-        }
+        connectCloudBrain()
     }
 
     private fun showAriaMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
             menu.add("Estado de ARIA").isEnabled = false
-            val selected = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null)
-            menu.add(if (modelLoaded) "Cerebro actual: ${activeModelName ?: selected ?: "desconocido"}"
-                else "Cerebro: desconectado").isEnabled = false
-            if (!modelLoaded && selected != null) menu.add("Último seleccionado: $selected").isEnabled = false
-            if (!modelLoaded && savedModel() != null) menu.add("Reconectar cerebro")
-            if (ModelSelection.installed(File(filesDir, "models")).isNotEmpty()) menu.add("Elegir cerebro instalado")
-            menu.add("Cambiar / cargar cerebro")
+            menu.add(if (modelLoaded) "Cerebro: ARIA Cloud" else "Cerebro Cloud: desconectado").isEnabled = false
+            if (!modelLoaded) menu.add("Reconectar ARIA Cloud")
             menu.add("Memoria")
             menu.add(if (initiativeEnabled()) "Iniciativa: activada" else "Iniciativa: desactivada")
             menu.add("Rendimiento")
@@ -254,9 +250,7 @@ class MainActivity : AppCompatActivity() {
             menu.add("Ajustes")
             setOnMenuItemClickListener {
                 when (it.title.toString()) {
-                    "Cambiar / cargar cerebro" -> chooseModel()
-                    "Elegir cerebro instalado" -> chooseInstalledModel()
-                    "Reconectar cerebro" -> uiScope.launch { restoreBrainIfNeeded() }
+                    "Reconectar ARIA Cloud" -> connectCloudBrain()
                     "Memoria" -> showMemoryDialog()
                     "Iniciativa: activada", "Iniciativa: desactivada" -> {
                         val enabled = !initiativeEnabled()
@@ -275,7 +269,7 @@ class MainActivity : AppCompatActivity() {
                     "Interfaz" -> toast("Interfaz ARIA Character")
                     "Ajustes" -> showSettingsDialog()
                     else -> if (it.title?.toString()?.startsWith("Sistema") == true)
-                        toast("ARIA ${BuildConfig.VERSION_NAME} • llama.cpp local")
+                        toast("ARIA ${BuildConfig.VERSION_NAME} • cerebro Cloud")
                 }; true
             }
             show()
@@ -285,6 +279,38 @@ class MainActivity : AppCompatActivity() {
     private fun setStatus(text: String, ready: Boolean) {
         status.text = text
         status.setTextColor(Color.parseColor(if (ready) PURPLE else MUTED))
+    }
+
+    private fun connectCloudBrain() {
+        if (busy) return
+        val endpoint = BuildConfig.ARIA_CLOUD_ENDPOINT.trim()
+        if (endpoint.isBlank()) {
+            modelLoaded = false
+            send.isEnabled = false
+            setStatus("○ Cloud no configurado", false)
+            return
+        }
+        if (!::cloudBrain.isInitialized) {
+            val config = CloudBrainConfig(endpoint, BuildConfig.ARIA_CLOUD_CLIENT_TOKEN)
+            cloudBrain = CloudInferenceEngine(config, HttpCloudBrainClient(config, BuildConfig.DEBUG))
+        }
+        busy = true
+        send.isEnabled = false
+        setStatus("○ Conectando ARIA Cloud", false)
+        uiScope.launch {
+            modelLoaded = try { cloudBrain.connect() } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Throwable) { false }
+            busy = false
+            send.isEnabled = modelLoaded
+            loadBrain.visibility = if (modelLoaded) View.GONE else View.VISIBLE
+            loadBrain.text = "RECONECTAR ARIA CLOUD"
+            loadBrain.isEnabled = !modelLoaded
+            setStatus(if (modelLoaded) "● Activa" else "○ Cloud desconectada", modelLoaded)
+            if (modelLoaded) {
+                scheduleInitiative()
+                deliverPendingWakeCommand()
+            }
+        }
     }
 
     private fun showLoadingScreen(modelName: String? = savedModel()?.name) {
@@ -452,11 +478,9 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         if (wakeEnabled() && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED) startWakeListening()
-        if (::engine.isInitialized && !busy && savedModel() != null &&
-            (!modelLoaded || engine.state.value !is InferenceEngine.State.ModelReady ||
-                activeModelName != savedModel()?.name)) {
-            uiScope.launch { restoreBrainIfNeeded() }
-        } else if (::engine.isInitialized && modelLoaded && loadingOverlay == null) {
+        if (::cloudBrain.isInitialized && !busy && cloudBrain.state != BrainState.Ready) {
+            connectCloudBrain()
+        } else if (::cloudBrain.isInitialized && modelLoaded && loadingOverlay == null) {
             scheduleInitiative()
             deliverPendingWakeCommand()
         }
@@ -681,7 +705,7 @@ class MainActivity : AppCompatActivity() {
                     val relevant = if (turn.intent == ConversationIntent.ROLEPLAY_ACTION)
                         emptyList() else ariaMemory.relevantTo(turn.spokenText, recentUserMessages)
                     lastMemoryCount = relevant.size
-                    ConversationContext.turnPrompt(previousHistory, relevant, message, stateBefore,
+                    CloudContextBuilder.build(previousHistory, relevant, message, stateBefore,
                         stylePreferences, turn)
                 }
                 lastContextChars = modelMessage.length
@@ -690,7 +714,7 @@ class MainActivity : AppCompatActivity() {
                     showPortrait(AriaEmotion.fromInteraction(turnMood, turnExpression, message, visible))
                 }
                 val tokenBudget = if (message.length > 280) 512 else 384
-                var answer = collectVisibleReply(AriaPersonality.directResponsePrompt(modelMessage), tokenBudget, reply, message,
+                var answer = collectVisibleReply(modelMessage, tokenBudget, reply, message,
                     previewExpression)
                 val previousAria = previousHistory.lastOrNull { it.role == "ARIA" }?.text
                 if (ReplyQuality.needsRetry(message, previousAria, answer)) {
@@ -698,8 +722,7 @@ class MainActivity : AppCompatActivity() {
                     reply.text = "Ajustando respuesta…"
                     showPortrait(AriaEmotion.THINKING)
                     answer = collectVisibleReply(
-                        AriaPersonality.directResponsePrompt(ReplyQuality.retryPrompt(
-                            turn.recent, message)),
+                        ReplyQuality.retryPrompt(turn.recent, message),
                         160, reply, message, previewExpression
                     )
                     if (ReplyQuality.needsRetry(message, previousAria, answer)) {
@@ -714,6 +737,7 @@ class MainActivity : AppCompatActivity() {
                     withContext(Dispatchers.IO) {
                         chatHistory.append("ARIA", answer)
                         conversationManager.record(message, answer, stylePreferences)
+                        com.kura.aria.memory.LocalMemoryProcessor.process(ariaMemory, message)
                     }
                     lastSpokenReply = answer to lastEmotion
                     if (voiceEnabled() && (voiceInForeground || wakeEnabled())) speakReply(answer, lastEmotion)
@@ -722,7 +746,7 @@ class MainActivity : AppCompatActivity() {
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { generationFailures++; reply.text = "Error al pensar: ${e.javaClass.simpleName}: ${e.message ?: "sin detalle"}"; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
             finally {
-                busy = false; modelLoaded = engine.state.value is InferenceEngine.State.ModelReady; send.isEnabled = modelLoaded; loadBrain.isEnabled = true
+                busy = false; modelLoaded = cloudBrain.state == BrainState.Ready; send.isEnabled = modelLoaded; loadBrain.isEnabled = !modelLoaded
                 setStatus(if (modelLoaded) "● Activa" else "○ Cerebro desconectado", modelLoaded)
                 if (!modelLoaded) loadBrain.text = "RECONECTAR CEREBRO 🧠"; scrollToBottom()
                 if (wakeEnabled()) uiScope.launch {
@@ -743,7 +767,7 @@ class MainActivity : AppCompatActivity() {
         var chunks = 0
         var lastRenderedAt = 0L
         var expressionPreviewed = false
-        engine.sendUserPrompt(prompt, predictLength = tokenLimit).flowOn(Dispatchers.IO).collect { token ->
+        cloudBrain.generate(BrainPipeline.request(prompt, tokenLimit)).flowOn(Dispatchers.IO).collect { token ->
             chunks++
             val answer = filter.append(token)
             val copiedAction = ReplyQuality.copiesKuraAction(userMessage, answer)
@@ -772,7 +796,7 @@ class MainActivity : AppCompatActivity() {
     private fun showPerformanceDialog() {
         val generation = lastGeneration
         val details = buildString {
-            append("Carga del modelo y personalidad: ")
+            append("Conexión Cloud: ")
             append(lastLoadMs?.let { "${it / 1000.0} s" } ?: "sin medir")
             append("\nPreparación del turno: ")
             append(lastPreparationMs?.let { "${it / 1000.0} s" } ?: "sin medir")
@@ -783,8 +807,9 @@ class MainActivity : AppCompatActivity() {
             append("\nVelocidad aproximada: ")
             append(generation?.approximateTokensPerSecond?.let { String.format(java.util.Locale.US, "%.1f tokens/s", it) }
                 ?: "sin medir")
-            append("\nCerebro activo: ").append(if (modelLoaded) activeModelName ?: "desconocido" else "sin cargar")
-            append("\nÚltimo seleccionado: ").append(getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_MODEL, null) ?: "ninguno")
+            append("\nCerebro activo: ").append(if (modelLoaded) "ARIA Cloud" else "sin conexión")
+            append("\nModelo remoto: ").append(if (::cloudBrain.isInitialized) cloudBrain.lastModel ?: "sin informar" else "sin informar")
+            append("\nTiempo del servidor: ").append(if (::cloudBrain.isInitialized) cloudBrain.lastServerProcessingMs?.let { "$it ms" } ?: "sin medir" else "sin medir")
             append("\nContexto del último turno: ").append(lastContextChars).append(" caracteres")
             append("\nRecuerdos recuperados: ").append(lastMemoryCount)
             append("\nEstado social: ").append(conversationManager.snapshot().socialMood.name)
@@ -910,7 +935,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun voiceEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_ENABLED, false)
-    private fun b2Enabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_B2, false)
+    // B2 permanece congelada. Conservamos la preferencia y el código para una tarea futura.
+    private fun b2Enabled() = false
     private fun wakeEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(WAKE_ENABLED, false)
 
     private fun wakeService(action: String) {
@@ -939,7 +965,7 @@ class MainActivity : AppCompatActivity() {
         }
         content.addView(speechSwitch)
         content.addView(TextView(this).apply {
-            text = "Usa B2 si está preparada; de otro modo usa la voz española instalada en Android."
+            text = "B2 experimental está pausada. La lectura usa la voz española instalada en Android."
         })
         wakeSwitch.setOnCheckedChangeListener { _, checked ->
             if (checked) enableWakeListening()
@@ -1114,7 +1140,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showVoiceDialog() {
         AlertDialog.Builder(this).setTitle("Voz local de ARIA")
-            .setMessage("Voz actual: ${if (b2Enabled()) "B2 experimental" else "Android español"}. La voz Android no reproduce el timbre B2. El motor B2 usa la muestra elegida como referencia, pero tampoco garantiza una copia exacta. Descarga unos 884 MB una vez; el progreso de la generación y cualquier error aparecerán sobre el chat. La lectura automática se controla en Ajustes.")
+            .setMessage("B2 experimental está pausada para dedicar los recursos a la conversación. Puedes escuchar la muestra B2 en el menú. La lectura automática usa la voz española de Android.")
             .setPositiveButton("Usar voz Android") { _, _ ->
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
                     .putBoolean(VOICE_B2, false).apply()
@@ -1123,11 +1149,12 @@ class MainActivity : AppCompatActivity() {
                 voiceProgress.visibility = View.GONE
                 startVoice()
             }
-            .setNeutralButton("Probar B2") { _, _ -> prepareB2Voice(replayLastReply = true) }
             .setNegativeButton("Cerrar", null).show()
     }
 
     private fun prepareB2Voice(replayLastReply: Boolean) {
+        // Intentionally inaccessible while B2 is paused (including old saved preferences).
+        if (!b2Enabled()) return
         if (b2Preparing) { toast("B2 sigue descargando o cargando; mira el avance sobre el chat"); return }
         val output = b2SpeechOutput ?: QwenB2SpeechOutput(applicationContext, { status ->
             if (!isFinishing && !isDestroyed) {
@@ -1172,6 +1199,7 @@ class MainActivity : AppCompatActivity() {
             AriaForegroundService.commandListener = null
         speechOutput?.close(); speechOutput = null
         b2SpeechOutput?.close(); b2SpeechOutput = null
+        if (::cloudBrain.isInitialized) runBlocking { cloudBrain.close() }
         uiScope.cancel()
         super.onDestroy()
     }
