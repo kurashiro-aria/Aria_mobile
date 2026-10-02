@@ -65,43 +65,59 @@ class CloudMockActivity : AppCompatActivity() {
         }
     }
 
-    private fun buildUi() = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(18), dp(12), dp(18), dp(10))
+    private fun buildUi() = FrameLayout(this).apply {
         setBackgroundColor(Color.parseColor("#100D16"))
-        fitsSystemWindows = true
-        addView(TextView(this@CloudMockActivity).apply {
+        val root = LinearLayout(this@CloudMockActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(10))
+            fitsSystemWindows = true
+        }
+        root.addView(TextView(this@CloudMockActivity).apply {
             text = "ARIA"
             textSize = 26f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
-            maxLines = 1
-        })
+        }, LinearLayout.LayoutParams(-1, dp(40)))
         status = TextView(this@CloudMockActivity).apply {
             text = "○ Inicializando"
             textSize = 14f
             setTextColor(Color.parseColor("#A970FF"))
         }
-        addView(status, LinearLayout.LayoutParams(-1, dp(34)))
-        addView(Button(this@CloudMockActivity).apply {
+        root.addView(status, LinearLayout.LayoutParams(-1, dp(30)))
+        root.addView(Button(this@CloudMockActivity).apply {
             text = "DATOS DE ARIA"
             setTextColor(Color.WHITE)
             background = rounded("#5A5860", 8)
             setOnClickListener { showDataDialog() }
         }, LinearLayout.LayoutParams(-1, dp(52)))
-        avatar = ImageView(this@CloudMockActivity).apply {
-            setImageResource(R.drawable.aria_neutral)
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
-            adjustViewBounds = true
-            contentDescription = "ARIA"
-        }
-        addView(avatar, LinearLayout.LayoutParams(-1, dp(170)).apply { topMargin = dp(6); bottomMargin = dp(6) })
+        val chatStage = FrameLayout(this@CloudMockActivity)
         conversation = LinearLayout(this@CloudMockActivity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(4), 0, dp(4))
+            setPadding(0, dp(218), 0, dp(8))
         }
-        addView(ScrollView(this@CloudMockActivity).apply { addView(conversation); isFillViewport = true },
-            LinearLayout.LayoutParams(-1, 0, 1f))
+        val chatScroll = ScrollView(this@CloudMockActivity).apply {
+            addView(conversation)
+            isFillViewport = true
+            setOnApplyWindowInsetsListener { view, insets ->
+                view.setPadding(0, 0, 0, insets.getInsets(WindowInsets.Type.ime()).bottom)
+                insets
+            }
+        }
+        chatStage.addView(chatScroll, FrameLayout.LayoutParams(-1, -1))
+        avatar = ImageView(this@CloudMockActivity).apply {
+            setImageResource(R.drawable.aria_neutral)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = rounded("#241B31", 18)
+            clipToOutline = true
+            elevation = dp(10).toFloat()
+            contentDescription = "ARIA"
+        }
+        chatStage.addView(avatar, FrameLayout.LayoutParams(dp(150), dp(200)).apply {
+            gravity = Gravity.TOP or Gravity.START
+            marginStart = dp(4)
+            topMargin = dp(8)
+        })
+        root.addView(chatStage, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(8) })
         val row = LinearLayout(this@CloudMockActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -110,22 +126,29 @@ class CloudMockActivity : AppCompatActivity() {
             hint = "Habla con ARIA..."
             setTextColor(Color.WHITE)
             setHintTextColor(Color.parseColor("#AAA0B8"))
-            background = rounded("#1A1523", 18)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = rounded("#1A1523", 22)
+            setPadding(dp(14), dp(9), dp(14), dp(9))
             maxLines = 3
         }
         send = Button(this@CloudMockActivity).apply {
             text = "➤"
             textSize = 20f
             setTextColor(Color.WHITE)
-            background = rounded("#6F3CC3", 18)
+            background = rounded("#6F3CC3", 22)
             isEnabled = false
             setOnClickListener { sendMessage() }
         }
-        row.addView(input, LinearLayout.LayoutParams(0, dp(52), 1f))
-        row.addView(send, LinearLayout.LayoutParams(dp(58), dp(52)).apply { marginStart = dp(8) })
-        addView(row, LinearLayout.LayoutParams(-1, dp(58)))
+        row.addView(input, LinearLayout.LayoutParams(0, dp(54), 1f))
+        row.addView(send, LinearLayout.LayoutParams(dp(58), dp(54)).apply { marginStart = dp(8) })
+        root.addView(row, LinearLayout.LayoutParams(-1, dp(60)))
+        addView(root, FrameLayout.LayoutParams(-1, -1))
+        setOnApplyWindowInsetsListener { _, insets ->
+            val bars = insets.getInsets(WindowInsets.Type.systemBars())
+            root.setPadding(dp(18), dp(14) + bars.top, dp(18), dp(10) + bars.bottom)
+            insets
+        }
     }
+
 
     private fun rounded(fill: String, radius: Int) = GradientDrawable().apply {
         setColor(Color.parseColor(fill))
