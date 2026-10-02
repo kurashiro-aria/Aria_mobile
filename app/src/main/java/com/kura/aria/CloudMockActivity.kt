@@ -4,6 +4,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.WindowInsets
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -64,17 +65,61 @@ class CloudMockActivity : AppCompatActivity() {
     }
 
     private fun buildUi() = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL; setPadding(24,24,24,24); setBackgroundColor(Color.parseColor("#100D16"))
-        addView(TextView(this@CloudMockActivity).apply { text="ARIA Cloud"; textSize=25f; setTextColor(Color.WHITE) })
-        status=TextView(this@CloudMockActivity).apply { text="○ Inicializando"; setTextColor(Color.parseColor("#A970FF")) }; addView(status)
-        addView(Button(this@CloudMockActivity).apply{text="Datos de ARIA";setOnClickListener{showDataDialog()}})
-        avatar=ImageView(this@CloudMockActivity).apply { setImageResource(R.drawable.aria_neutral); adjustViewBounds=true }; addView(avatar,LinearLayout.LayoutParams(-1,320))
-        conversation=LinearLayout(this@CloudMockActivity).apply { orientation=LinearLayout.VERTICAL }; addView(ScrollView(this@CloudMockActivity).apply { addView(conversation) },LinearLayout.LayoutParams(-1,0,1f))
-        val row=LinearLayout(this@CloudMockActivity).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
-        input=EditText(this@CloudMockActivity).apply { hint="Habla con ARIA..."; setTextColor(Color.WHITE); setHintTextColor(Color.GRAY) }
-        send=Button(this@CloudMockActivity).apply { text="➤"; isEnabled=false; setOnClickListener { sendMessage() } }
-        row.addView(input,LinearLayout.LayoutParams(0,-2,1f)); row.addView(send); addView(row)
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(18), dp(12), dp(18), dp(10))
+        setBackgroundColor(Color.parseColor("#100D16"))
+        fitsSystemWindows = true
+        addView(TextView(this@CloudMockActivity).apply {
+            text = "ARIA"
+            textSize = 26f
+            setTextColor(Color.WHITE)
+            maxLines = 1
+        })
+        status = TextView(this@CloudMockActivity).apply {
+            text = "○ Inicializando"
+            textSize = 14f
+            setTextColor(Color.parseColor("#A970FF"))
+        }
+        addView(status, LinearLayout.LayoutParams(-1, dp(34)))
+        addView(Button(this@CloudMockActivity).apply {
+            text = "DATOS DE ARIA"
+            setOnClickListener { showDataDialog() }
+        }, LinearLayout.LayoutParams(-1, dp(52)))
+        avatar = ImageView(this@CloudMockActivity).apply {
+            setImageResource(R.drawable.aria_neutral)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            adjustViewBounds = true
+            contentDescription = "ARIA"
+        }
+        addView(avatar, LinearLayout.LayoutParams(-1, dp(170)).apply { topMargin = dp(6); bottomMargin = dp(6) })
+        conversation = LinearLayout(this@CloudMockActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        addView(ScrollView(this@CloudMockActivity).apply { addView(conversation); isFillViewport = true },
+            LinearLayout.LayoutParams(-1, 0, 1f))
+        val row = LinearLayout(this@CloudMockActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        input = EditText(this@CloudMockActivity).apply {
+            hint = "Habla con ARIA..."
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            maxLines = 3
+        }
+        send = Button(this@CloudMockActivity).apply {
+            text = "➤"
+            isEnabled = false
+            setOnClickListener { sendMessage() }
+        }
+        row.addView(input, LinearLayout.LayoutParams(0, dp(52), 1f))
+        row.addView(send, LinearLayout.LayoutParams(dp(58), dp(52)).apply { marginStart = dp(8) })
+        addView(row, LinearLayout.LayoutParams(-1, dp(58)))
     }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private fun updateAvailability() {
         val ready=::brain.isInitialized && brain.state==BrainState.Ready && !busy; send.isEnabled=ready
