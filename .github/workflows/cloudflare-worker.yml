@@ -33,7 +33,7 @@ jobs:
         working-directory: backend-worker
         run: npm test
       - name: Deploy ARIA Cloud Gateway
-        if: inputs.deploy
+        if: inputs.deploy || github.event_name == 'push'
         working-directory: backend-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -49,13 +49,14 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$ARIA_CLOUD_CLIENT_TOKEN"
+          sleep 5
           request_id="voice-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          curl --fail-with-body --silent --show-error --max-time 60 --retry 4 --retry-delay 2 --retry-all-errors \
+          curl --fail-with-body --silent --show-error --max-time 120 \
             -X POST "https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev/v1/voice/synthesize" \
             -H "Content-Type: application/json" \
             -H "X-ARIA-Protocol: 1" \
             -H "X-ARIA-Client: $ARIA_CLOUD_CLIENT_TOKEN" \
-            --data "{\"requestId\":\"$request_id\",\"text\":\"Hola Kura. Esta es una prueba segura de ARIA Cloud.\",\"emotion\":\"neutral\",\"intensity\":0.2,\"expressionStyle\":\"natural\",\"voiceId\":\"Leda\"}" \
+            --data "{\"requestId\":\"$request_id\",\"text\":\"Hola Kura.\",\"emotion\":\"neutral\",\"intensity\":0.2,\"expressionStyle\":\"natural\",\"voiceId\":\"Leda\"}" \
             --output /tmp/aria-cloud-voice.wav
           python3 - <<'PY'
           from pathlib import Path

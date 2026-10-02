@@ -154,7 +154,7 @@ async function callGeminiTts(body, env, fetchImpl) {
   const base = (env.ARIA_GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
   if (!env.ARIA_LLM_API_KEY) throw Object.assign(new Error("provider_unavailable"), { status: 503 });
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(env.ARIA_TTS_TIMEOUT_MS || 45000)));
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(env.ARIA_TTS_TIMEOUT_MS || 90000)));
   try {
     const response = await fetchImpl(`${base}/interactions`, {
       method: "POST",
