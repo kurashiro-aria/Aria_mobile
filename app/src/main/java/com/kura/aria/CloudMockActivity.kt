@@ -197,7 +197,7 @@ class CloudMockActivity : AppCompatActivity() {
                     val relevant=if(turn.intent==ConversationIntent.ROLEPLAY_ACTION) emptyList() else memory.relevantTo(turn.spokenText,recent)
                     CloudContextBuilder.build(previous,relevant,message,stateBefore,preferences,turn)
                 }
-                val request=BrainPipeline.request(prepared,if(message.length>280)512 else 384); lastRequestPreparationMs=SystemClock.elapsedRealtime()-prepStart
+                val request=BrainPipeline.request(prepared,if(message.length>280)512 else 300); lastRequestPreparationMs=SystemClock.elapsedRealtime()-prepStart
                 replyView=addMessage("ARIA","Preparando respuesta…"); val requestStart=SystemClock.elapsedRealtime(); val filter=VisibleReplyFilter()
                 brain.generate(request).collect{chunk-> if(sequence!=generationSequence)return@collect; val visible=filter.append(chunk);if(visible.isNotBlank())replyView.text=visible}
                 if(sequence!=generationSequence)return@launch; lastRequestMs=SystemClock.elapsedRealtime()-requestStart
