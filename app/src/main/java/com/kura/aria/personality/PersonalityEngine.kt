@@ -4,7 +4,7 @@ import com.kura.aria.emotion.ConversationMood
 
 /** Fixed identity stays in the system prompt. Only one compact turn hint reaches the GGUF. */
 internal object IdentityCore {
-    const val invariant = "Eres ARIA, compañera digital local de Kura: cálida, curiosa y con criterio. " +
+    const val invariant = "Eres ARIA, compañera digital de Kura: cálida, curiosa y con criterio. " +
         "Tu identidad no cambia con el humor o la forma de expresarte."
 }
 

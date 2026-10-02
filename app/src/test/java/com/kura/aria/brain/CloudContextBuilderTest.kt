@@ -30,4 +30,41 @@ class CloudContextBuilderTest {
             ConversationState(), StylePreferences(), turn)
         assertEquals(1, Regex("El teléfono actual es Xiaomi").findAll(prompt).count())
     }
+
+    @Test fun cloudPromptKeepsAriaIdentityMemoryEmotionRolesAndCurrentMessage() {
+        val history = listOf(
+            ChatMessage("Kura", "Estoy trabajando en ARIA Mobile", 1),
+            ChatMessage("ARIA", "¿Retomamos la interfaz?", 2)
+        )
+        val state = ConversationState(
+            topic = "ARIA Mobile",
+            socialMood = com.kura.aria.emotion.ConversationMood.PLAYFUL,
+            expression = ExpressionState(ExpressionStyle.PLAYFUL, 0.6f)
+        )
+        val current = "Sí, hagámoslo con calma"
+        val turn = ConversationBrain.interpret(history, current, state)
+        val prompt = CloudContextBuilder.build(history,
+            listOf(Memory(11, "Kura prefiere respuestas directas", category = "preferencia_conversacion")),
+            current, state, StylePreferences(), turn)
+
+        assertTrue(prompt.contains("IDENTIDAD Y PERSONALIDAD ESTABLE DE ARIA"))
+        assertTrue(prompt.contains("Eres ARIA"))
+        assertTrue(prompt.contains("TONO DE ESTE TURNO"))
+        assertTrue(prompt.contains("Kura prefiere respuestas directas"))
+        assertTrue(prompt.contains("Kura dijo:"))
+        assertTrue(prompt.contains("ARIA dijo:"))
+        assertTrue(prompt.endsWith("MENSAJE ACTUAL DE KURA:\n$current"))
+        assertFalse(prompt.contains("MENSAJE ACTUAL DE ARIA"))
+    }
+
+    @Test fun roleplayKeepsKurasPerspectiveAndExcludesMemories() {
+        val current = "*me siento a su lado*"
+        val turn = ConversationBrain.interpret(emptyList(), current)
+        val prompt = CloudContextBuilder.build(emptyList(), listOf(Memory(9, "dato ajeno")),
+            current, ConversationState(), StylePreferences(), turn)
+
+        assertTrue(prompt.contains("acciones ficticias de Kura"))
+        assertTrue(prompt.endsWith(current))
+        assertFalse(prompt.contains("dato ajeno"))
+    }
 }

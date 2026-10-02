@@ -19,8 +19,13 @@ internal object CloudContextBuilder {
               turn: ConversationTurn, limits: CloudContextLimits = CloudContextLimits()): String {
         val boundedTurn = turn.copy(recent = turn.recent.takeLast(limits.maxRecentTurns))
         val uniqueMemories = memories.distinctBy { it.id }.take(limits.maxMemories)
-        val prompt = ConversationContext.turnPrompt(history, uniqueMemories, current, state,
-            preferences, boundedTurn)
+        val prompt = buildString {
+            append("IDENTIDAD Y PERSONALIDAD ESTABLE DE ARIA:\n")
+            append(AriaPersonality.systemPrompt())
+            append("\n\nCONTEXTO DEL TURNO:\n")
+            append(ConversationContext.turnPrompt(history, uniqueMemories, current, state,
+                preferences, boundedTurn))
+        }
         if (prompt.length <= limits.maxCharacters) return prompt
         val marker = "\nMENSAJE ACTUAL DE KURA:\n"
         val tail = prompt.substringAfterLast(marker, current).takeLast(limits.maxCharacters / 2)
