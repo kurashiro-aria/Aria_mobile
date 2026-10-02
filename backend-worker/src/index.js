@@ -149,43 +149,60 @@ function decodeBase64(value) {
   return bytes;
 }
 
+function pcmToWav(pcm) {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  const write = (offset, value) => { for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i)); };
+  write(0, 'RIFF'); view.setUint32(4, 36 + pcm.length, true); write(8, 'WAVE');
+  write(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, 24000, true); view.setUint32(28, 48000, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true); write(36, 'data'); view.setUint32(40, pcm.length, true);
+  const audio = new Uint8Array(44 + pcm.length); audio.set(new Uint8Array(header)); audio.set(pcm, 44); return audio;
+}
+
+async function readStreamingAudio(response) {
+  if (!response.body?.getReader) throw Object.assign(new Error('provider_invalid_audio'), { status: 502 });
+  const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''; const chunks = [];
+  const consume = (text) => {
+    buffer += text; const events = buffer.split(/\n\n/); buffer = events.pop() || '';
+    for (const event of events) {
+      const line = event.split('\n').find((item) => item.startsWith('data:')); if (!line) continue;
+      const raw = line.slice(5).trim(); if (!raw || raw === '[DONE]') continue;
+      let payload; try { payload = JSON.parse(raw); } catch { continue; }
+      const delta = payload?.delta || payload?.data?.delta;
+      if (payload?.event_type === 'error' || payload?.data?.event_type === 'error') throw Object.assign(new Error('provider_request_failed'), { status: 502 });
+      if (delta?.type === 'audio' && typeof delta.data === 'string') {
+        let binary; try { binary = atob(delta.data); } catch { throw Object.assign(new Error('provider_invalid_audio'), { status: 502 }); }
+        const bytes = new Uint8Array(binary.length); for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i); chunks.push(bytes);
+      }
+    }
+  };
+  while (true) { const part = await reader.read(); if (part.done) break; consume(decoder.decode(part.value, { stream: true })); }
+  consume(decoder.decode()); const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  if (total === 0) throw Object.assign(new Error('provider_empty_audio'), { status: 502 });
+  const pcm = new Uint8Array(total); let offset = 0; for (const chunk of chunks) { pcm.set(chunk, offset); offset += chunk.length; }
+  return pcmToWav(pcm);
+}
+
 async function callGeminiTts(body, env, fetchImpl) {
-  const model = env.ARIA_TTS_MODEL || "gemini-3.8-flash-lite-tts";
-  const base = (env.ARIA_GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
-  if (!env.ARIA_LLM_API_KEY) throw Object.assign(new Error("provider_unavailable"), { status: 503 });
+  const model = env.ARIA_TTS_MODEL || 'gemini-3.8-flash-lite-tts';
+  const base = (env.ARIA_GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
+  if (!env.ARIA_LLM_API_KEY) throw Object.assign(new Error('provider_unavailable'), { status: 503 });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(env.ARIA_TTS_TIMEOUT_MS || 90000)));
   try {
     const response = await fetchImpl(`${base}/interactions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": env.ARIA_LLM_API_KEY },
-      body: JSON.stringify({
-        model,
-        input: [{ type: "user_input", content: [{ type: "text", text: body.text,
-          annotations: [{ type: "speech_metadata", style: voiceStyle(body.emotion, body.intensity, body.expressionStyle) }] }] }],
-        response_format: { type: "audio", mime_type: "audio/wav", sample_rate: 24000 },
-        generation_config: { speech_config: [{ voice: body.voiceId }] },
-      }),
-      signal: controller.signal,
+      method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream', 'x-goog-api-key': env.ARIA_LLM_API_KEY },
+      body: JSON.stringify({ model, input: [{ type: 'user_input', content: [{ type: 'text', text: body.text, annotations: [{ type: 'speech_metadata', style: voiceStyle(body.emotion, body.intensity, body.expressionStyle) }] }] }], response_format: { type: 'audio' }, generation_config: { speech_config: [{ voice: body.voiceId }] }, stream: true }), signal: controller.signal,
     });
-    if (!response.ok) {
-      const providerError = response.status === 429 ? "provider_rate_limited"
-        : response.status === 401 || response.status === 403 ? "provider_unauthorized"
-          : response.status === 404 ? "provider_model_not_found"
-            : response.status === 400 ? "provider_bad_request" : "provider_request_failed";
-      throw Object.assign(new Error(providerError), { status: response.status === 429 ? 429 : 502 });
-    }
-    let payload;
-    try { payload = await response.json(); } catch { throw Object.assign(new Error("provider_invalid_response"), { status: 502 }); }
-    const audio = payload?.steps?.flatMap((step) => step?.type === "model_output" ? step.content || [] : [])
-      .filter((part) => part?.type === "audio").at(-1)?.data;
+    if (!response.ok) { const providerError = response.status === 429 ? 'provider_rate_limited' : response.status === 401 || response.status === 403 ? 'provider_unauthorized' : response.status === 404 ? 'provider_model_not_found' : response.status === 400 ? 'provider_bad_request' : 'provider_request_failed'; throw Object.assign(new Error(providerError), { status: response.status === 429 ? 429 : 502 }); }
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/event-stream')) return { audio: await readStreamingAudio(response), model };
+    let payload; try { payload = await response.json(); } catch { throw Object.assign(new Error('provider_invalid_response'), { status: 502 }); }
+    const audio = payload?.output_audio?.data || payload?.steps?.flatMap((step) => step?.type === 'model_output' ? step.content || [] : []).filter((part) => part?.type === 'audio').at(-1)?.data;
     return { audio: decodeBase64(audio), model };
-  } catch (error) {
-    if (error?.name === "AbortError") throw Object.assign(new Error("provider_timeout"), { status: 504 });
-    throw error;
-  } finally { clearTimeout(timer); }
+  } catch (error) { if (error?.name === 'AbortError') throw Object.assign(new Error('provider_timeout'), { status: 504 }); throw error; } finally { clearTimeout(timer); }
 }
-
 export function createWorker({ fetchImpl = fetch, now = () => Date.now() } = {}) {
   return { fetch: (request, env = {}) => handle(request, env, fetchImpl, now) };
 }
