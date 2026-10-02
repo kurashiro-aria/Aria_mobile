@@ -21,6 +21,10 @@ import android.view.View
 import android.view.WindowInsets
 import android.widget.*
 import android.speech.SpeechRecognizer
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.method.LinkMovementMethod
+import android.text.style.ClickableSpan
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -764,7 +768,7 @@ class MainActivity : AppCompatActivity() {
                 val previewExpression: (String) -> Unit = { visible ->
                     showPortrait(AriaEmotion.fromInteraction(turnMood, turnExpression, message, visible))
                 }
-                val tokenBudget = if (message.length > 280) 512 else 384
+                val tokenBudget = if (message.length > 280) 512 else 300
                 var answer = collectVisibleReply(modelMessage, tokenBudget, reply, message,
                     previewExpression)
                 val previousAria = previousHistory.lastOrNull { it.role == "ARIA" }?.text
@@ -783,7 +787,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 if (answer.isNotBlank()) {
-                    reply.text = answer
+                    reply.text = ariaMessageText(answer)
                     lastEmotion = AriaEmotion.fromInteraction(turnMood, turnExpression, message, answer)
                     showPortrait(lastEmotion)
                     withContext(Dispatchers.IO) {
@@ -906,13 +910,47 @@ class MainActivity : AppCompatActivity() {
     private fun addMessage(who: String, message: String) { conversation.addView(messageView(who, message)); scrollToBottom() }
     private fun messageView(who: String, message: String) = TextView(this).apply {
         val isKura = who == "Kura"
-        text = message; textSize = 16f; setTextColor(Color.parseColor(if (isKura) BG else "#FFFFFF"))
+        text = if (isKura) message else ariaMessageText(message)
+        if (!isKura) movementMethod = LinkMovementMethod.getInstance()
+        textSize = 16f; setTextColor(Color.parseColor(if (isKura) BG else "#FFFFFF"))
         setPadding(dp(14), dp(11), dp(14), dp(11))
         background = rounded(if (isKura) "#FFFFFF" else CHAT_PURPLE, 18f)
         gravity = if (who == "Kura") Gravity.END else Gravity.START
         contentDescription = "$who: $message"
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             gravity = if (who == "Kura") Gravity.END else Gravity.START; topMargin = dp(6); bottomMargin = dp(6); if (who == "Kura") marginStart = dp(42) else marginEnd = dp(42)
+        }
+    }
+    private fun ariaMessageText(message: String): SpannableString {
+        val label = "🔊  $message"
+        return SpannableString(label).apply {
+            setSpan(object : ClickableSpan() {
+                override fun onClick(widget: View) { replayCloudVoice(message) }
+            }, 0, 2, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+    }
+
+    private fun replayCloudVoice(answer: String) {
+        val client = cloudVoiceClient
+        if (client == null || !modelLoaded) {
+            toast("Voz no disponible sin conexión")
+            return
+        }
+        val direction = AriaVoiceDirector.forCloudEmotion(AriaEmotion.fromReply(answer))
+        val voiceId = "Leda"
+        val cacheKey = "v1|$voiceId|${direction.emotion}|${direction.intensity}|${direction.expressionStyle}|$answer"
+        cloudVoicePlayer.cached(cacheKey)?.let { cached ->
+            runCatching { cloudVoicePlayer.play(cached) }
+                .onFailure { toast("No pude reproducir la voz guardada") }
+            return
+        }
+        uiScope.launch {
+            try {
+                val result = client.synthesize(CloudVoiceRequest(
+                    "replay-${java.util.UUID.randomUUID()}", answer, direction, voiceId))
+                cloudVoicePlayer.play(cloudVoicePlayer.cache(cacheKey, result.audio))
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Throwable) { toast("Voz no disponible sin conexión") }
         }
     }
     private fun user(message: String) = addMessage("Kura", message)
