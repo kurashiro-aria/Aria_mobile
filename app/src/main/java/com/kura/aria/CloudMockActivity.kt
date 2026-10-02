@@ -93,7 +93,7 @@ class CloudMockActivity : AppCompatActivity() {
         val chatStage = FrameLayout(this@CloudMockActivity)
         conversation = LinearLayout(this@CloudMockActivity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(218), 0, dp(8))
+            setPadding(0, dp(190), 0, dp(8))
         }
         val chatScroll = ScrollView(this@CloudMockActivity).apply {
             addView(conversation)
@@ -112,10 +112,10 @@ class CloudMockActivity : AppCompatActivity() {
             elevation = dp(10).toFloat()
             contentDescription = "ARIA"
         }
-        chatStage.addView(avatar, FrameLayout.LayoutParams(dp(150), dp(200)).apply {
+        chatStage.addView(avatar, FrameLayout.LayoutParams(dp(118), dp(158)).apply {
             gravity = Gravity.TOP or Gravity.START
-            marginStart = dp(4)
-            topMargin = dp(8)
+            marginStart = dp(2)
+            topMargin = dp(6)
         })
         root.addView(chatStage, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(8) })
         val row = LinearLayout(this@CloudMockActivity).apply {
