@@ -11,6 +11,8 @@ import android.graphics.Matrix
 import android.graphics.drawable.GradientDrawable
 import android.media.MediaPlayer
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.OpenableColumns
@@ -69,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var conversation: LinearLayout
     private lateinit var scroll: ScrollView
     private lateinit var status: TextView
+    private lateinit var networkStatus: TextView
     private lateinit var voiceProgress: TextView
     private lateinit var loadBrain: Button
     private lateinit var input: EditText
@@ -161,11 +164,17 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor(BG))
         }
 
-        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            // Leave the avatar's upper-left area visible while keeping the identity readable.
+            setPadding(dp(154), 0, 0, 0)
+        }
         val identity = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val title = TextView(this).apply { text = "ARIA"; textSize = 26f; setTextColor(Color.parseColor(TEXT)) }
         status = TextView(this).apply { text = "● Inicializando"; textSize = 12f; setTextColor(Color.parseColor(MUTED)) }
-        identity.addView(title); identity.addView(status)
+        networkStatus = TextView(this).apply { text = "○ Offline"; textSize = 11f; setTextColor(Color.parseColor(MUTED)) }
+        identity.addView(title); identity.addView(status); identity.addView(networkStatus)
         val menu = TextView(this).apply {
             text = "☰"; textSize = 28f; gravity = Gravity.CENTER; setTextColor(Color.parseColor(TEXT)); setPadding(dp(16), dp(8), 0, dp(8))
             setOnClickListener { showAriaMenu(this) }
@@ -188,9 +197,6 @@ class MainActivity : AppCompatActivity() {
         scroll = ScrollView(this).apply { addView(conversation); isFillViewport = true }
         val chatStage = FrameLayout(this).apply {
             addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-            addView(avatarCard, FrameLayout.LayoutParams(dp(150), dp(200), Gravity.TOP or Gravity.START).apply {
-                marginStart = dp(4); topMargin = dp(8)
-            })
         }
         avatarCard.elevation = dp(10).toFloat()
         root.addView(chatStage, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
@@ -221,11 +227,19 @@ class MainActivity : AppCompatActivity() {
         root.addView(loadBrain)
         val screen = FrameLayout(this).apply {
             addView(root, FrameLayout.LayoutParams(-1, -1))
+            // The portrait floats above the conversation and uses the header's left corner.
+            addView(avatarCard, FrameLayout.LayoutParams(dp(150), dp(200), Gravity.TOP or Gravity.START).apply {
+                marginStart = dp(4); topMargin = dp(8)
+            })
             setOnApplyWindowInsetsListener { _, insets ->
                 val bars = insets.getInsets(WindowInsets.Type.systemBars())
                 val ime = insets.getInsets(WindowInsets.Type.ime())
                 val bottomInset = maxOf(bars.bottom, ime.bottom)
                 root.setPadding(dp(18), dp(14) + bars.top, dp(18), dp(14) + bottomInset)
+                (avatarCard.layoutParams as FrameLayout.LayoutParams).also {
+                    it.topMargin = dp(8) + bars.top
+                    avatarCard.layoutParams = it
+                }
                 if (insets.isVisible(WindowInsets.Type.ime())) scrollToBottom()
                 insets
             }
@@ -234,6 +248,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(screen)
         cloudVoicePlayer = CloudVoicePlayer(applicationContext)
         showPortrait(AriaEmotion.NEUTRAL)
+        updateNetworkStatus()
 
         chatHistory = ChatHistory(applicationContext)
         ariaMemory = AriaMemory(applicationContext)
@@ -299,6 +314,21 @@ class MainActivity : AppCompatActivity() {
     private fun setStatus(text: String, ready: Boolean) {
         status.text = text
         status.setTextColor(Color.parseColor(if (ready) PURPLE else MUTED))
+        updateNetworkStatus()
+    }
+
+    private fun updateNetworkStatus() {
+        if (!::networkStatus.isInitialized) return
+        val connected = (getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager)
+            ?.activeNetwork
+            ?.let { network ->
+                val capabilities = (getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager)
+                    .getNetworkCapabilities(network)
+                capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            } == true
+        networkStatus.text = if (connected) "● Online" else "○ Offline"
+        networkStatus.setTextColor(Color.parseColor(if (connected) PURPLE else MUTED))
     }
 
     private fun connectCloudBrain() {
@@ -964,7 +994,7 @@ class MainActivity : AppCompatActivity() {
         if (stroke != null) setStroke(dp(1), Color.parseColor(stroke))
     }
 
-    private fun voiceEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_ENABLED, false)
+    private fun voiceEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_ENABLED, true)
     // B2 permanece congelada. Conservamos la preferencia y el código para una tarea futura.
     private fun b2Enabled() = false
     private fun wakeEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(WAKE_ENABLED, false)
@@ -1137,15 +1167,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun speakReply(answer: String, emotion: AriaEmotion) {
-        if (b2Enabled() && b2SpeechOutput != null) b2SpeechOutput?.speak(answer)
-        else {
-            startVoice()
-            speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(emotion))
-            if (b2Enabled()) voiceProgress.apply {
-                text = "B2 no está preparada; usando voz Android"
-                visibility = View.VISIBLE
+        if (b2Enabled() && b2SpeechOutput != null) { b2SpeechOutput?.speak(answer); return }
+        val client = cloudVoiceClient
+        if (client != null && modelLoaded) {
+            val direction = AriaVoiceDirector.forCloudEmotion(emotion)
+            val voiceId = "Leda"
+            val cacheKey = "v1|$voiceId|${direction.emotion}|${direction.intensity}|${direction.expressionStyle}|$answer"
+            cloudVoicePlayer.cached(cacheKey)?.let { cached ->
+                runCatching { cloudVoicePlayer.play(cached) }
+                return
             }
+            uiScope.launch {
+                try {
+                    val result = client.synthesize(CloudVoiceRequest(
+                        "reply-${java.util.UUID.randomUUID()}", answer, direction, voiceId))
+                    val file = cloudVoicePlayer.cache(cacheKey, result.audio)
+                    cloudVoicePlayer.play(file)
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Throwable) {
+                    // Text remains primary: use the device voice only as a safe fallback.
+                    startVoice()
+                    speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(emotion))
+                }
+            }
+            return
         }
+        startVoice()
+        speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(emotion))
     }
 
     private fun playB2Sample() {
@@ -1285,7 +1333,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onStart() { super.onStart(); voiceInForeground = true }
+    override fun onStart() { super.onStart(); voiceInForeground = true; updateNetworkStatus() }
     override fun onStop() {
         voiceInForeground = false
         stopDictation()

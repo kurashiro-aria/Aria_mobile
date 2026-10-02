@@ -54,6 +54,25 @@ object AriaVoiceDirector {
             expression.name.lowercase(), delivery)
     }
 
+    /** Default Cloud delivery for automatic replies, keeping Leda's identity while
+     * allowing the emotional state to change the interpretation. */
+    internal fun forCloudEmotion(emotion: AriaEmotion): CloudVoiceDirection {
+        val expression = when (emotion) {
+            AriaEmotion.PLAYFUL, AriaEmotion.AMUSED -> ExpressionStyle.PLAYFUL
+            AriaEmotion.AFFECTIONATE, AriaEmotion.EMBARRASSED -> ExpressionStyle.AFFECTIONATE
+            AriaEmotion.SAD, AriaEmotion.TIRED -> ExpressionStyle.COMFORTING
+            AriaEmotion.SERIOUS, AriaEmotion.ANGRY, AriaEmotion.ANNOYED -> ExpressionStyle.SERIOUS
+            AriaEmotion.EXCITED, AriaEmotion.SURPRISED, AriaEmotion.HAPPY -> ExpressionStyle.EXCITED
+            else -> ExpressionStyle.NATURAL
+        }
+        val intensity = when (emotion) {
+            AriaEmotion.SAD, AriaEmotion.TIRED, AriaEmotion.EMBARRASSED -> 0.35f
+            AriaEmotion.EXCITED, AriaEmotion.SURPRISED -> 0.72f
+            else -> 0.58f
+        }
+        return forCloud(emotion, intensity, expression)
+    }
+
     internal fun forPreview(style: String): CloudVoiceDirection = when (style) {
         "happy" -> forCloud(AriaEmotion.HAPPY, 0.65f, ExpressionStyle.EXCITED)
         "playful" -> forCloud(AriaEmotion.PLAYFUL, 0.65f, ExpressionStyle.PLAYFUL)
