@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 apk="app/build/outputs/apk/debug/app-debug.apk"
-expected="24a83e6cae643a11b30e1102166ec4f8b4cecdd4614f7ba5a1e7cbebc16cde17"
+expected="2321b43077cd25d11d9d78312e9edb920441fd4847b406dd6e30774815e59921"
 build_tools="$(find "$ANDROID_SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
 report="$("$build_tools/apksigner" verify --verbose --print-certs "$apk")"
 printf '%s\n' "$report"
