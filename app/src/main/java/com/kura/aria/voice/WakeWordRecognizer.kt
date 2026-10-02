@@ -50,19 +50,16 @@ class WakeWordRecognizer(
                 failures = 0
                 val heard = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull().orEmpty().trim()
-                val normalized = Normalizer.normalize(heard, Normalizer.Form.NFD)
-                    .replace(Regex("\\p{Mn}+"), "").lowercase()
-                val wake = Regex("^aria(?:\\b|[,.:;!?])").find(normalized)
+                val wake = WakePhraseParser.parse(heard)
                 when {
                     awaitingCommand && heard.isNotBlank() -> {
                         awaitingCommand = false
                         handler.removeCallbacks(timeout)
                         onState("ARIA recibió tu mensaje")
-                        onCommand(if (wake != null) heard.substring(wake.range.last + 1)
-                            .trimStart(' ', ',', '.', ':', ';', '!', '?').ifBlank { heard } else heard)
+                        onCommand(wake?.command ?: heard)
                     }
                     wake != null -> {
-                        val rest = heard.substring(wake.range.last + 1).trimStart(' ', ',', '.', ':', ';', '!', '?')
+                        val rest = wake.command.orEmpty()
                         if (rest.isNotBlank()) onCommand(rest)
                         else {
                             awaitingCommand = true
