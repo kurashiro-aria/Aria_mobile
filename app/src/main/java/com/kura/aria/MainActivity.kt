@@ -1184,16 +1184,18 @@ class MainActivity : AppCompatActivity() {
                     val file = cloudVoicePlayer.cache(cacheKey, result.audio)
                     cloudVoicePlayer.play(file)
                 } catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Throwable) {
-                    // Text remains primary: use the device voice only as a safe fallback.
-                    startVoice()
-                    speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(emotion))
+                catch (error: Throwable) {
+                    // Cloud Voice is the configured automatic voice. Never silently
+                    // substitute Android TTS: that masks endpoint/configuration errors
+                    // and produces a different identity than the selected Cloud voice.
+                    toast("Voz Cloud no disponible; mantengo la respuesta escrita")
                 }
             }
             return
         }
-        startVoice()
-        speechOutput?.speak(answer, AriaVoiceDirector.forEmotion(emotion))
+        // Keep text chat fully usable when Cloud Brain/Voice is not connected.
+        // Android TTS remains available only through the explicit local voice controls.
+        toast("Conecta ARIA Cloud para reproducir la voz de Leda")
     }
 
     private fun playB2Sample() {
