@@ -37,3 +37,27 @@ jobs:
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
           npx --yes wrangler deploy
+      - name: Verify real Cloud Voice audio
+        if: inputs.deploy
+        env:
+          ARIA_CLOUD_CLIENT_TOKEN: ${{ secrets.ARIA_CLOUD_CLIENT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ARIA_CLOUD_CLIENT_TOKEN"
+          request_id="voice-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl --fail-with-body --silent --show-error --max-time 60 \
+            -X POST "https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev/v1/voice/synthesize" \
+            -H "Content-Type: application/json" \
+            -H "X-ARIA-Protocol: 1" \
+            -H "X-ARIA-Client: $ARIA_CLOUD_CLIENT_TOKEN" \
+            --data "{\"requestId\":\"$request_id\",\"text\":\"Hola Kura. Esta es una prueba segura de ARIA Cloud.\",\"emotion\":\"neutral\",\"intensity\":0.2,\"expressionStyle\":\"natural\",\"voiceId\":\"Leda\"}" \
+            --output /tmp/aria-cloud-voice.wav
+          python3 - <<'PY'
+          from pathlib import Path
+          audio = Path('/tmp/aria-cloud-voice.wav').read_bytes()
+          assert len(audio) > 44, 'Cloud TTS returned empty audio'
+          assert audio[:4] == b'RIFF' and audio[8:12] == b'WAVE', 'Cloud TTS did not return WAV'
+          print(f'Cloud Voice real audio verified: {len(audio)} bytes')
+          PY
+          rm -f /tmp/aria-cloud-voice.wav

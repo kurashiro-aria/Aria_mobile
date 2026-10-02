@@ -1,5 +1,6 @@
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_MESSAGE_CHARS = 256 * 1024;
+const MAX_VOICE_TEXT_CHARS = 1200;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
 const RATE_WINDOW_MS = 60 * 1000;
 
@@ -7,6 +8,10 @@ const RATE_WINDOW_MS = 60 * 1000;
 // later when the gateway needs globally consistent limits across isolates.
 const recentRequests = new Map();
 const rateBuckets = new Map();
+
+const VOICE_IDS = new Set(["Leda", "Achernar", "Vindemiatrix", "Sulafat", "Aoede"]);
+const VOICE_EMOTIONS = new Set(["neutral", "happy", "amused", "thinking", "surprised", "confused", "annoyed", "angry", "embarrassed", "sad", "affectionate", "playful", "serious", "tired", "excited"]);
+const VOICE_STYLES = new Set(["natural", "playful", "flirty", "teasing", "sarcastic_light", "affectionate", "shy", "serious", "focused", "excited", "comforting", "soft", "whisper"]);
 
 function json(status, payload, extra = {}) {
   return new Response(JSON.stringify(payload), {
@@ -67,6 +72,36 @@ function validatePayload(body) {
   return null;
 }
 
+function validateVoicePayload(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "invalid_json";
+  if (typeof body.requestId !== "string" || !body.requestId.trim() || body.requestId.length > 100) return "request_id_required";
+  if (typeof body.text !== "string" || !body.text.trim() || body.text.length > MAX_VOICE_TEXT_CHARS) return "text_required";
+  if (!VOICE_EMOTIONS.has(body.emotion)) return "invalid_emotion";
+  if (!VOICE_STYLES.has(body.expressionStyle)) return "invalid_expression_style";
+  if (typeof body.intensity !== "number" || !Number.isFinite(body.intensity) || body.intensity < 0 || body.intensity > 1) return "invalid_intensity";
+  if (!VOICE_IDS.has(body.voiceId)) return "invalid_voice";
+  return null;
+}
+
+function voiceStyle(emotion, intensity, expressionStyle) {
+  const strength = intensity >= 0.7 ? "clearly" : intensity >= 0.4 ? "moderately" : "subtly";
+  const delivery = {
+    happy: "bright and cheerful", amused: "lightly amused and warm", playful: "playful with light mischief",
+    affectionate: "warm, close and gentle", sad: "quiet and slower, without exaggerated drama",
+    surprised: "lively with a slight quickening", embarrassed: "soft and slightly shy",
+    excited: "energetic and enthusiastic", serious: "calm, clear and serious", angry: "firm but controlled",
+    annoyed: "mildly annoyed but controlled", tired: "soft and unhurried", confused: "thoughtful and uncertain",
+    thinking: "thoughtful with natural pauses", neutral: "natural, soft and conversational",
+  }[emotion] || "natural, soft and conversational";
+  const expression = {
+    playful: "playful", flirty: "close and playfully charming, never exaggerated", teasing: "gently teasing",
+    sarcastic_light: "with very light irony", affectionate: "warm and affectionate", shy: "soft and shy",
+    serious: "serious and measured", focused: "focused and clear", excited: "lively and excited",
+    comforting: "reassuring and gentle", soft: "especially soft", whisper: "whispered softly", natural: "natural",
+  }[expressionStyle] || "natural";
+  return `${strength} ${delivery}; ${expression}; natural pacing and volume`;
+}
+
 async function callGemini(message, maxTokens, env, fetchImpl) {
   const model = env.ARIA_LLM_MODEL || "gemini-2.5-flash";
   const base = (env.ARIA_GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
@@ -104,6 +139,53 @@ async function callGemini(message, maxTokens, env, fetchImpl) {
   } finally { clearTimeout(timer); }
 }
 
+function decodeBase64(value) {
+  if (typeof value !== "string" || !value) throw Object.assign(new Error("provider_empty_audio"), { status: 502 });
+  let raw;
+  try { raw = atob(value); } catch { throw Object.assign(new Error("provider_invalid_audio"), { status: 502 }); }
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+  if (bytes.length < 44) throw Object.assign(new Error("provider_empty_audio"), { status: 502 });
+  return bytes;
+}
+
+async function callGeminiTts(body, env, fetchImpl) {
+  const model = env.ARIA_TTS_MODEL || "gemini-3.8-flash-lite-tts";
+  const base = (env.ARIA_GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
+  if (!env.ARIA_LLM_API_KEY) throw Object.assign(new Error("provider_unavailable"), { status: 503 });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(env.ARIA_TTS_TIMEOUT_MS || 45000)));
+  try {
+    const response = await fetchImpl(`${base}/interactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": env.ARIA_LLM_API_KEY },
+      body: JSON.stringify({
+        model,
+        input: [{ type: "user_input", content: [{ type: "text", text: body.text,
+          annotations: [{ type: "speech_metadata", style: voiceStyle(body.emotion, body.intensity, body.expressionStyle) }] }] }],
+        response_format: { type: "audio", mime_type: "audio/wav", sample_rate: 24000 },
+        generation_config: { speech_config: [{ voice: body.voiceId }] },
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const providerError = response.status === 429 ? "provider_rate_limited"
+        : response.status === 401 || response.status === 403 ? "provider_unauthorized"
+          : response.status === 404 ? "provider_model_not_found"
+            : response.status === 400 ? "provider_bad_request" : "provider_request_failed";
+      throw Object.assign(new Error(providerError), { status: response.status === 429 ? 429 : 502 });
+    }
+    let payload;
+    try { payload = await response.json(); } catch { throw Object.assign(new Error("provider_invalid_response"), { status: 502 }); }
+    const audio = payload?.steps?.flatMap((step) => step?.type === "model_output" ? step.content || [] : [])
+      .filter((part) => part?.type === "audio").at(-1)?.data;
+    return { audio: decodeBase64(audio), model };
+  } catch (error) {
+    if (error?.name === "AbortError") throw Object.assign(new Error("provider_timeout"), { status: 504 });
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+
 export function createWorker({ fetchImpl = fetch, now = () => Date.now() } = {}) {
   return { fetch: (request, env = {}) => handle(request, env, fetchImpl, now) };
 }
@@ -112,9 +194,10 @@ async function handle(request, env, fetchImpl, now) {
   const started = now();
   const url = new URL(request.url);
   if (url.pathname === "/health" || url.pathname === "/v1/health") {
-    return json(env.ARIA_LLM_API_KEY ? 200 : 503, { status: env.ARIA_LLM_API_KEY ? "ok" : "unavailable", protocol: 1, provider: env.ARIA_LLM_PROVIDER || "gemini" });
+    return json(env.ARIA_LLM_API_KEY ? 200 : 503, { status: env.ARIA_LLM_API_KEY ? "ok" : "unavailable", protocol: 1, provider: env.ARIA_LLM_PROVIDER || "gemini", voice: { available: Boolean(env.ARIA_LLM_API_KEY), model: env.ARIA_TTS_MODEL || "gemini-3.8-flash-lite-tts" } });
   }
-  if (url.pathname !== "/v1/brain/respond" && url.pathname !== "/v1/chat") return json(404, { error: "not_found" });
+  const isVoice = url.pathname === "/v1/voice/synthesize";
+  if (!isVoice && url.pathname !== "/v1/brain/respond" && url.pathname !== "/v1/chat") return json(404, { error: "not_found" });
   if (request.method !== "POST") return json(405, { error: "method_not_allowed" }, { allow: "POST" });
   if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") return json(415, { error: "content_type_required" });
   if (env.ARIA_CLOUD_CLIENT_TOKEN && !constantTimeEqual(request.headers.get("X-ARIA-Client"), env.ARIA_CLOUD_CLIENT_TOKEN)) return json(401, { error: "unauthorized" });
@@ -124,16 +207,27 @@ async function handle(request, env, fetchImpl, now) {
   if (request.headers.get("X-ARIA-Protocol") !== "1") return json(400, { error: "unsupported_protocol" });
   let body;
   try { body = await readJson(request); } catch (error) { return json(400, { error: error.message }); }
-  const validationError = validatePayload(body);
+  const validationError = isVoice ? validateVoicePayload(body) : validatePayload(body);
   if (validationError) return json(400, { error: validationError });
   if (recentRequests.has(body.requestId)) return json(409, { error: "duplicate_request", requestId: body.requestId });
   recentRequests.set(body.requestId, current);
   try {
+    if (isVoice) {
+      const providerStarted = now();
+      const result = await callGeminiTts(body, env, fetchImpl);
+      const providerMs = Math.max(0, now() - providerStarted);
+      return new Response(result.audio, { status: 200, headers: {
+        "content-type": "audio/wav", "cache-control": "private, no-store",
+        "X-ARIA-Request-Id": body.requestId, "X-ARIA-Voice-Id": body.voiceId,
+        "X-ARIA-Model": result.model, "X-ARIA-Gateway-Ms": String(Math.max(0, now() - started)),
+        "X-ARIA-Provider-Ms": String(providerMs),
+      } });
+    }
     const result = await callGemini(body.message, body.generation?.maxOutputTokens || 384, env, fetchImpl);
     return json(200, { requestId: body.requestId, reply: result.text, model: result.model, provider: "gemini", finishReason: "stop", gatewayProcessingMs: Math.max(0, now() - started) });
   } catch (error) {
     const status = Number.isInteger(error?.status) ? error.status : 500;
-    return json(status, { error: ["provider_rate_limited", "provider_timeout", "provider_request_failed", "provider_unauthorized", "provider_model_not_found", "provider_bad_request", "provider_invalid_response", "provider_empty_response", "provider_unavailable"].includes(error?.message) ? error.message : "internal_error", requestId: body.requestId });
+    return json(status, { error: ["provider_rate_limited", "provider_timeout", "provider_request_failed", "provider_unauthorized", "provider_model_not_found", "provider_bad_request", "provider_invalid_response", "provider_empty_response", "provider_empty_audio", "provider_invalid_audio", "provider_unavailable"].includes(error?.message) ? error.message : "internal_error", requestId: body.requestId });
   }
 }
 
