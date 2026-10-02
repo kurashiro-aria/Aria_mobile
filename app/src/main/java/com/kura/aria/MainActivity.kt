@@ -45,6 +45,12 @@ import com.kura.aria.voice.AriaVoiceDirector
 import com.kura.aria.voice.LocalSpeechOutput
 import com.kura.aria.voice.LocalSpeechInput
 import com.kura.aria.voice.QwenB2SpeechOutput
+import com.kura.aria.voice.AriaVoiceDirector.cloudCandidates
+import com.kura.aria.voice.CloudVoiceClient
+import com.kura.aria.voice.CloudVoiceException
+import com.kura.aria.voice.CloudVoicePlayer
+import com.kura.aria.voice.CloudVoiceRequest
+import com.kura.aria.voice.HttpCloudVoiceClient
 import com.kura.aria.brain.BrainPipeline
 import com.kura.aria.brain.BrainState
 import com.kura.aria.brain.CloudContextBuilder
@@ -98,6 +104,8 @@ class MainActivity : AppCompatActivity() {
     private var speechInput: LocalSpeechInput? = null
     private var dictationBase = ""
     private var b2SpeechOutput: QwenB2SpeechOutput? = null
+    private var cloudVoiceClient: CloudVoiceClient? = null
+    private lateinit var cloudVoicePlayer: CloudVoicePlayer
     private var samplePlayer: MediaPlayer? = null
     private var lastSpokenReply: Pair<String, AriaEmotion>? = null
     private var voiceInForeground = false
@@ -224,6 +232,7 @@ class MainActivity : AppCompatActivity() {
             requestApplyInsets()
         }
         setContentView(screen)
+        cloudVoicePlayer = CloudVoicePlayer(applicationContext)
         showPortrait(AriaEmotion.NEUTRAL)
 
         chatHistory = ChatHistory(applicationContext)
@@ -251,6 +260,7 @@ class MainActivity : AppCompatActivity() {
             menu.add("Rendimiento")
             menu.add("Personalidad")
             menu.add("Voz")
+            menu.add("Voz Cloud experimental")
             menu.add("Escuchar muestra B2")
             menu.add("Repetir última respuesta")
             menu.add("Detener voz")
@@ -269,6 +279,7 @@ class MainActivity : AppCompatActivity() {
                     "Rendimiento" -> showPerformanceDialog()
                     "Personalidad" -> toast("ARIA Personality v2 activa")
                     "Voz" -> showVoiceDialog()
+                    "Voz Cloud experimental" -> showCloudVoicePreviewDialog()
                     "Escuchar muestra B2" -> playB2Sample()
                     "Repetir última respuesta" -> lastSpokenReply?.let { (text, emotion) ->
                         if (b2Enabled()) b2SpeechOutput?.speak(text)
@@ -302,6 +313,7 @@ class MainActivity : AppCompatActivity() {
         if (!::cloudBrain.isInitialized) {
             val config = CloudBrainConfig(endpoint, BuildConfig.ARIA_CLOUD_CLIENT_TOKEN)
             cloudBrain = CloudInferenceEngine(config, HttpCloudBrainClient(config, BuildConfig.DEBUG))
+            cloudVoiceClient = HttpCloudVoiceClient(config, BuildConfig.DEBUG)
         }
         busy = true
         send.isEnabled = false
@@ -1170,6 +1182,75 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Cerrar", null).show()
     }
 
+    private fun showCloudVoicePreviewDialog() {
+        val client = cloudVoiceClient
+        if (client == null || !modelLoaded) {
+            toast("Conecta ARIA Cloud antes de probar voces")
+            return
+        }
+        val phrase = "Hola Kura. Por fin puedo hablar contigo desde la nube. ¿Qué te parece mi voz?"
+        val styles = listOf("neutral", "happy", "playful", "affectionate", "surprised", "soft", "whisper")
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(10), dp(20), dp(6))
+        }
+        content.addView(TextView(this).apply {
+            text = "Prueba aislada: no activa la voz automática ni B2. Todas las candidatas dirán exactamente la misma frase."
+            setPadding(0, 0, 0, dp(12))
+        })
+        val voiceSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                cloudCandidates.map { "${it.id} · ${it.description}" })
+        }
+        val styleSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, styles)
+        }
+        content.addView(TextView(this).apply { text = "Voz candidata" })
+        content.addView(voiceSpinner)
+        content.addView(TextView(this).apply { text = "Interpretación"; setPadding(0, dp(12), 0, 0) })
+        content.addView(styleSpinner)
+        val metrics = TextView(this).apply { setPadding(0, dp(12), 0, 0); text = phrase }
+        content.addView(metrics)
+        val testButton = Button(this).apply { text = "PROBAR VOZ CLOUD" }
+        content.addView(testButton)
+        val dialog = AlertDialog.Builder(this).setTitle("Voz Cloud experimental")
+            .setView(content).setNegativeButton("Cerrar", null).create()
+        testButton.setOnClickListener {
+            val candidate = cloudCandidates[voiceSpinner.selectedItemPosition]
+            val style = styles[styleSpinner.selectedItemPosition]
+            val direction = AriaVoiceDirector.forPreview(style)
+            val cacheKey = "v1|${candidate.id}|$style|$phrase"
+            cloudVoicePlayer.cached(cacheKey)?.let { cached ->
+                metrics.text = "Reproduciendo desde caché · ${candidate.id} · $style"
+                runCatching { cloudVoicePlayer.play(cached) }
+                    .onFailure { metrics.text = "No pude reproducir el audio guardado" }
+                return@setOnClickListener
+            }
+            testButton.isEnabled = false
+            metrics.text = "Generando ${candidate.id} · $style…"
+            uiScope.launch {
+                try {
+                    val result = client.synthesize(CloudVoiceRequest(
+                        "voice-${java.util.UUID.randomUUID()}", phrase, direction, candidate.id))
+                    val file = cloudVoicePlayer.cache(cacheKey, result.audio)
+                    metrics.text = buildString {
+                        append("Lista · ").append(result.voiceId)
+                        append("\nAndroid ↔ Worker + audio: ").append(result.totalMs).append(" ms")
+                        result.providerMs?.let { append("\nProveedor TTS: ").append(it).append(" ms") }
+                        result.gatewayMs?.let { append("\nTotal Worker: ").append(it).append(" ms") }
+                        result.model?.let { append("\nModelo: ").append(it) }
+                    }
+                    cloudVoicePlayer.play(file)
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: CloudVoiceException) { metrics.text = error.message ?: "Voz Cloud no disponible" }
+                catch (_: Throwable) { metrics.text = "No pude generar o reproducir esta voz" }
+                finally { testButton.isEnabled = true }
+            }
+        }
+        dialog.setOnDismissListener { cloudVoicePlayer.stop() }
+        dialog.show()
+    }
+
     private fun prepareB2Voice(replayLastReply: Boolean) {
         // Intentionally inaccessible while B2 is paused (including old saved preferences).
         if (!b2Enabled()) return
@@ -1217,6 +1298,7 @@ class MainActivity : AppCompatActivity() {
             AriaForegroundService.commandListener = null
         speechOutput?.close(); speechOutput = null
         b2SpeechOutput?.close(); b2SpeechOutput = null
+        if (::cloudVoicePlayer.isInitialized) cloudVoicePlayer.close()
         if (::cloudBrain.isInitialized) runBlocking { cloudBrain.close() }
         uiScope.cancel()
         super.onDestroy()
