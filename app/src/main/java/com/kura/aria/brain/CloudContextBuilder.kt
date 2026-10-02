@@ -51,7 +51,10 @@ internal object CloudContextBuilder {
             context.length <= contextBudget -> context
             contextBudget == 0 -> ""
             else -> {
-                val identityBudget = minOf(contextBudget, 2_800)
+                // With a normal budget keep the complete stable identity. With a deliberately
+                // tiny budget split the space so the newest mood/memory guidance also survives.
+                val identityBudget = if (contextBudget <= 4_200)
+                    (contextBudget * 2 / 3).coerceAtLeast(1) else 2_800
                 val tailBudget = (contextBudget - identityBudget - 5).coerceAtLeast(0)
                 context.take(identityBudget).trimEnd() + "\n[…]\n" + context.takeLast(tailBudget).trimStart()
             }
