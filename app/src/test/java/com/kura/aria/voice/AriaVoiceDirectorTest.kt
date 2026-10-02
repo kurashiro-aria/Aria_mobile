@@ -1,6 +1,8 @@
 package com.kura.aria.voice
 
 import com.kura.aria.emotion.AriaEmotion
+import com.kura.aria.personality.ExpressionStyle
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -13,5 +15,22 @@ class AriaVoiceDirectorTest {
         }
         assertTrue(AriaVoiceDirector.forEmotion(AriaEmotion.SAD).rate <
             AriaVoiceDirector.forEmotion(AriaEmotion.HAPPY).rate)
+    }
+
+    @Test fun cloudDirectionCarriesEmotionIntensityAndExpressionWithoutChangingText() {
+        val direction = AriaVoiceDirector.forCloud(AriaEmotion.HAPPY, 0.72f, ExpressionStyle.PLAYFUL)
+        assertEquals("happy", direction.emotion)
+        assertEquals(0.72f, direction.intensity)
+        assertEquals("playful", direction.expressionStyle)
+        assertTrue(direction.styleDescription.contains("alegre"))
+    }
+
+    @Test fun cloudIntensityIsBoundedAndPreviewSupportsRealProviderStyles() {
+        assertEquals(1f, AriaVoiceDirector.forCloud(AriaEmotion.EXCITED, 2f, ExpressionStyle.EXCITED).intensity)
+        assertEquals(0f, AriaVoiceDirector.forCloud(AriaEmotion.SAD, -1f, ExpressionStyle.COMFORTING).intensity)
+        assertEquals("whisper", AriaVoiceDirector.forPreview("whisper").expressionStyle)
+        assertEquals("soft", AriaVoiceDirector.forPreview("soft").expressionStyle)
+        assertEquals(listOf("Leda", "Achernar", "Vindemiatrix", "Sulafat", "Aoede"),
+            AriaVoiceDirector.cloudCandidates.map { it.id })
     }
 }
