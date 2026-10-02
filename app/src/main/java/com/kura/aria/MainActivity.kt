@@ -23,6 +23,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.kura.aria.personality.AriaPersonality
@@ -143,6 +144,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.parseColor(BG)
         window.navigationBarColor = Color.parseColor(BG)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
 
         val root = LinearLayout(this).apply {
@@ -189,6 +191,9 @@ class MainActivity : AppCompatActivity() {
         input = EditText(this).apply {
             hint = "Habla con ARIA..."; setHintTextColor(Color.parseColor(MUTED)); setTextColor(Color.parseColor(TEXT)); maxLines = 4
             background = rounded(PANEL, 22f, "#3A2A4C"); setPadding(dp(16), dp(11), dp(16), dp(11))
+            setOnFocusChangeListener { _, focused ->
+                if (focused) postDelayed({ scrollToBottom() }, 250L)
+            }
         }
         send = Button(this).apply { text = "➤"; textSize = 20f; isEnabled = false; setTextColor(Color.WHITE); background = rounded(CHAT_PURPLE, 22f) }
         inputRow.addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
@@ -210,9 +215,13 @@ class MainActivity : AppCompatActivity() {
             addView(root, FrameLayout.LayoutParams(-1, -1))
             setOnApplyWindowInsetsListener { _, insets ->
                 val bars = insets.getInsets(WindowInsets.Type.systemBars())
-                root.setPadding(dp(18), dp(14) + bars.top, dp(18), dp(14) + bars.bottom)
+                val ime = insets.getInsets(WindowInsets.Type.ime())
+                val bottomInset = maxOf(bars.bottom, ime.bottom)
+                root.setPadding(dp(18), dp(14) + bars.top, dp(18), dp(14) + bottomInset)
+                if (insets.isVisible(WindowInsets.Type.ime())) scrollToBottom()
                 insets
             }
+            requestApplyInsets()
         }
         setContentView(screen)
         showPortrait(AriaEmotion.NEUTRAL)
