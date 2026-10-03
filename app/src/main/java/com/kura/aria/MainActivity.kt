@@ -1213,9 +1213,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun speakReply(answer: String, emotion: AriaEmotion) {
-        if (b2Enabled() && b2SpeechOutput != null) { b2SpeechOutput?.speak(answer); return }
         val spokenText = com.kura.aria.voice.spokenTextForCloud(answer)
         if (spokenText.isBlank()) return
+        if (b2Enabled() && b2SpeechOutput != null) { b2SpeechOutput?.speak(spokenText); return }
         val client = cloudVoiceClient
         if (client != null && modelLoaded) {
             val direction = AriaVoiceDirector.forCloudEmotion(emotion)
