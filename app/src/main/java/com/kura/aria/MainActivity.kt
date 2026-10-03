@@ -67,6 +67,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.Calendar
@@ -113,6 +115,7 @@ class MainActivity : AppCompatActivity() {
     private var b2SpeechOutput: QwenB2SpeechOutput? = null
     private var cloudVoiceClient: CloudVoiceClient? = null
     private lateinit var cloudVoicePlayer: CloudVoicePlayer
+    private val cloudVoiceMutex = Mutex()
     private var samplePlayer: MediaPlayer? = null
     private var lastSpokenReply: Pair<String, AriaEmotion>? = null
     private var voiceInForeground = false
@@ -1251,11 +1254,13 @@ class MainActivity : AppCompatActivity() {
         client: CloudVoiceClient,
         request: CloudVoiceRequest
     ): com.kura.aria.voice.CloudVoiceResult {
-        return try {
-            client.synthesize(request)
-        } catch (limited: CloudVoiceException.RateLimited) {
-            delay(1_500)
-            client.synthesize(request.copy(requestId = request.requestId + "-retry"))
+        return cloudVoiceMutex.withLock {
+            try {
+                client.synthesize(request)
+            } catch (limited: CloudVoiceException.RateLimited) {
+                delay(2_500)
+                client.synthesize(request.copy(requestId = request.requestId + "-retry"))
+            }
         }
     }
 
