@@ -50,6 +50,9 @@ import com.kura.aria.emotion.AriaEmotion
 import com.kura.aria.emotion.MoodReader
 import com.kura.aria.voice.AriaVoiceDirector
 import com.kura.aria.voice.LocalSpeechOutput
+import com.kura.aria.voice.AndroidTtsPreset
+import com.kura.aria.voice.AndroidTtsVoice
+import com.kura.aria.voice.AndroidTtsVoiceProbe
 import com.kura.aria.voice.LocalSpeechInput
 import com.kura.aria.voice.QwenB2SpeechOutput
 import com.kura.aria.voice.AriaVoiceDirector.cloudCandidates
@@ -74,6 +77,7 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.Calendar
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
     private lateinit var conversation: LinearLayout
@@ -112,6 +116,7 @@ class MainActivity : AppCompatActivity() {
     private var loadingModelLabel: TextView? = null
     private var wakeButton: Button? = null
     private var speechOutput: LocalSpeechOutput? = null
+    private var androidTtsProbe: AndroidTtsVoiceProbe? = null
     private var speechInput: LocalSpeechInput? = null
     private var dictationBase = ""
     private var b2SpeechOutput: QwenB2SpeechOutput? = null
@@ -1076,6 +1081,10 @@ class MainActivity : AppCompatActivity() {
         content.addView(TextView(this).apply {
             text = "B2 experimental está pausada. La lectura usa la voz española instalada en Android."
         })
+        content.addView(Button(this).apply {
+            text = "Prueba de voces Android"
+            setOnClickListener { showAndroidTtsVoiceDialog() }
+        })
         wakeSwitch.setOnCheckedChangeListener { _, checked ->
             if (checked) enableWakeListening()
             else {
@@ -1381,6 +1390,75 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Cerrar", null).show()
     }
 
+    private fun showAndroidTtsVoiceDialog() {
+        val phrase = "Hola Kura, soy Aria. Dime, te escucho. ¿Qué quieres que hagamos hoy?"
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(10), dp(20), dp(6))
+        }
+        content.addView(TextView(this).apply {
+            text = "Consulta las voces que este teléfono expone realmente. Esta prueba es local y no usa Cloud Voice. Android no siempre informa género o edad; la decisión final se hace escuchando."
+            setPadding(0, 0, 0, dp(12))
+        })
+        val voiceSpinner = Spinner(this)
+        val presetSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                AndroidTtsPreset.all.map { "${it.label} · pitch ${"%.2f".format(Locale.US, it.pitch)} · ritmo ${"%.2f".format(Locale.US, it.rate)}" })
+        }
+        val statusText = TextView(this).apply {
+            text = "Consultando voces instaladas…"
+            setPadding(0, dp(10), 0, dp(6))
+        }
+        val phraseText = TextView(this).apply {
+            text = phrase
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val testButton = Button(this).apply { text = "▶ PROBAR VOZ"; isEnabled = false }
+        content.addView(TextView(this).apply { text = "Voz disponible" })
+        content.addView(voiceSpinner)
+        content.addView(TextView(this).apply { text = "Preset experimental"; setPadding(0, dp(10), 0, 0) })
+        content.addView(presetSpinner)
+        content.addView(phraseText)
+        content.addView(testButton)
+        content.addView(statusText)
+        val dialog = AlertDialog.Builder(this).setTitle("Prueba de voces Android")
+            .setView(content).setNegativeButton("Cerrar", null).create()
+        dialog.setOnDismissListener {
+            androidTtsProbe?.stop()
+            androidTtsProbe?.close()
+            androidTtsProbe = null
+        }
+        dialog.show()
+
+        val updateVoices: (List<AndroidTtsVoice>) -> Unit = { voices ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed || !dialog.isShowing) return@runOnUiThread
+                val labels = if (voices.isEmpty()) listOf("No hay voces expuestas por Android") else voices.map {
+                    val availability = when {
+                        !it.installed -> "datos faltantes"
+                        it.requiresNetwork -> "requiere red"
+                        else -> "offline"
+                    }
+                    "${it.displayName} · ${it.localeTag} · $availability"
+                }
+                voiceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
+                testButton.isEnabled = voices.isNotEmpty()
+                statusText.text = if (voices.isEmpty()) "No se encontraron voces en el motor activo" else "${voices.size} voces disponibles · primero se muestran candidatas españolas"
+                testButton.setOnClickListener {
+                    val voice = voices.getOrNull(voiceSpinner.selectedItemPosition) ?: return@setOnClickListener
+                    val preset = AndroidTtsPreset.all[presetSpinner.selectedItemPosition]
+                    statusText.text = "Reproduciendo ${voice.localeTag} · ${preset.label}…"
+                    androidTtsProbe?.speak(voice.id, preset, phrase)
+                }
+            }
+        }
+        androidTtsProbe = AndroidTtsVoiceProbe(applicationContext, updateVoices) { message ->
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed && dialog.isShowing) statusText.text = message
+            }
+        }
+    }
+
     private fun showCloudVoicePreviewDialog() {
         val client = cloudVoiceClient
         if (client == null || !modelLoaded) {
@@ -1496,6 +1574,8 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
     }
     override fun onDestroy() {
+        androidTtsProbe?.close()
+        androidTtsProbe = null
         if (AriaForegroundService.commandListener === wakeCommandListener)
             AriaForegroundService.commandListener = null
         speechOutput?.close(); speechOutput = null
