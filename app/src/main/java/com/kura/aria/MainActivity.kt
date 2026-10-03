@@ -946,7 +946,7 @@ class MainActivity : AppCompatActivity() {
         }
         uiScope.launch {
             try {
-                val result = client.synthesize(CloudVoiceRequest(
+                val result = synthesizeCloudVoiceWithRetry(client, CloudVoiceRequest(
                     "replay-${java.util.UUID.randomUUID()}", answer, direction, voiceId))
                 cloudVoicePlayer.play(cloudVoicePlayer.cache(cacheKey, result.audio))
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -1217,7 +1217,7 @@ class MainActivity : AppCompatActivity() {
             }
             uiScope.launch {
                 try {
-                    val result = client.synthesize(CloudVoiceRequest(
+                    val result = synthesizeCloudVoiceWithRetry(client, CloudVoiceRequest(
                         "reply-${java.util.UUID.randomUUID()}", answer, direction, voiceId))
                     val file = cloudVoicePlayer.cache(cacheKey, result.audio)
                     cloudVoicePlayer.play(file)
@@ -1244,6 +1244,19 @@ class MainActivity : AppCompatActivity() {
         is CloudVoiceException.Unavailable -> "Proveedor de voz Cloud rechazó la generación; mantengo el texto"
         is CloudVoiceException.InvalidAudio -> "Voz Cloud devolvió audio inválido; mantengo el texto"
         else -> "Voz Cloud no disponible; mantengo el texto"
+    }
+
+    /** Gives a transient provider limit one recovery attempt without changing chat state. */
+    private suspend fun synthesizeCloudVoiceWithRetry(
+        client: CloudVoiceClient,
+        request: CloudVoiceRequest
+    ): com.kura.aria.voice.CloudVoiceResult {
+        return try {
+            client.synthesize(request)
+        } catch (limited: CloudVoiceException.RateLimited) {
+            delay(1_500)
+            client.synthesize(request.copy(requestId = request.requestId + "-retry"))
+        }
     }
 
     private fun playB2Sample() {
