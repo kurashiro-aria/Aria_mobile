@@ -3,6 +3,11 @@ package com.kura.aria.voice
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
+import java.io.IOException
+import java.net.ConnectException
+import java.net.UnknownHostException
+import java.net.SocketTimeoutException
+import javax.net.ssl.SSLException
 
 class CloudVoiceContractTest {
     @Test fun requestKeepsAriaTextVerbatim() {
@@ -29,5 +34,19 @@ class CloudVoiceContractTest {
     @Test(expected = IllegalArgumentException::class)
     fun unknownVoiceCannotLeaveAndroid() {
         CloudVoiceRequest("voice-3", "Hola", AriaVoiceDirector.forPreview("neutral"), "Unknown")
+    }
+
+    @Test fun transportErrorsAreNotAllReportedAsOffline() {
+        assertTrue(classifyVoiceIo(UnknownHostException()) is CloudVoiceException.DnsFailure)
+        assertTrue(classifyVoiceIo(ConnectException()) is CloudVoiceException.ConnectFailure)
+        assertTrue(classifyVoiceIo(SSLException("tls")) is CloudVoiceException.TlsFailure)
+        assertTrue(classifyVoiceIo(SocketTimeoutException()) is CloudVoiceException.Timeout)
+        assertTrue(classifyVoiceIo(IOException("audio reset")) is CloudVoiceException.TransportFailure)
+    }
+
+    @Test fun httpErrorKeepsStatusAndServerCategory() {
+        val error = CloudVoiceException.HttpError(503, "provider_unavailable")
+        assertEquals(503, error.httpStatus)
+        assertEquals("provider_unavailable", error.serverError)
     }
 }

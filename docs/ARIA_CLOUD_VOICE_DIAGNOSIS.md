@@ -26,4 +26,4 @@ El Worker usa `ARIA_TTS_MODEL` con valor predeterminado `gemini-3.8-flash-lite-t
 
 ## Pendientes
 
-La confirmación del origen exacto del timeout requiere una prueba contra el Worker desplegado y los datos seguros de diagnóstico (`X-ARIA-*`, código JSON y duración), sin exponer secretos. No se desplegó el Worker en esta tarea y no se generó APK.
+La confirmación del transporte Android ahora conserva la categoría real (DNS, conexión, TLS, timeout o descarga). La versión anterior convertía cualquier `IOException` en `NoConnection`, que explica el falso mensaje “Voz Cloud sin conexión” aunque Brain estuviera Online. No se desplegó el Worker en esta tarea y no se generó APK.

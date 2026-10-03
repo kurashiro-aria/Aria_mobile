@@ -1213,9 +1213,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun speakReply(answer: String, emotion: AriaEmotion) {
+        if (b2Enabled() && b2SpeechOutput != null) { b2SpeechOutput?.speak(answer); return }
         val spokenText = com.kura.aria.voice.spokenTextForCloud(answer)
         if (spokenText.isBlank()) return
-        if (b2Enabled() && b2SpeechOutput != null) { b2SpeechOutput?.speak(spokenText); return }
         val client = cloudVoiceClient
         if (client != null && modelLoaded) {
             val direction = AriaVoiceDirector.forCloudEmotion(emotion)
@@ -1249,8 +1249,13 @@ class MainActivity : AppCompatActivity() {
     private fun cloudVoiceErrorMessage(error: Throwable): String = when (error) {
         is CloudVoiceException.Rejected -> "Voz Cloud rechazó la autenticación; mantengo el texto"
         is CloudVoiceException.NoConnection -> "Voz Cloud sin conexión; mantengo el texto"
+        is CloudVoiceException.DnsFailure -> "No se pudo resolver Voz Cloud; mantengo el texto"
+        is CloudVoiceException.ConnectFailure -> "No se pudo conectar Voz Cloud; mantengo el texto"
+        is CloudVoiceException.TlsFailure -> "Falló la conexión segura de Voz Cloud; mantengo el texto"
+        is CloudVoiceException.TransportFailure -> "Falló la descarga de Voz Cloud; mantengo el texto"
         is CloudVoiceException.Timeout -> "Voz Cloud tardó demasiado; mantengo el texto"
         is CloudVoiceException.RateLimited -> if (error.gateway) "Gateway de voz temporalmente limitado; mantengo el texto" else "Proveedor de voz temporalmente limitado; mantengo el texto"
+        is CloudVoiceException.HttpError -> "Voz Cloud devolvió HTTP ${error.httpStatus}; mantengo el texto"
         is CloudVoiceException.Unavailable -> "Proveedor de voz Cloud rechazó la generación; mantengo el texto"
         is CloudVoiceException.InvalidAudio -> "Voz Cloud devolvió audio inválido; mantengo el texto"
         else -> "Voz Cloud no disponible; mantengo el texto"
@@ -1352,6 +1357,8 @@ class MainActivity : AppCompatActivity() {
                     metrics.text = buildString {
                         append("Lista · ").append(result.voiceId)
                         append("\nAndroid ↔ Worker + audio: ").append(result.totalMs).append(" ms")
+                        result.downloadMs?.let { append("\nDescarga audio: ").append(it).append(" ms") }
+                        result.audioPrepareMs?.let { append("\nPreparación audio: ").append(it).append(" ms") }
                         result.providerMs?.let { append("\nProveedor TTS: ").append(it).append(" ms") }
                         result.gatewayMs?.let { append("\nTotal Worker: ").append(it).append(" ms") }
                         result.model?.let { append("\nModelo: ").append(it) }
