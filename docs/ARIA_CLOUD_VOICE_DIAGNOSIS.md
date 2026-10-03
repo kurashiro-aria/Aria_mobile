@@ -10,7 +10,7 @@ El código anterior tenía dos fuentes distintas de `429`, pero Android las conv
 
 ## Modelo y endpoint
 
-El Worker usa `ARIA_TTS_MODEL` con valor predeterminado `gemini-3.8-flash-lite-tts` y `POST /v1beta/interactions`, con `response_format` `audio/wav`, `sample_rate` 24000 y `generation_config.speech_config` para la voz. La documentación oficial actual de Gemini confirma ese modelo, el endpoint Interactions y la respuesta de audio WAV. Leda es una voz oficial y el servicio documenta español.
+El Worker usa `ARIA_TTS_MODEL` con valor predeterminado `gemini-3.8-flash-lite-tts` y `POST /v1beta/interactions`, con `response_format` `audio/wav`, `sample_rate` 24000 y `generation_config.speech_config` para la voz. La documentación oficial actual de Gemini confirma ese modelo, el endpoint Interactions y la respuesta de audio WAV. Leda es una voz oficial y el servicio documenta español. El timeout observado no prueba que el modelo sea inválido: un modelo inexistente debería producir un error HTTP identificable, no una conexión silenciosa de 60 segundos.
 
 ## Cambios aplicados
 
@@ -20,7 +20,10 @@ El Worker usa `ARIA_TTS_MODEL` con valor predeterminado `gemini-3.8-flash-lite-t
 - El `requestId` lógico no cambia durante los reintentos. Los fallos finales liberan el identificador para permitir una repetición legítima; las solicitudes completadas siguen protegidas contra duplicados.
 - Se añadió un circuit breaker en memoria del isolate únicamente para Voice. No afecta Brain y no pretende ser un contador global entre isolates de Cloudflare.
 - Android dejó de reintentar con otro `requestId`; realiza una sola solicitud lógica y distingue un 429 del Gateway de uno del proveedor.
+- El texto que contiene acciones entre asteriscos se conserva completo en el chat, pero se elimina únicamente del transcript enviado a TTS. Si solo quedan acciones, no se solicita audio.
+- El timeout total del proveedor queda limitado a 20 s por defecto y nunca supera 30 s, incluyendo los reintentos. Esto evita que una síntesis quede bloqueada durante minutos.
+- La dirección vocal conserva emoción, intensidad y estilo, con una indicación natural de voz adulta joven; no se inventan controles de pitch o velocidad no documentados.
 
 ## Pendientes
 
-La confirmación del origen exacto de un 429 real requiere una prueba contra el Worker desplegado y los datos seguros de diagnóstico (`X-ARIA-*`, código JSON y `Retry-After`), sin exponer secretos. No se desplegó el Worker en esta tarea y no se generó APK.
+La confirmación del origen exacto del timeout requiere una prueba contra el Worker desplegado y los datos seguros de diagnóstico (`X-ARIA-*`, código JSON y duración), sin exponer secretos. No se desplegó el Worker en esta tarea y no se generó APK.

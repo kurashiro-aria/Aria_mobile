@@ -128,7 +128,7 @@ function voiceStyle(emotion, intensity, expressionStyle) {
     serious: "serious and measured", focused: "focused and clear", excited: "lively and excited",
     comforting: "reassuring and gentle", soft: "especially soft", whisper: "whispered softly", natural: "natural",
   }[expressionStyle] || "natural";
-  return `youthful, ${strength} ${delivery}; ${expression}; natural pacing and volume`;
+  return `young adult, youthful but natural, ${strength} ${delivery}; ${expression}; natural pacing and volume`;
 }
 
 async function callGemini(message, maxTokens, env, fetchImpl) {
@@ -182,11 +182,16 @@ async function callGeminiTts(body, env, fetchImpl) {
   const model = env.ARIA_TTS_MODEL || "gemini-3.8-flash-lite-tts";
   const base = (env.ARIA_GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
   if (!env.ARIA_LLM_API_KEY) throw Object.assign(new Error("provider_unavailable"), { status: 503 });
-  const timeoutMs = Math.max(1000, Number(env.ARIA_TTS_TIMEOUT_MS || 45000));
+  // Bound the complete provider operation, including retries. A single voice
+  // request must never keep the chat waiting for minutes.
+  const timeoutMs = Math.min(30000, Math.max(1000, Number(env.ARIA_TTS_TIMEOUT_MS || 20000)));
+  const deadline = Date.now() + timeoutMs;
   const backoff = [750, 1500];
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) throw Object.assign(new Error("provider_timeout"), { status: 504 });
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), remainingMs);
     try {
       const response = await fetchImpl(`${base}/interactions`, {
       method: "POST",
@@ -208,7 +213,8 @@ async function callGeminiTts(body, env, fetchImpl) {
         const status = [429, 502, 503, 504].includes(response.status) ? response.status : 502;
         const error = Object.assign(new Error(providerError), { status, retryAfterMs: retryAfterMilliseconds(response.headers.get("Retry-After")) });
         if (transientStatus(response.status) && attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, Math.max(error.retryAfterMs || 0, backoff[attempt])));
+          const waitMs = Math.min(Math.max(error.retryAfterMs || 0, backoff[attempt]), Math.max(0, deadline - Date.now()));
+          if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
           continue;
         }
         throw error;
@@ -220,7 +226,11 @@ async function callGeminiTts(body, env, fetchImpl) {
       return { audio: decodeBase64(audio), model };
     } catch (error) {
       if (error?.name === "AbortError") {
-        if (attempt < 2) { await new Promise((resolve) => setTimeout(resolve, backoff[attempt])); continue; }
+        if (attempt < 2 && Date.now() < deadline) {
+          const waitMs = Math.min(backoff[attempt], Math.max(0, deadline - Date.now()));
+          if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
         throw Object.assign(new Error("provider_timeout"), { status: 504 });
       }
       throw error;

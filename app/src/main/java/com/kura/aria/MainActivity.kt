@@ -1208,12 +1208,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun speakReply(answer: String, emotion: AriaEmotion) {
-        if (b2Enabled() && b2SpeechOutput != null) { b2SpeechOutput?.speak(answer); return }
+        val spokenText = com.kura.aria.voice.spokenTextForCloud(answer)
+        if (spokenText.isBlank()) return
+        if (b2Enabled() && b2SpeechOutput != null) { b2SpeechOutput?.speak(spokenText); return }
         val client = cloudVoiceClient
         if (client != null && modelLoaded) {
             val direction = AriaVoiceDirector.forCloudEmotion(emotion)
             val voiceId = "Leda"
-            val cacheKey = "v1|$voiceId|${direction.emotion}|${direction.intensity}|${direction.expressionStyle}|$answer"
+            val cacheKey = "v1|$voiceId|${direction.emotion}|${direction.intensity}|${direction.expressionStyle}|$spokenText"
             cloudVoicePlayer.cached(cacheKey)?.let { cached ->
                 runCatching { cloudVoicePlayer.play(cached) }
                 return
@@ -1221,7 +1223,7 @@ class MainActivity : AppCompatActivity() {
             uiScope.launch {
                 try {
                     val result = synthesizeCloudVoiceWithRetry(client, CloudVoiceRequest(
-                        "reply-${java.util.UUID.randomUUID()}", answer, direction, voiceId))
+                        "reply-${java.util.UUID.randomUUID()}", spokenText, direction, voiceId))
                     val file = cloudVoicePlayer.cache(cacheKey, result.audio)
                     cloudVoicePlayer.play(file)
                 } catch (cancelled: CancellationException) { throw cancelled }
