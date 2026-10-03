@@ -934,6 +934,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun replayCloudVoice(answer: String) {
+        val spokenText = com.kura.aria.voice.spokenTextForCloud(answer)
+        if (spokenText.isBlank()) {
+            toast("Este mensaje no contiene texto hablable")
+            return
+        }
         val client = cloudVoiceClient
         if (client == null || !modelLoaded) {
             toast("Voz no disponible sin conexión")
@@ -941,7 +946,7 @@ class MainActivity : AppCompatActivity() {
         }
         val direction = AriaVoiceDirector.forCloudEmotion(AriaEmotion.fromReply(answer))
         val voiceId = "Leda"
-        val cacheKey = "v1|$voiceId|${direction.emotion}|${direction.intensity}|${direction.expressionStyle}|$answer"
+        val cacheKey = "v1|$voiceId|${direction.emotion}|${direction.intensity}|${direction.expressionStyle}|$spokenText"
         cloudVoicePlayer.cached(cacheKey)?.let { cached ->
             runCatching { cloudVoicePlayer.play(cached) }
                 .onFailure { toast("No pude reproducir la voz guardada") }
@@ -950,7 +955,7 @@ class MainActivity : AppCompatActivity() {
         uiScope.launch {
             try {
                 val result = synthesizeCloudVoiceWithRetry(client, CloudVoiceRequest(
-                    "replay-${java.util.UUID.randomUUID()}", answer, direction, voiceId))
+                    "replay-${java.util.UUID.randomUUID()}", spokenText, direction, voiceId))
                 cloudVoicePlayer.play(cloudVoicePlayer.cache(cacheKey, result.audio))
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Throwable) { toast(cloudVoiceErrorMessage(error)) }
