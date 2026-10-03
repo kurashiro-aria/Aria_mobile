@@ -16,6 +16,7 @@ import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.OpenableColumns
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
@@ -116,6 +117,7 @@ class MainActivity : AppCompatActivity() {
     private var cloudVoiceClient: CloudVoiceClient? = null
     private lateinit var cloudVoicePlayer: CloudVoicePlayer
     private val cloudVoiceMutex = Mutex()
+    private var cloudVoiceJob: Job? = null
     private var samplePlayer: MediaPlayer? = null
     private var lastSpokenReply: Pair<String, AriaEmotion>? = null
     private var voiceInForeground = false
@@ -699,6 +701,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun sendMessage() {
         val message = input.text.toString().trim(); if (message.isEmpty() || !modelLoaded || busy) return
+        cancelCloudVoicePlayback()
         stopDictation()
         if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_PAUSE)
         speechOutput?.stop()
@@ -939,25 +942,22 @@ class MainActivity : AppCompatActivity() {
             toast("Este mensaje no contiene texto hablable")
             return
         }
-        val client = cloudVoiceClient
-        if (client == null || !modelLoaded) {
-            toast("Voz no disponible sin conexión")
-            return
-        }
         val direction = AriaVoiceDirector.forCloudEmotion(AriaEmotion.fromReply(answer))
         val voiceId = "Leda"
         val cacheKey = "v1|$voiceId|${direction.emotion}|${direction.intensity}|${direction.expressionStyle}|$spokenText"
+        cancelCloudVoicePlayback()
         cloudVoicePlayer.cached(cacheKey)?.let { cached ->
             runCatching { cloudVoicePlayer.play(cached) }
                 .onFailure { toast("No pude reproducir la voz guardada") }
             return
         }
-        uiScope.launch {
-            try {
-                val result = synthesizeCloudVoiceWithRetry(client, CloudVoiceRequest(
-                    "replay-${java.util.UUID.randomUUID()}", spokenText, direction, voiceId))
-                cloudVoicePlayer.play(cloudVoicePlayer.cache(cacheKey, result.audio))
-            } catch (cancelled: CancellationException) { throw cancelled }
+        if (cloudVoiceClient == null || !modelLoaded) {
+            toast("Voz no disponible sin conexión")
+            return
+        }
+        cloudVoiceJob = uiScope.launch {
+            try { speakCloudVoice(spokenText, direction, voiceId, "replay-${java.util.UUID.randomUUID()}") }
+            catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Throwable) { toast(cloudVoiceErrorMessage(error)) }
         }
     }
@@ -1146,6 +1146,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startDictation() {
+        cancelCloudVoicePlayback()
         if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_PAUSE)
         speechOutput?.stop()
         b2SpeechOutput?.stop()
@@ -1213,6 +1214,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun speakReply(answer: String, emotion: AriaEmotion) {
+        cancelCloudVoicePlayback()
         val spokenText = com.kura.aria.voice.spokenTextForCloud(answer)
         if (spokenText.isBlank()) return
         if (b2Enabled() && b2SpeechOutput != null) { b2SpeechOutput?.speak(spokenText); return }
@@ -1220,17 +1222,9 @@ class MainActivity : AppCompatActivity() {
         if (client != null && modelLoaded) {
             val direction = AriaVoiceDirector.forCloudEmotion(emotion)
             val voiceId = "Leda"
-            val cacheKey = "v1|$voiceId|${direction.emotion}|${direction.intensity}|${direction.expressionStyle}|$spokenText"
-            cloudVoicePlayer.cached(cacheKey)?.let { cached ->
-                runCatching { cloudVoicePlayer.play(cached) }
-                return
-            }
-            uiScope.launch {
+            cloudVoiceJob = uiScope.launch {
                 try {
-                    val result = synthesizeCloudVoiceWithRetry(client, CloudVoiceRequest(
-                        "reply-${java.util.UUID.randomUUID()}", spokenText, direction, voiceId))
-                    val file = cloudVoicePlayer.cache(cacheKey, result.audio)
-                    cloudVoicePlayer.play(file)
+                    speakCloudVoice(spokenText, direction, voiceId, "reply-${java.util.UUID.randomUUID()}")
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Throwable) {
                     // Cloud Voice is the configured automatic voice. Never silently
@@ -1244,6 +1238,69 @@ class MainActivity : AppCompatActivity() {
         // Keep text chat fully usable when Cloud Brain/Voice is not connected.
         // Android TTS remains available only through the explicit local voice controls.
         toast("Conecta ARIA Cloud para reproducir la voz de Leda")
+    }
+
+    private fun cancelCloudVoicePlayback() {
+        cloudVoiceJob?.cancel()
+        cloudVoiceJob = null
+        if (::cloudVoicePlayer.isInitialized) cloudVoicePlayer.stop()
+    }
+
+    /**
+     * The provider currently returns complete WAV responses, not an audio
+     * stream. Generate natural sentence chunks in order; while one chunk is
+     * playing, the producer prepares the next one. Cancellation closes both
+     * sides so an old answer cannot continue speaking over a new turn.
+     */
+    private suspend fun speakCloudVoice(
+        spokenText: String,
+        direction: com.kura.aria.voice.CloudVoiceDirection,
+        voiceId: String,
+        requestPrefix: String
+    ) = coroutineScope {
+        val client = cloudVoiceClient ?: return@coroutineScope
+        val chunks = com.kura.aria.voice.speechChunks(spokenText)
+        if (chunks.isEmpty()) return@coroutineScope
+        val voiceStarted = SystemClock.elapsedRealtime()
+        var firstAudioMs: Long? = null
+        var playbackStartedMs: Long? = null
+        val files = kotlinx.coroutines.channels.Channel<File>(capacity = 1)
+        val producer = launch(Dispatchers.IO) {
+            try {
+                chunks.forEachIndexed { index, chunk ->
+                    ensureActive()
+                    val cacheKey = "v1|$voiceId|${direction.emotion}|${direction.intensity}|${direction.expressionStyle}|$chunk"
+                    val file = cloudVoicePlayer.cached(cacheKey) ?: run {
+                        val result = synthesizeCloudVoiceWithRetry(client, CloudVoiceRequest(
+                            "$requestPrefix-$index", chunk, direction, voiceId))
+                        cloudVoicePlayer.cache(cacheKey, result.audio)
+                    }
+                    if (firstAudioMs == null) firstAudioMs = SystemClock.elapsedRealtime() - voiceStarted
+                    files.send(file)
+                }
+                files.close()
+            } catch (cancelled: CancellationException) {
+                files.close(cancelled)
+                throw cancelled
+            } catch (error: Throwable) {
+                files.close(error)
+                throw error
+            }
+        }
+        val consumer = launch {
+            for (file in files) {
+                ensureActive()
+                if (playbackStartedMs == null) playbackStartedMs = SystemClock.elapsedRealtime() - voiceStarted
+                cloudVoicePlayer.playAndAwait(file)
+            }
+        }
+        try { joinAll(producer, consumer) }
+        finally {
+            files.cancel()
+            if (producer.isActive) producer.cancel()
+            if (consumer.isActive) consumer.cancel()
+            Log.d("ARIA.CloudVoice", "chunk_count=${chunks.size} first_audio_ms=${firstAudioMs ?: -1} playback_start_ms=${playbackStartedMs ?: -1} total_ms=${SystemClock.elapsedRealtime() - voiceStarted}")
+        }
     }
 
     private fun cloudVoiceErrorMessage(error: Throwable): String = when (error) {
@@ -1411,6 +1468,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() { super.onStart(); voiceInForeground = true; updateNetworkStatus() }
     override fun onStop() {
         voiceInForeground = false
+        cancelCloudVoicePlayback()
         stopDictation()
         if (!wakeEnabled() || !voiceEnabled()) { speechOutput?.stop(); b2SpeechOutput?.stop() }
         samplePlayer?.release(); samplePlayer = null

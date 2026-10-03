@@ -88,7 +88,7 @@ internal class HttpCloudVoiceClient(
         }.toString()
         val started = System.nanoTime()
         return try {
-            withTimeout(60_000) { withContext(Dispatchers.IO) {
+            withTimeout(30_000) { withContext(Dispatchers.IO) {
                 var connection: HttpURLConnection? = null
                 try {
                     coroutineContext.ensureActive()
@@ -96,7 +96,7 @@ internal class HttpCloudVoiceClient(
                         .openConnection() as HttpURLConnection
                     connection.requestMethod = "POST"
                     connection.connectTimeout = config.connectTimeoutMs.toInt()
-                    connection.readTimeout = 50_000
+                    connection.readTimeout = 25_000
                     connection.doOutput = true
                     connection.setRequestProperty("Accept", "audio/wav")
                     connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")

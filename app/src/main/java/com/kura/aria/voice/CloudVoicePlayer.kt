@@ -3,6 +3,8 @@ package com.kura.aria.voice
 import android.content.Context
 import android.media.MediaPlayer
 import java.io.File
+import kotlin.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 internal class CloudVoicePlayer(context: Context) : AutoCloseable {
     private val cache = CloudVoiceCache(File(context.cacheDir, "aria-cloud-voice-preview"))
@@ -22,6 +24,13 @@ internal class CloudVoicePlayer(context: Context) : AutoCloseable {
             media.prepare()
             media.start()
         }
+    }
+
+    suspend fun playAndAwait(file: File) = suspendCancellableCoroutine<Unit> { continuation ->
+        play(file) {
+            if (continuation.isActive) continuation.resume(Unit)
+        }
+        continuation.invokeOnCancellation { stop() }
     }
 
     fun stop() { player?.runCatching { stop() }; player?.release(); player = null }

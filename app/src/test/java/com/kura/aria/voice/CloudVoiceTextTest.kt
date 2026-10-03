@@ -21,4 +21,25 @@ class CloudVoiceTextTest {
     @Test fun ordinaryTextRemainsVerbatimApartFromWhitespaceNormalization() {
         assertEquals("Hola, Kura.", spokenTextForCloud("Hola, Kura."))
     }
+
+    @Test fun speechChunksKeepNaturalSentenceOrder() {
+        assertEquals(
+            listOf("Primera frase.", "Segunda frase!", "Tercera frase?"),
+            speechChunks("Primera frase. Segunda frase! Tercera frase?")
+        )
+    }
+
+    @Test fun speechChunksBoundLongSentencesWithoutTinyFragments() {
+        val chunks = speechChunks("Una frase bastante larga que debe dividirse para preparar el audio sin esperar toda la respuesta.", 55)
+        assertTrue(chunks.size > 1)
+        assertTrue(chunks.all { it.length <= 55 })
+        assertEquals(
+            "Una frase bastante larga que debe dividirse para preparar el audio sin esperar toda la respuesta.",
+            chunks.joinToString(" ")
+        )
+    }
+
+    @Test fun speechChunksIgnoreActionOnlyResponses() {
+        assertTrue(speechChunks("*sonríe suavemente*").isEmpty())
+    }
 }
