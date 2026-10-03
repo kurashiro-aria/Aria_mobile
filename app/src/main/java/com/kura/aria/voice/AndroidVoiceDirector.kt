@@ -14,8 +14,8 @@ object AndroidVoiceDirector {
     private const val BASE_RATE = 1.00f
 
     /** Android TTS has no real whisper/emotion controls; these are gentle delivery hints. */
-    fun forEmotion(emotion: AriaEmotion,
-                   expression: ExpressionStyle = ExpressionStyle.NATURAL): VoiceDirection {
+    internal fun forEmotion(emotion: AriaEmotion,
+                            expression: ExpressionStyle = ExpressionStyle.NATURAL): VoiceDirection {
         val base = when (emotion) {
             AriaEmotion.HAPPY, AriaEmotion.AMUSED -> VoiceDirection(1.04f, 1.08f, 1f)
             AriaEmotion.PLAYFUL -> VoiceDirection(1.05f, 1.09f, 1f)
