@@ -1240,6 +1240,7 @@ class MainActivity : AppCompatActivity() {
         is CloudVoiceException.Rejected -> "Voz Cloud rechazó la autenticación; mantengo el texto"
         is CloudVoiceException.NoConnection -> "Voz Cloud sin conexión; mantengo el texto"
         is CloudVoiceException.Timeout -> "Voz Cloud tardó demasiado; mantengo el texto"
+        is CloudVoiceException.RateLimited -> "Proveedor de voz temporalmente limitado; mantengo el texto"
         is CloudVoiceException.Unavailable -> "Proveedor de voz Cloud rechazó la generación; mantengo el texto"
         is CloudVoiceException.InvalidAudio -> "Voz Cloud devolvió audio inválido; mantengo el texto"
         else -> "Voz Cloud no disponible; mantengo el texto"

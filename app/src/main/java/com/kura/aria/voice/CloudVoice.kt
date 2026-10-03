@@ -44,6 +44,7 @@ internal interface CloudVoiceClient {
 internal sealed class CloudVoiceException(message: String, cause: Throwable? = null) : Exception(message, cause) {
     class NoConnection(cause: Throwable? = null) : CloudVoiceException("Sin conexión para generar la voz", cause)
     class Timeout(cause: Throwable? = null) : CloudVoiceException("La voz Cloud tardó demasiado", cause)
+    class RateLimited : CloudVoiceException("El proveedor de voz está temporalmente limitado")
     class Rejected : CloudVoiceException("El servidor rechazó la prueba de voz")
     class Unavailable : CloudVoiceException("La voz Cloud no está disponible")
     class InvalidAudio : CloudVoiceException("El servidor no devolvió audio válido")
@@ -89,6 +90,7 @@ internal class HttpCloudVoiceClient(
                     val code = connection.responseCode
                     if (code == 400 || code == 401 || code == 403) throw CloudVoiceException.Rejected()
                     if (code == 408 || code == 504) throw CloudVoiceException.Timeout()
+                    if (code == 429) throw CloudVoiceException.RateLimited()
                     if (code !in 200..299) throw CloudVoiceException.Unavailable()
                     val mime = connection.contentType?.substringBefore(';') ?: ""
                     val audio = connection.inputStream.use { it.readBytes() }
