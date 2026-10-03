@@ -84,9 +84,33 @@ test("rejects missing or incorrect token and oversized payload", async () => {
   assert.equal((await createWorker().fetch(oversized, env)).status, 400);
 });
 
-test("maps Gemini errors and rejects duplicates", async () => {
+test("maps Gemini errors and permits retry after a failed logical request", async () => {
   const fetchImpl = async () => new Response("", { status: 429 });
   const worker = createWorker({ fetchImpl });
   assert.equal((await worker.fetch(request({ requestId: "dup-1", message: "x" }), env)).status, 429);
-  assert.equal((await worker.fetch(request({ requestId: "dup-1", message: "x" }), env)).status, 409);
+  assert.equal((await worker.fetch(request({ requestId: "dup-1", message: "x" }), env)).status, 429);
+});
+
+test("voice retries provider 429 with the same logical request and then succeeds", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    if (calls < 3) return new Response("", { status: 429, headers: { "Retry-After": "0" } });
+    return new Response(JSON.stringify({ steps: [{ type: "model_output", content: [{ type: "audio", data: wavBase64 }] }] }), { status: 200 });
+  };
+  const response = await createWorker({ fetchImpl }).fetch(voiceRequest(voiceBody({ requestId: "voice-retry" })), env);
+  assert.equal(response.status, 200);
+  assert.equal(calls, 3);
+});
+
+test("gateway rate limit is distinct and does not share brain/voice buckets", async () => {
+  const limitedEnv = { ...env, ARIA_RATE_LIMIT_PER_MINUTE: "1", ARIA_VOICE_RATE_LIMIT_PER_MINUTE: "1" };
+  const fetchImpl = async (url) => url.endsWith("/interactions")
+    ? new Response(JSON.stringify({ steps: [{ type: "model_output", content: [{ type: "audio", data: wavBase64 }] }] }), { status: 200 })
+    : new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }), { status: 200 });
+  const worker = createWorker({ fetchImpl });
+  const ip = { "CF-Connecting-IP": "limit-test" };
+  assert.equal((await worker.fetch(request({ requestId: "brain-limit-1", message: "x" }, ip), limitedEnv)).status, 200);
+  assert.equal((await worker.fetch(request({ requestId: "brain-limit-2", message: "x" }, ip), limitedEnv)).status, 429);
+  assert.equal((await worker.fetch(voiceRequest(voiceBody({ requestId: "voice-limit-1" }), ip), limitedEnv)).status, 200);
 });

@@ -1243,25 +1243,18 @@ class MainActivity : AppCompatActivity() {
         is CloudVoiceException.Rejected -> "Voz Cloud rechazó la autenticación; mantengo el texto"
         is CloudVoiceException.NoConnection -> "Voz Cloud sin conexión; mantengo el texto"
         is CloudVoiceException.Timeout -> "Voz Cloud tardó demasiado; mantengo el texto"
-        is CloudVoiceException.RateLimited -> "Proveedor de voz temporalmente limitado; mantengo el texto"
+        is CloudVoiceException.RateLimited -> if (error.gateway) "Gateway de voz temporalmente limitado; mantengo el texto" else "Proveedor de voz temporalmente limitado; mantengo el texto"
         is CloudVoiceException.Unavailable -> "Proveedor de voz Cloud rechazó la generación; mantengo el texto"
         is CloudVoiceException.InvalidAudio -> "Voz Cloud devolvió audio inválido; mantengo el texto"
         else -> "Voz Cloud no disponible; mantengo el texto"
     }
 
-    /** Gives a transient provider limit one recovery attempt without changing chat state. */
+    /** The Worker owns provider retries; Android keeps one logical synthesis request. */
     private suspend fun synthesizeCloudVoiceWithRetry(
         client: CloudVoiceClient,
         request: CloudVoiceRequest
     ): com.kura.aria.voice.CloudVoiceResult {
-        return cloudVoiceMutex.withLock {
-            try {
-                client.synthesize(request)
-            } catch (limited: CloudVoiceException.RateLimited) {
-                delay(2_500)
-                client.synthesize(request.copy(requestId = request.requestId + "-retry"))
-            }
-        }
+        return cloudVoiceMutex.withLock { client.synthesize(request) }
     }
 
     private fun playB2Sample() {
