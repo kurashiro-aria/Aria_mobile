@@ -4,7 +4,11 @@ import com.kura.aria.emotion.AriaEmotion
 import com.kura.aria.personality.ExpressionStyle
 
 /** Presentation only: never changes the words or decides ARIA's emotion. */
-data class VoiceDirection(val rate: Float, val pitch: Float)
+data class VoiceDirection(
+    val rate: Float,
+    val pitch: Float,
+    val volume: Float = 1f
+)
 
 internal data class CloudVoiceDirection(
     val emotion: String,

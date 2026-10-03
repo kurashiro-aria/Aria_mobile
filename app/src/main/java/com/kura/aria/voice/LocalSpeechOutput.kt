@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
-import java.util.Locale
 
 /** Android offline voice adapter. No speech or transcript is sent to a server. */
 class LocalSpeechOutput(context: Context, private val onStatus: (String) -> Unit) {
@@ -18,32 +17,35 @@ class LocalSpeechOutput(context: Context, private val onStatus: (String) -> Unit
     init {
         tts = TextToSpeech(context.applicationContext) { result ->
             if (!closed) {
-                ready = result == TextToSpeech.SUCCESS && selectOfflineSpanishVoice()
-                onStatus(if (ready) "Voz local lista" else "No hay voz española sin conexión instalada")
+                ready = result == TextToSpeech.SUCCESS && selectAriaVoice()
+                onStatus(if (ready) "Voz local de ARIA lista" else "Voz local de ARIA no disponible")
                 if (ready) pending?.let { (text, direction) -> pending = null; speak(text, direction) }
                 else pending = null
             }
         }
     }
 
-    private fun selectOfflineSpanishVoice(): Boolean {
+    private fun selectAriaVoice(): Boolean {
         val synthesizer = tts ?: return false
-        val chosen: Voice = synthesizer.voices.orEmpty()
-            .filter { it.locale.language == "es" && !it.isNetworkConnectionRequired &&
-                TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features.orEmpty() }
-            .sortedWith(compareByDescending<Voice> { it.locale.country.equals("MX", true) }
-                .thenByDescending { it.quality })
-            .firstOrNull() ?: return false
+        val chosen: Voice = synthesizer.voices.orEmpty().firstOrNull {
+            it.name.equals(AndroidVoiceDirector.ARIA_VOICE_ID, ignoreCase = true) &&
+                it.locale.language == "es" && !it.isNetworkConnectionRequired &&
+                TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features.orEmpty()
+        } ?: return false
         return synthesizer.setVoice(chosen) == TextToSpeech.SUCCESS
     }
 
     fun speak(text: String, direction: VoiceDirection) {
-        if (closed || text.isBlank()) return
-        if (!ready) { pending = text to direction; return }
+        val spokenText = spokenTextForCloud(text)
+        if (closed || spokenText.isBlank()) return
+        if (!ready) { pending = spokenText to direction; return }
         val synthesizer = tts ?: return
         synthesizer.stop()
         synthesizer.setSpeechRate(direction.rate)
         synthesizer.setPitch(direction.pitch)
+        val params = Bundle().apply {
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, direction.volume.coerceIn(0f, 1f))
+        }
         val id = (++requestId).toString()
         synthesizer.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String) = Unit
@@ -53,7 +55,7 @@ class LocalSpeechOutput(context: Context, private val onStatus: (String) -> Unit
                 if (utteranceId == id) onStatus("No pude reproducir la voz local")
             }
         })
-        if (synthesizer.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle(), id) == TextToSpeech.ERROR)
+        if (synthesizer.speak(spokenText, TextToSpeech.QUEUE_FLUSH, params, id) == TextToSpeech.ERROR)
             onStatus("No pude reproducir la voz local")
     }
 

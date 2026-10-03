@@ -39,6 +39,7 @@ import com.kura.aria.personality.ConversationBrain
 import com.kura.aria.personality.ConversationIntent
 import com.kura.aria.personality.ConversationManager
 import com.kura.aria.personality.ExpressionResolver
+import com.kura.aria.personality.ExpressionStyle
 import com.kura.aria.personality.RoleplayInterpreter
 import com.kura.aria.personality.InitiativePolicy
 import com.kura.aria.chat.VisibleReplyFilter
@@ -49,10 +50,8 @@ import com.kura.aria.memory.MemoryCommand
 import com.kura.aria.emotion.AriaEmotion
 import com.kura.aria.emotion.MoodReader
 import com.kura.aria.voice.AriaVoiceDirector
+import com.kura.aria.voice.AndroidVoiceDirector
 import com.kura.aria.voice.LocalSpeechOutput
-import com.kura.aria.voice.AndroidTtsPreset
-import com.kura.aria.voice.AndroidTtsVoice
-import com.kura.aria.voice.AndroidTtsVoiceProbe
 import com.kura.aria.voice.LocalSpeechInput
 import com.kura.aria.voice.QwenB2SpeechOutput
 import com.kura.aria.voice.AriaVoiceDirector.cloudCandidates
@@ -77,7 +76,6 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.Calendar
-import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
     private lateinit var conversation: LinearLayout
@@ -92,6 +90,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var avatarCard: ImageView
     private val portraits = mutableMapOf<Int, Bitmap>()
     private var lastEmotion = AriaEmotion.NEUTRAL
+    private var lastExpressionStyle = ExpressionStyle.NATURAL
     private var displayedEmotion: AriaEmotion? = null
     private lateinit var engine: InferenceEngine
     private lateinit var cloudBrain: CloudInferenceEngine
@@ -116,7 +115,6 @@ class MainActivity : AppCompatActivity() {
     private var loadingModelLabel: TextView? = null
     private var wakeButton: Button? = null
     private var speechOutput: LocalSpeechOutput? = null
-    private var androidTtsProbe: AndroidTtsVoiceProbe? = null
     private var speechInput: LocalSpeechInput? = null
     private var dictationBase = ""
     private var b2SpeechOutput: QwenB2SpeechOutput? = null
@@ -313,8 +311,12 @@ class MainActivity : AppCompatActivity() {
                     "Voz Cloud experimental" -> showCloudVoicePreviewDialog()
                     "Escuchar muestra B2" -> playB2Sample()
                     "Repetir última respuesta" -> lastSpokenReply?.let { (text, emotion) ->
+                        cancelCloudVoicePlayback("replay")
                         if (b2Enabled()) b2SpeechOutput?.speak(text)
-                        else { startVoice(); speechOutput?.speak(text, AriaVoiceDirector.forEmotion(emotion)) }
+                        else {
+                            startVoice()
+                            speechOutput?.speak(text, AndroidVoiceDirector.forEmotion(emotion, lastExpressionStyle))
+                        }
                     } ?: toast("Aún no hay una respuesta nueva para leer")
                     "Detener voz" -> { speechOutput?.stop(); b2SpeechOutput?.stop() }
                     "Interfaz" -> toast("Interfaz ARIA Character")
@@ -740,7 +742,8 @@ class MainActivity : AppCompatActivity() {
                 chatHistory.append("ARIA", answer)
             }
             lastSpokenReply = answer to lastEmotion
-            if (voiceEnabled()) speakReply(answer, lastEmotion)
+            lastExpressionStyle = ExpressionStyle.NATURAL
+            if (voiceEnabled()) speakReply(answer, lastEmotion, lastExpressionStyle)
             if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_RESUME)
             return
         }
@@ -809,7 +812,9 @@ class MainActivity : AppCompatActivity() {
                         com.kura.aria.memory.LocalMemoryProcessor.process(ariaMemory, message)
                     }
                     lastSpokenReply = answer to lastEmotion
-                    if (voiceEnabled() && (voiceInForeground || wakeEnabled())) speakReply(answer, lastEmotion)
+                    lastExpressionStyle = turnExpression.style
+                    if (voiceEnabled() && (voiceInForeground || wakeEnabled()))
+                        speakReply(answer, lastEmotion, lastExpressionStyle)
                 }
                 else { generationFailures++; reply.text = "No llegué a completar una respuesta. Prueba con una pregunta más corta."; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
             } catch (e: CancellationException) { throw e }
@@ -1081,10 +1086,6 @@ class MainActivity : AppCompatActivity() {
         content.addView(TextView(this).apply {
             text = "B2 experimental está pausada. La lectura usa la voz española instalada en Android."
         })
-        content.addView(Button(this).apply {
-            text = "Prueba de voces Android"
-            setOnClickListener { showAndroidTtsVoiceDialog() }
-        })
         wakeSwitch.setOnCheckedChangeListener { _, checked ->
             if (checked) enableWakeListening()
             else {
@@ -1225,32 +1226,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun speakReply(answer: String, emotion: AriaEmotion) {
+    private fun speakReply(answer: String, emotion: AriaEmotion,
+                           expression: ExpressionStyle = ExpressionStyle.NATURAL) {
         cancelCloudVoicePlayback("new_reply")
+        speechOutput?.stop()
         val spokenText = com.kura.aria.voice.spokenTextForCloud(answer)
         if (spokenText.isBlank()) return
-        if (b2Enabled() && b2SpeechOutput != null) { b2SpeechOutput?.speak(spokenText); return }
-        val client = cloudVoiceClient
-        if (client != null && modelLoaded) {
-            val direction = AriaVoiceDirector.forCloudEmotion(emotion)
-            val voiceId = "Leda"
-            val session = cloudVoiceSession.begin()
-            cloudVoiceJob = uiScope.launch {
-                try {
-                    speakCloudVoice(spokenText, direction, voiceId, "reply-${java.util.UUID.randomUUID()}", session)
-                } catch (cancelled: CancellationException) { throw cancelled }
-                catch (error: Throwable) {
-                    // Cloud Voice is the configured automatic voice. Never silently
-                    // substitute Android TTS: that masks endpoint/configuration errors
-                    // and produces a different identity than the selected Cloud voice.
-                    toast(cloudVoiceErrorMessage(error))
-                }
-            }
-            return
-        }
-        // Keep text chat fully usable when Cloud Brain/Voice is not connected.
-        // Android TTS remains available only through the explicit local voice controls.
-        toast("Conecta ARIA Cloud para reproducir la voz de Leda")
+        startVoice()
+        speechOutput?.speak(spokenText, AndroidVoiceDirector.forEmotion(emotion, expression))
     }
 
     private fun cancelCloudVoicePlayback(reason: String = "replacement") {
@@ -1390,75 +1373,6 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Cerrar", null).show()
     }
 
-    private fun showAndroidTtsVoiceDialog() {
-        val phrase = "Hola Kura, soy Aria. Dime, te escucho. ¿Qué quieres que hagamos hoy?"
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(10), dp(20), dp(6))
-        }
-        content.addView(TextView(this).apply {
-            text = "Consulta las voces que este teléfono expone realmente. Esta prueba es local y no usa Cloud Voice. Android no siempre informa género o edad; la decisión final se hace escuchando."
-            setPadding(0, 0, 0, dp(12))
-        })
-        val voiceSpinner = Spinner(this)
-        val presetSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
-                AndroidTtsPreset.all.map { "${it.label} · pitch ${"%.2f".format(Locale.US, it.pitch)} · ritmo ${"%.2f".format(Locale.US, it.rate)}" })
-        }
-        val statusText = TextView(this).apply {
-            text = "Consultando voces instaladas…"
-            setPadding(0, dp(10), 0, dp(6))
-        }
-        val phraseText = TextView(this).apply {
-            text = phrase
-            setPadding(0, dp(8), 0, dp(8))
-        }
-        val testButton = Button(this).apply { text = "▶ PROBAR VOZ"; isEnabled = false }
-        content.addView(TextView(this).apply { text = "Voz disponible" })
-        content.addView(voiceSpinner)
-        content.addView(TextView(this).apply { text = "Preset experimental"; setPadding(0, dp(10), 0, 0) })
-        content.addView(presetSpinner)
-        content.addView(phraseText)
-        content.addView(testButton)
-        content.addView(statusText)
-        val dialog = AlertDialog.Builder(this).setTitle("Prueba de voces Android")
-            .setView(content).setNegativeButton("Cerrar", null).create()
-        dialog.setOnDismissListener {
-            androidTtsProbe?.stop()
-            androidTtsProbe?.close()
-            androidTtsProbe = null
-        }
-        dialog.show()
-
-        val updateVoices: (List<AndroidTtsVoice>) -> Unit = { voices ->
-            runOnUiThread {
-                if (isFinishing || isDestroyed || !dialog.isShowing) return@runOnUiThread
-                val labels = if (voices.isEmpty()) listOf("No hay voces expuestas por Android") else voices.map {
-                    val availability = when {
-                        !it.installed -> "datos faltantes"
-                        it.requiresNetwork -> "requiere red"
-                        else -> "offline"
-                    }
-                    "${it.displayName} · ${it.localeTag} · $availability"
-                }
-                voiceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
-                testButton.isEnabled = voices.isNotEmpty()
-                statusText.text = if (voices.isEmpty()) "No se encontraron voces en el motor activo" else "${voices.size} voces disponibles · primero se muestran candidatas españolas"
-                testButton.setOnClickListener {
-                    val voice = voices.getOrNull(voiceSpinner.selectedItemPosition) ?: return@setOnClickListener
-                    val preset = AndroidTtsPreset.all[presetSpinner.selectedItemPosition]
-                    statusText.text = "Reproduciendo ${voice.localeTag} · ${preset.label}…"
-                    androidTtsProbe?.speak(voice.id, preset, phrase)
-                }
-            }
-        }
-        androidTtsProbe = AndroidTtsVoiceProbe(applicationContext, updateVoices) { message ->
-            runOnUiThread {
-                if (!isFinishing && !isDestroyed && dialog.isShowing) statusText.text = message
-            }
-        }
-    }
-
     private fun showCloudVoicePreviewDialog() {
         val client = cloudVoiceClient
         if (client == null || !modelLoaded) {
@@ -1574,8 +1488,6 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
     }
     override fun onDestroy() {
-        androidTtsProbe?.close()
-        androidTtsProbe = null
         if (AriaForegroundService.commandListener === wakeCommandListener)
             AriaForegroundService.commandListener = null
         speechOutput?.close(); speechOutput = null
