@@ -742,7 +742,8 @@ class MainActivity : AppCompatActivity() {
                 chatHistory.append("ARIA", answer)
             }
             lastSpokenReply = answer to lastEmotion
-            lastExpressionStyle = ExpressionStyle.NATURAL
+            lastExpressionStyle = AriaEmotion.styleFor(lastEmotion, ExpressionStyle.NATURAL)
+            logResolvedExpression(lastEmotion, lastExpressionStyle)
             if (voiceEnabled()) speakReply(answer, lastEmotion, lastExpressionStyle)
             if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_RESUME)
             return
@@ -812,7 +813,10 @@ class MainActivity : AppCompatActivity() {
                         com.kura.aria.memory.LocalMemoryProcessor.process(ariaMemory, message)
                     }
                     lastSpokenReply = answer to lastEmotion
-                    lastExpressionStyle = turnExpression.style
+                    // Keep avatar and local TTS on one resolved expressive state.
+                    // A natural request inherits the style implied by ARIA's answer.
+                    lastExpressionStyle = AriaEmotion.styleFor(lastEmotion, turnExpression.style)
+                    logResolvedExpression(lastEmotion, lastExpressionStyle)
                     if (voiceEnabled() && (voiceInForeground || wakeEnabled()))
                         speakReply(answer, lastEmotion, lastExpressionStyle)
                 }
@@ -1234,6 +1238,15 @@ class MainActivity : AppCompatActivity() {
         if (spokenText.isBlank()) return
         startVoice()
         speechOutput?.speak(spokenText, AndroidVoiceDirector.forEmotion(emotion, expression))
+    }
+
+    /** Safe diagnostics: state and voice parameters only, never conversation text. */
+    private fun logResolvedExpression(emotion: AriaEmotion, expression: ExpressionStyle) {
+        val direction = AndroidVoiceDirector.forEmotion(emotion, expression)
+        Log.d("ARIA.Emotion", "emotion_resolved=${emotion.name} " +
+            "expression_style=${expression.name} " +
+            "voice_rate=${direction.rate} voice_pitch=${direction.pitch} " +
+            "voice_volume=${direction.volume} portrait_emotion=${emotion.name}")
     }
 
     private fun cancelCloudVoicePlayback(reason: String = "replacement") {

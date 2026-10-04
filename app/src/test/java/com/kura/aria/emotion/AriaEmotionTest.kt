@@ -84,4 +84,31 @@ class AriaEmotionTest {
         assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromReply("No estoy enojada"))
         assertEquals(AriaEmotion.NEUTRAL, AriaEmotion.fromReply("No me siento cansada"))
     }
+    @Test fun indirectLanguageReachesTheMatchingPortrait() {
+        assertEquals(AriaEmotion.EMBARRASSED, AriaEmotion.fromReply("Me vas a hacer sonrojar."))
+        assertEquals(AriaEmotion.ANNOYED, AriaEmotion.fromReply("Qué pesado eres."))
+        assertEquals(AriaEmotion.HAPPY, AriaEmotion.fromReply("Eso sí me gustó."))
+        assertEquals(AriaEmotion.EXCITED, AriaEmotion.fromReply("¡Eso estuvo increíble!"))
+        assertEquals(AriaEmotion.PLAYFUL, AriaEmotion.fromReply("Qué cruel jajaja."))
+    }
+
+    @Test fun strongReplyEmotionWinsOverWeakRequestedStyle() {
+        val style = com.kura.aria.personality.ExpressionState(
+            com.kura.aria.personality.ExpressionStyle.PLAYFUL,
+            intensity = 0.3f
+        )
+        assertEquals(
+            AriaEmotion.EMBARRASSED,
+            AriaEmotion.fromInteraction(ConversationMood.NEUTRAL, style, "Hola", "Me vas a hacer sonrojar")
+        )
+    }
+
+    @Test fun avatarAndVoiceCanShareDerivedStyle() {
+        assertEquals(com.kura.aria.personality.ExpressionStyle.SHY,
+            AriaEmotion.styleFor(AriaEmotion.EMBARRASSED, com.kura.aria.personality.ExpressionStyle.NATURAL))
+        assertEquals(com.kura.aria.personality.ExpressionStyle.PLAYFUL,
+            AriaEmotion.styleFor(AriaEmotion.PLAYFUL, com.kura.aria.personality.ExpressionStyle.NATURAL))
+        assertEquals(com.kura.aria.personality.ExpressionStyle.FLIRTY,
+            AriaEmotion.styleFor(AriaEmotion.EMBARRASSED, com.kura.aria.personality.ExpressionStyle.FLIRTY))
+    }
 }

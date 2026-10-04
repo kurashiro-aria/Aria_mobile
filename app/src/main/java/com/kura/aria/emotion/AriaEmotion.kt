@@ -39,6 +39,11 @@ enum class AriaEmotion(val tile: Int, val label: String) {
         internal fun fromInteraction(mood: ConversationMood, expression: ExpressionState,
                                      user: String, reply: String): AriaEmotion {
             val base = fromMood(mood, user, reply)
+            // A strong emotion in ARIA's actual answer is authoritative.  The
+            // requested style describes the turn, but must not flatten what
+            // ARIA really said into SERIOUS/NEUTRAL.
+            val expressed = fromReply(reply)
+            if (expressed != NEUTRAL && expressed != THINKING) return expressed
             if (mood in setOf(ConversationMood.URGENT, ConversationMood.VULNERABLE,
                     ConversationMood.FRUSTRATED, ConversationMood.FOCUSED)) return base
             if (expression.style == ExpressionStyle.NATURAL && expression.requestedByKura)
@@ -48,8 +53,6 @@ enum class AriaEmotion(val tile: Int, val label: String) {
             if (expression.style == ExpressionStyle.FLIRTY && reply.isNotBlank() && base == NEUTRAL &&
                 Regex("(?i)\\b(?:linda|hermosa|guapa|preciosa|me gustas)\\b").containsMatchIn(user))
                 return EMBARRASSED
-            // Once ARIA speaks, her own words take priority over a suggested style.
-            if (reply.isNotBlank() && base != NEUTRAL && base != THINKING) return base
             return when (expression.style) {
                 ExpressionStyle.FLIRTY, ExpressionStyle.TEASING, ExpressionStyle.PLAYFUL ->
                     if (mood == ConversationMood.SHY) EMBARRASSED else PLAYFUL
@@ -62,22 +65,36 @@ enum class AriaEmotion(val tile: Int, val label: String) {
             }
         }
 
+        /** Derives the vocal style from the same resolved emotion used by the portrait. */
+        internal fun styleFor(emotion: AriaEmotion, requested: ExpressionStyle): ExpressionStyle {
+            if (requested != ExpressionStyle.NATURAL) return requested
+            return when (emotion) {
+                HAPPY, AMUSED, PLAYFUL -> ExpressionStyle.PLAYFUL
+                EXCITED, SURPRISED -> ExpressionStyle.EXCITED
+                AFFECTIONATE -> ExpressionStyle.AFFECTIONATE
+                EMBARRASSED -> ExpressionStyle.SHY
+                SERIOUS, ANNOYED, ANGRY -> ExpressionStyle.SERIOUS
+                SAD, TIRED -> ExpressionStyle.COMFORTING
+                else -> ExpressionStyle.NATURAL
+            }
+        }
+
         fun fromReply(text: String): AriaEmotion {
             val s = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
                 .replace(Regex("\\p{M}+"), "")
                 .replace(Regex("\\bno (?:estoy|me siento|ando) (?:triste|enojada|enfadada|feliz|contenta|cansada|agotada|confundida)\\b"), "")
             val scored = listOf(
-                EXCITED to score(s, "lo logramos", "¡vamos", "funciono!", "no me lo creo", "que emocion", "emocionada", "entusiasmada", "euforica", "🎉"),
+                EXCITED to score(s, "lo logramos", "¡vamos", "vamos", "funciono!", "no me lo creo", "que emocion", "me emociona", "emocionada", "entusiasmada", "euforica", "increible", "que genial", "🎉"),
                 SAD to score(s, "triste", "entristece", "apenada", "desanimada", "melancolica", "me da pena", "me duele", "😢"),
-                ANGRY to score(s, "me enfada", "furiosa", "enojada", "indignada", "me da rabia", "estoy que ardo"),
-                ANNOYED to score(s, "hmpf", "tch", "que pesado", "me fastidia", "me irrita", "molesta", "🙄"),
-                EMBARRASSED to score(s, "verguenza", "sonrojo", "sonrojada", "avergonzada", "ruborizada", "no digas eso", "😳"),
-                SURPRISED to score(s, "¿¡", "¡¿", "wow", "no me lo esperaba", "sorprendida", "asombrada", "atónita", "¿en serio?", "😮"),
+                ANGRY to score(s, "me enfada", "furiosa", "enojada", "indignada", "me da rabia", "estoy que ardo", "basta", "me enfurece", "no lo tolero"),
+                ANNOYED to score(s, "hmpf", "tch", "que pesado", "que pesado eres", "que cruel eres", "no empieces", "me fastidia", "me irrita", "molesta", "🙄"),
+                EMBARRASSED to score(s, "verguenza", "sonrojo", "sonrojar", "me vas a hacer sonrojar", "me pones nerviosa", "me pones roja", "sonrojada", "avergonzada", "ruborizada", "no digas eso", "😳"),
+                SURPRISED to score(s, "¿¡", "¡¿", "wow", "no me lo esperaba", "no puede ser", "que sorpresa", "sorprendida", "asombrada", "atónita", "¿en serio?", "😮"),
                 CONFUSED to score(s, "no entiendo", "confundida", "desconcertada", "no me queda claro", "¿como?", "que raro"),
-                AFFECTIONATE to score(s, "carino", "te quiero", "me importas", "cuidate", "con ternura", "te acompano", "te acompanaria", "te acompane", "acompanarte", "cuenta conmigo", "💜", "❤️"),
-                PLAYFUL to score(s, "jeje", "😏", "😉", "te pille", "tramposo", "travieso", "bromista", "te tomo el pelo", "te sigo el juego"),
+                AFFECTIONATE to score(s, "carino", "te quiero", "me importas", "cuidate", "me alegra verte", "ven aqui", "con ternura", "te acompano", "te acompanaria", "te acompane", "acompanarte", "cuenta conmigo", "💜", "❤️"),
+                PLAYFUL to score(s, "jeje", "😏", "😉", "te pille", "tramposo", "travieso", "bromista", "que cruel jajaja", "anda ya", "te tomo el pelo", "te sigo el juego"),
                 AMUSED to score(s, "jaj", "jajaja", "😂", "🤣", "me hizo gracia", "me divierte", "que risa"),
-                HAPPY to score(s, "me alegra", "me alegro", "feliz", "contenta", "alegre", "genial", "perfecto", "que rico", "suena delicioso", "suena bien", "me apunto", "me encanta", "bien!", "sonrio", "😊", "✨"),
+                HAPPY to score(s, "me alegra", "me alegro", "feliz", "contenta", "alegre", "genial", "perfecto", "eso si me gusto", "que bonito", "que rico", "suena delicioso", "suena bien", "me apunto", "me encanta", "bien!", "sonrio", "😊", "✨"),
                 THINKING to score(s, "hmm", "interesante", "me pregunto", "que habra", "curioso", "dejame pensar", "reflexionar", "🤔"),
                 TIRED to score(s, "cansada", "tengo sueno", "agotada", "exhausta", "sonolienta", "me vence el sueno", "😴"),
                 SERIOUS to score(s, "importante", "en serio", "cuidado", "riesgo", "delicado", "preocupante", "debemos atender"),
