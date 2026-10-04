@@ -126,7 +126,7 @@ jobs:
           ORG_GRADLE_PROJECT_ARIA_CLOUD_CLIENT_TOKEN: ${{ secrets.ARIA_CLOUD_CLIENT_TOKEN }}
         run: gradle :app:assembleDebug --stacktrace --console=plain
 
-      - name: Check isolated voice libraries
+      - name: Check Piper Sherpa ARM64 libraries
         if: env.ARIA_BUILD_APK == 'true'
         shell: bash
         run: |
@@ -138,22 +138,20 @@ jobs:
           apk = Path('app/build/outputs/apk/debug/app-debug.apk')
           with zipfile.ZipFile(apk) as archive:
               names = set(archive.namelist())
-              abis = ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64')
-              for abi in abis:
-                  prefix = f'lib/{abi}/'
-                  assert prefix + 'libqwen3_tts_jni.so' in names, abi
-                  assert prefix + 'libggml-cpu.so' not in names, f'Conflicting voice GGML on {abi}'
-                  Path(f'/tmp/aria-qwen-{abi}.so').write_bytes(
-                      archive.read(prefix + 'libqwen3_tts_jni.so'))
-              # llama.cpp supports arm64 and x86_64; the 32-bit ABIs only
-              # contain AndroidX and voice libraries, as in the previous APK.
-              for abi in ('arm64-v8a', 'x86_64'):
-                  assert f'lib/{abi}/libai-chat.so' in names, abi
-                  assert f'lib/{abi}/libggml-base.so' in names, abi
+              abi = 'arm64-v8a'
+              prefix = f'lib/{abi}/'
+              sherpa_jni = prefix + 'libsherpa-onnx-jni.so'
+              onnxruntime = prefix + 'libonnxruntime.so'
+              assert sherpa_jni in names, f'Missing Sherpa JNI runtime for {abi}'
+              assert onnxruntime in names, f'Missing ONNX Runtime for {abi}'
+              assert prefix + 'libai-chat.so' in names, f'Missing llama.cpp runtime for {abi}'
+              assert prefix + 'libggml-base.so' in names, f'Missing llama.cpp base for {abi}'
+              Path('/tmp/aria-sherpa-arm64.so').write_bytes(archive.read(sherpa_jni))
+              Path('/tmp/aria-onnxruntime-arm64.so').write_bytes(archive.read(onnxruntime))
           PY
-          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
-            if readelf -d "/tmp/aria-qwen-${abi}.so" | grep -E 'NEEDED.*libggml'; then
-              echo "::error::Voice depends on shared GGML on ${abi}"
+          for library in /tmp/aria-sherpa-arm64.so /tmp/aria-onnxruntime-arm64.so; do
+            if readelf -d "$library" | grep -E 'NEEDED.*libggml'; then
+              echo "::error::Sherpa Piper runtime depends on llama.cpp GGML"
               exit 1
             fi
           done
