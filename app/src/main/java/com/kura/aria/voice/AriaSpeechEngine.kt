@@ -3,6 +3,7 @@ package com.kura.aria.voice
 import com.kura.aria.emotion.AriaEmotion
 import com.kura.aria.personality.ExpressionStyle
 import java.io.File
+import kotlinx.coroutines.CancellationException
 
 /**
  * Common boundary for local speech engines.
@@ -132,6 +133,9 @@ class PiperNeuralSpeechEngine(
             lastError = null
             state = SpeechEngineState.READY
             state
+        } catch (error: CancellationException) {
+            state = SpeechEngineState.UNINITIALIZED
+            throw error
         } catch (error: Throwable) {
             lastError = error.message ?: error.javaClass.simpleName
             state = SpeechEngineState.ERROR
@@ -147,8 +151,15 @@ class PiperNeuralSpeechEngine(
         if (spokenText.isBlank()) {
             return Result.failure(IllegalArgumentException("No hay texto hablable"))
         }
-        return runCatching {
-            backend.synthesize(request.copy(text = spokenText, speed = request.speed.coerceIn(0.85f, 1.15f)))
+        return try {
+            Result.success(backend.synthesize(request.copy(
+                text = spokenText,
+                speed = request.speed.coerceIn(0.85f, 1.15f)
+            )))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            Result.failure(error)
         }
     }
 
