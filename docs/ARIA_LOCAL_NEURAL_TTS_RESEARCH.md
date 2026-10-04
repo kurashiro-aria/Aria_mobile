@@ -21,6 +21,11 @@ Fuentes oficiales consultadas:
 
 ## Implementación
 
+sherpa-onnx v1.13.8 AAR incluye todas las ABI (~127.9 MB comprimidos en el
+artefacto); `arm64-v8a` aporta aproximadamente 31.9 MB de bibliotecas nativas
+antes de la compresión final del APK. Gradle filtra el APK de ARIA a
+`arm64-v8a`, que es la ABI objetivo del Xiaomi 17T.
+
 `AriaSpeechEngine` conserva el límite desacoplado y
 `PiperNeuralSpeechEngine` usa ahora `SherpaPiperBackend` cuando se crea con
 `forAndroid()`. El backend llama a la API oficial `OfflineTts` de
