@@ -53,6 +53,10 @@ import com.kura.aria.voice.AriaVoiceDirector
 import com.kura.aria.voice.AndroidVoiceDirector
 import com.kura.aria.voice.LocalSpeechOutput
 import com.kura.aria.voice.LocalSpeechInput
+import com.kura.aria.voice.PiperNeuralSpeechEngine
+import com.kura.aria.voice.PiperSpanishPrototype
+import com.kura.aria.voice.SpeechEngineState
+import com.kura.aria.voice.SpeechSynthesisRequest
 import com.kura.aria.voice.QwenB2SpeechOutput
 import com.kura.aria.voice.AriaVoiceDirector.cloudCandidates
 import com.kura.aria.voice.CloudVoiceClient
@@ -117,6 +121,8 @@ class MainActivity : AppCompatActivity() {
     private var loadingModelLabel: TextView? = null
     private var wakeButton: Button? = null
     private var speechOutput: LocalSpeechOutput? = null
+    private var neuralSpeechEngine: PiperNeuralSpeechEngine? = null
+    private var neuralLabStatusView: TextView? = null
     private var speechInput: LocalSpeechInput? = null
     private var dictationBase = ""
     private var b2SpeechOutput: QwenB2SpeechOutput? = null
@@ -1120,6 +1126,7 @@ class MainActivity : AppCompatActivity() {
             })
         }
         content.addView(contrast)
+        addNeuralTtsLab(content)
         diagnosticSwitch.setOnCheckedChangeListener { _, checked ->
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(EMOTION_DIAGNOSTICS, checked).apply()
             diagnosticText.visibility = if (checked) View.VISIBLE else View.GONE
@@ -1138,6 +1145,78 @@ class MainActivity : AppCompatActivity() {
         }
         AlertDialog.Builder(this).setTitle("Ajustes de voz").setView(content)
             .setPositiveButton("Listo", null).show()
+    }
+
+    /**
+     * Isolated local-neural lab. It never changes the automatic voice path:
+     * Android TTS remains the active fallback until a reviewed backend/model
+     * is installed and explicitly approved.
+     */
+    private fun addNeuralTtsLab(content: LinearLayout) {
+        content.addView(TextView(this).apply {
+            text = "TTS neuronal experimental"
+            setPadding(0, dp(16), 0, dp(4))
+        })
+        val status = TextView(this).apply {
+            setPadding(0, 0, 0, dp(8))
+            text = neuralLabStatus()
+        }
+        neuralLabStatusView = status
+        content.addView(status)
+        listOf(
+            AriaEmotion.NEUTRAL to ExpressionStyle.NATURAL,
+            AriaEmotion.HAPPY to ExpressionStyle.PLAYFUL,
+            AriaEmotion.EMBARRASSED to ExpressionStyle.SHY,
+            AriaEmotion.ANGRY to ExpressionStyle.SERIOUS,
+            AriaEmotion.SAD to ExpressionStyle.COMFORTING,
+            AriaEmotion.EXCITED to ExpressionStyle.EXCITED
+        ).forEach { (emotion, expression) ->
+            content.addView(Button(this).apply {
+                text = "Probar neuronal · ${emotion.name}"
+                setOnClickListener { runNeuralTtsPreview(emotion, expression) }
+            })
+        }
+    }
+
+    private fun neuralSpeechEngine(): PiperNeuralSpeechEngine =
+        neuralSpeechEngine ?: PiperNeuralSpeechEngine(
+            File(filesDir, "neural-tts/${PiperSpanishPrototype.MODEL_ID}")
+        ).also { neuralSpeechEngine = it }
+
+    private fun neuralLabStatus(): String {
+        val engine = neuralSpeechEngine
+        val state = engine?.state ?: SpeechEngineState.UNINITIALIZED
+        val detail = engine?.lastError ?: "Runtime/model externo aún no instalado"
+        return "Estado: $state\n" +
+            "Motor: ${PiperSpanishPrototype.descriptor.displayName}\n" +
+            "Modelo: ${PiperSpanishPrototype.MODEL_ID} (${PiperSpanishPrototype.MODEL_BYTES / (1024 * 1024)} MB aprox.)\n" +
+            "Offline · ARM64 previsto · sin controles neuronales de emoción\n" +
+            detail
+    }
+
+    private fun runNeuralTtsPreview(emotion: AriaEmotion, expression: ExpressionStyle) {
+        val engine = neuralSpeechEngine()
+        neuralLabStatusView?.text = "Cargando motor/modelo…"
+        uiScope.launch {
+            val state = withContext(Dispatchers.Default) { engine.initialize() }
+            neuralLabStatusView?.text = neuralLabStatus()
+            if (state != SpeechEngineState.READY) {
+                toast("TTS neuronal no disponible; se conserva Android TTS")
+                return@launch
+            }
+            val started = SystemClock.elapsedRealtime()
+            val result = withContext(Dispatchers.Default) {
+                engine.synthesize(SpeechSynthesisRequest(
+                    text = "Hola Kura. Esta es una prueba de mi voz.",
+                    emotion = emotion,
+                    expressionStyle = expression
+                ))
+            }
+            neuralLabStatusView?.text = neuralLabStatus() +
+                "\nSíntesis: ${SystemClock.elapsedRealtime() - started} ms"
+            if (result.isFailure) toast("Falló la prueba neuronal; Android TTS sigue disponible")
+            else toast("Audio neuronal generado; reproducción se habilitará con el backend aprobado")
+        }
     }
 
     private fun enableWakeListening() {
