@@ -1,6 +1,7 @@
 package com.kura.aria.voice
 
 import com.kura.aria.emotion.AriaEmotion
+import com.kura.aria.emotion.ConversationMood
 import com.kura.aria.personality.ExpressionStyle
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -46,7 +47,9 @@ internal data class SpeechSynthesisRequest(
     val text: String,
     val emotion: AriaEmotion = AriaEmotion.NEUTRAL,
     val expressionStyle: ExpressionStyle = ExpressionStyle.NATURAL,
-    val speed: Float = 1f
+    val speed: Float = 1f,
+    val mood: ConversationMood = ConversationMood.NEUTRAL,
+    val performanceProfile: VoicePerformanceProfile? = null
 )
 
 internal data class SpeechAudio(

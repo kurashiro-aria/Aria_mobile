@@ -59,21 +59,32 @@ internal class SherpaPiperBackend(
                 // captures a thread-local JNIEnv and a local callback reference in
                 // native code; Piper may call it from a worker thread, causing a
                 // fatal JNI abort that Kotlin try/catch cannot intercept.
-                val audio = runtime.generate(
-                    text = request.text,
-                    speed = request.speed.coerceIn(0.85f, 1.15f),
-                    silenceScale = 0.2f
-                )
+                val profile = request.performanceProfile
+                val pieces = if (profile == null) listOf(request.text) else
+                    request.text.split(Regex("(?<=[.!?])\\s+")).map(String::trim).filter(String::isNotEmpty)
+                val chunks = pieces.map { piece ->
+                    coroutineContext.ensureActive()
+                    if (cancelled.get()) throw CancellationException("Síntesis cancelada")
+                    runtime.generate(
+                        text = piece,
+                        speed = (profile?.speed ?: request.speed).coerceIn(0.85f, 1.15f),
+                        silenceScale = 0.2f
+                    )
+                }
                 if (cancelled.get()) throw CancellationException("Síntesis cancelada")
+                require(chunks.map { it.sampleRateHz }.distinct().size == 1) { "Frecuencia PCM inconsistente" }
+                val rate = chunks.first().sampleRateHz
+                val pauseSize = if (profile == null || chunks.size < 2) 0
+                    else (rate * profile.pauseBetweenSentencesMs / 1000f).toInt()
+                val totalSamples = chunks.sumOf { it.samples.size } + pauseSize * (chunks.size - 1).coerceAtLeast(0)
+                val pcm = ShortArray(totalSamples)
+                var offset = 0
+                chunks.forEachIndexed { index, chunk ->
+                    chunk.samples.forEach { sample -> pcm[offset++] = (sample.coerceIn(-1f, 1f) * 32767f).toInt().toShort() }
+                    if (index < chunks.lastIndex && pauseSize > 0) offset += pauseSize
+                }
                 lastFirstAudioMs = null // Non-streaming generation has no first-audio callback.
-                SpeechAudio(
-                    pcm16 = ShortArray(audio.samples.size) { index ->
-                        (audio.samples[index].coerceIn(-1f, 1f) * 32767f).toInt().toShort()
-                    },
-                    sampleRateHz = audio.sampleRateHz,
-                    synthesisMs = (System.nanoTime() - started) / 1_000_000,
-                    firstAudioMs = null
-                )
+                SpeechAudio(pcm, rate, (System.nanoTime() - started) / 1_000_000, null)
             }
         }
 

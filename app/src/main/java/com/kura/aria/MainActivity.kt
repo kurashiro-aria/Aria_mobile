@@ -48,6 +48,7 @@ import com.kura.aria.chat.ReplyQuality
 import com.kura.aria.memory.AriaMemory
 import com.kura.aria.memory.MemoryCommand
 import com.kura.aria.emotion.AriaEmotion
+import com.kura.aria.emotion.ConversationMood
 import com.kura.aria.emotion.MoodReader
 import com.kura.aria.voice.AriaVoiceDirector
 import com.kura.aria.voice.AndroidVoiceDirector
@@ -58,6 +59,8 @@ import com.kura.aria.voice.PiperModelState
 import com.kura.aria.voice.PiperModelStore
 import com.kura.aria.voice.PiperModelPackage
 import com.kura.aria.voice.PiperSpanishPrototype
+import com.kura.aria.voice.VoiceLabPreset
+import com.kura.aria.voice.VoicePerformanceProfile
 import com.kura.aria.voice.PiperAudioTrackPlayer
 import com.kura.aria.voice.SpeechEngineState
 import com.kura.aria.voice.SpeechSynthesisRequest
@@ -131,6 +134,7 @@ class MainActivity : AppCompatActivity() {
     private val neuralAudioPlayer = PiperAudioTrackPlayer()
     private var neuralTestButton: Button? = null
     private var neuralLabState = PiperModelState.NOT_INSTALLED
+    private var neuralLabPreset = VoiceLabPreset.NEUTRAL
     private var neuralDownloadMs: Long? = null
     private var neuralSynthesisMs: Long? = null
     private var neuralFirstAudioMs: Long? = null
@@ -1169,8 +1173,16 @@ class MainActivity : AppCompatActivity() {
      */
     private fun addNeuralTtsLab(content: LinearLayout) {
         content.addView(TextView(this).apply {
-            text = "Voz neuronal experimental\nMotor: Piper / sherpa-onnx\nModelo: es_MX-claude-high"
+            text = "Voz neuronal experimental\nCandidata A · Piper es_MX-claude-high\nFemenina · español México · 22.05 kHz · MIT"
             setPadding(0, dp(16), 0, dp(4))
+        })
+        content.addView(RadioGroup(this).apply {
+            orientation = RadioGroup.VERTICAL
+            addView(RadioButton(this@MainActivity).apply {
+                text = "Candidata A · es_MX-claude-high · femenina · MIT · 63 MB"
+                isChecked = true
+                isEnabled = false
+            })
         })
         val status = TextView(this).apply {
             setPadding(0, 0, 0, dp(8))
@@ -1189,6 +1201,20 @@ class MainActivity : AppCompatActivity() {
             neuralTestButton = this
         })
         content.addView(Button(this).apply {
+            text = "Emoción de prueba: ${neuralLabPreset.label}"
+            setOnClickListener {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Prueba de emociones")
+                    .setSingleChoiceItems(VoiceLabPreset.entries.map { it.label }.toTypedArray(), neuralLabPreset.ordinal) { dialog, which ->
+                        neuralLabPreset = VoiceLabPreset.entries[which]
+                        text = "Emoción de prueba: ${neuralLabPreset.label}"
+                        dialog.dismiss()
+                    }
+                    .setNegativeButton("Cerrar", null)
+                    .show()
+            }
+        })
+        content.addView(Button(this).apply {
             text = "Detener"
             setOnClickListener {
                 neuralModelStore?.cancel()
@@ -1198,7 +1224,7 @@ class MainActivity : AppCompatActivity() {
             }
         })
         content.addView(TextView(this).apply {
-            text = "Prueba neutral aislada. La voz automática de ARIA conserva Android TTS."
+            text = "Laboratorio local: velocidad y pausas PCM; Piper no ofrece control nativo de emoción o pitch.\nLa voz automática de ARIA conserva Android TTS."
             setPadding(0, dp(4), 0, 0)
         })
     }
@@ -1303,9 +1329,13 @@ class MainActivity : AppCompatActivity() {
                 stage = "native_generate"
                 val result = withContext(Dispatchers.Default) {
                     engine.synthesize(SpeechSynthesisRequest(
-                        text = "Hola Kura. Esta es una prueba de mi voz.",
-                        emotion = AriaEmotion.NEUTRAL,
-                        expressionStyle = ExpressionStyle.NATURAL
+                        text = "Hola Kura. ¿Cómo estás? Me alegra mucho verte otra vez.",
+                        emotion = neuralLabPreset.emotion,
+                        mood = neuralLabPreset.mood,
+                        expressionStyle = neuralLabPreset.expressionStyle,
+                        performanceProfile = VoicePerformanceProfile.from(
+                            neuralLabPreset.emotion, neuralLabPreset.mood, neuralLabPreset.expressionStyle
+                        )
                     ))
                 }
                 val audio = result.getOrNull()

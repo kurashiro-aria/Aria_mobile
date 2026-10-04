@@ -132,6 +132,32 @@ class AriaSpeechEngineTest {
         assertTrue(released)
     }
 
+    @Test fun labProfileAddsRealPcmPauseBetweenSentenceGenerations() = runBlocking {
+        val calls = mutableListOf<String>()
+        val backend = SherpaPiperBackend(PiperOfflineTtsRuntimeFactory {
+            object : PiperOfflineTtsRuntime {
+                override fun generate(text: String, speed: Float, silenceScale: Float): PiperGeneratedSamples {
+                    calls += text
+                    return PiperGeneratedSamples(floatArrayOf(0.5f), 22_050)
+                }
+                override fun release() = Unit
+            }
+        })
+        backend.load(Files.createTempDirectory("aria-piper-profile").toFile())
+
+        val audio = backend.synthesize(SpeechSynthesisRequest(
+            text = "Hola. ¿Cómo estás?",
+            performanceProfile = VoicePerformanceProfile(1f, 100)
+        ))
+
+        assertEquals(listOf("Hola.", "¿Cómo estás?"), calls)
+        assertEquals(2 + 2_205, audio.pcm16.size)
+        assertEquals(16_383.toShort(), audio.pcm16.first())
+        assertEquals(16_383.toShort(), audio.pcm16.last())
+        assertTrue(audio.pcm16.sliceArray(1 until audio.pcm16.lastIndex).all { it == 0.toShort() })
+        backend.close()
+    }
+
     private fun installedModelDirectory(prefix: String): File =
         Files.createTempDirectory(prefix).toFile().apply {
             File(this, PiperSpanishPrototype.MODEL_FILE).writeText("placeholder")
