@@ -1233,13 +1233,18 @@ class MainActivity : AppCompatActivity() {
         neuralLabState = PiperModelState.DOWNLOADING
         neuralLabStatusView?.text = neuralLabStatus()
         val started = SystemClock.elapsedRealtime()
+        var lastProgressUpdate = 0L
         uiScope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     neuralModelStore().install { downloaded, total ->
-                        runOnUiThread {
-                            neuralLabStatusView?.text = neuralLabStatus() +
-                                "\nDescarga: ${downloaded / (1024 * 1024)} / ${total / (1024 * 1024)} MB"
+                        val now = SystemClock.elapsedRealtime()
+                        if (downloaded == total || now - lastProgressUpdate >= 250L) {
+                            lastProgressUpdate = now
+                            runOnUiThread {
+                                neuralLabStatusView?.text = neuralLabStatus() +
+                                    "\nDescarga: ${downloaded / (1024 * 1024)} / ${total / (1024 * 1024)} MB"
+                            }
                         }
                     }
                 }
