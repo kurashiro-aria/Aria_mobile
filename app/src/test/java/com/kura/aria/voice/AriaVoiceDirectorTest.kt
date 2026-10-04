@@ -50,4 +50,16 @@ class AriaVoiceDirectorTest {
         assertEquals("Hola Kura", spokenTextForCloud("*sonríe* Hola Kura"))
         assertTrue(spokenTextForCloud("*sonríe*").isBlank())
     }
+    @Test fun androidContrastProfilesRemainDistinctAndBounded() {
+        val profiles = listOf(
+            AriaEmotion.NEUTRAL, AriaEmotion.HAPPY, AriaEmotion.EMBARRASSED,
+            AriaEmotion.ANGRY, AriaEmotion.SAD, AriaEmotion.EXCITED
+        ).map { emotion ->
+            AndroidVoiceDirector.forEmotion(emotion, AriaEmotion.styleFor(emotion, ExpressionStyle.NATURAL))
+        }
+        assertEquals(6, profiles.distinct().size)
+        assertTrue(profiles.all { it.pitch in 1.02f..1.12f })
+        assertTrue(profiles.all { it.rate in 0.91f..1.10f })
+        assertTrue(profiles.all { it.volume in 0.86f..1f })
+    }
 }

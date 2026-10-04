@@ -5,13 +5,34 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
+import com.kura.aria.emotion.AriaEmotion
+import com.kura.aria.personality.ExpressionStyle
+
+data class LocalSpeechDiagnostics(
+    val emotion: String,
+    val expressionStyle: String,
+    val voiceId: String,
+    val pitch: Float,
+    val rate: Float,
+    val volume: Float
+)
 
 /** Android offline voice adapter. No speech or transcript is sent to a server. */
-class LocalSpeechOutput(context: Context, private val onStatus: (String) -> Unit) {
+class LocalSpeechOutput(
+    context: Context,
+    private val onStatus: (String) -> Unit,
+    private val onApplied: ((LocalSpeechDiagnostics) -> Unit)? = null
+) {
     private var tts: TextToSpeech? = null
     private var ready = false
     private var closed = false
-    private var pending: Pair<String, VoiceDirection>? = null
+    private data class PendingSpeech(
+        val text: String,
+        val direction: VoiceDirection,
+        val emotion: AriaEmotion?,
+        val expression: ExpressionStyle?
+    )
+    private var pending: PendingSpeech? = null
     private var requestId = 0L
 
     init {
@@ -19,7 +40,10 @@ class LocalSpeechOutput(context: Context, private val onStatus: (String) -> Unit
             if (!closed) {
                 ready = result == TextToSpeech.SUCCESS && selectAriaVoice()
                 onStatus(if (ready) "Voz local de ARIA lista" else "Voz local de ARIA no disponible")
-                if (ready) pending?.let { (text, direction) -> pending = null; speak(text, direction) }
+                if (ready) pending?.let {
+                    pending = null
+                    speak(it.text, it.direction, it.emotion, it.expression)
+                }
                 else pending = null
             }
         }
@@ -35,10 +59,15 @@ class LocalSpeechOutput(context: Context, private val onStatus: (String) -> Unit
         return synthesizer.setVoice(chosen) == TextToSpeech.SUCCESS
     }
 
-    fun speak(text: String, direction: VoiceDirection) {
+    fun speak(text: String, direction: VoiceDirection,
+              emotion: AriaEmotion? = null,
+              expression: ExpressionStyle? = null) {
         val spokenText = spokenTextForCloud(text)
         if (closed || spokenText.isBlank()) return
-        if (!ready) { pending = spokenText to direction; return }
+        if (!ready) {
+            pending = PendingSpeech(spokenText, direction, emotion, expression)
+            return
+        }
         val synthesizer = tts ?: return
         synthesizer.stop()
         synthesizer.setSpeechRate(direction.rate)
@@ -46,6 +75,14 @@ class LocalSpeechOutput(context: Context, private val onStatus: (String) -> Unit
         val params = Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, direction.volume.coerceIn(0f, 1f))
         }
+        onApplied?.invoke(LocalSpeechDiagnostics(
+            emotion = emotion?.name ?: "UNKNOWN",
+            expressionStyle = expression?.name ?: "UNKNOWN",
+            voiceId = AndroidVoiceDirector.ARIA_VOICE_ID,
+            pitch = direction.pitch,
+            rate = direction.rate,
+            volume = direction.volume.coerceIn(0f, 1f)
+        ))
         val id = (++requestId).toString()
         synthesizer.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String) = Unit

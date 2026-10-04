@@ -91,6 +91,8 @@ class MainActivity : AppCompatActivity() {
     private val portraits = mutableMapOf<Int, Bitmap>()
     private var lastEmotion = AriaEmotion.NEUTRAL
     private var lastExpressionStyle = ExpressionStyle.NATURAL
+    private var lastSpeechDiagnostics: com.kura.aria.voice.LocalSpeechDiagnostics? = null
+    private var emotionalDiagnosticsView: TextView? = null
     private var displayedEmotion: AriaEmotion? = null
     private lateinit var engine: InferenceEngine
     private lateinit var cloudBrain: CloudInferenceEngine
@@ -152,6 +154,7 @@ class MainActivity : AppCompatActivity() {
         private const val INITIATIVE_ENABLED = "initiative_enabled"
         private const val LAST_INITIATIVE = "last_initiative"
         private const val VOICE_ENABLED = "voice_enabled"
+        private const val EMOTION_DIAGNOSTICS = "emotion_diagnostics"
         private const val VOICE_B2 = "voice_b2_experimental"
         private const val WAKE_ENABLED = "wake_listening_enabled"
         private const val BG = "#100D16"
@@ -1090,6 +1093,37 @@ class MainActivity : AppCompatActivity() {
         content.addView(TextView(this).apply {
             text = "B2 experimental está pausada. La lectura usa la voz española instalada en Android."
         })
+        val diagnosticSwitch = Switch(this).apply {
+            text = "Diagnóstico emocional"
+            isChecked = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(EMOTION_DIAGNOSTICS, false)
+        }
+        content.addView(diagnosticSwitch)
+        val diagnosticText = TextView(this).apply {
+            setPadding(0, dp(6), 0, dp(8))
+            text = emotionalDiagnosticText()
+            visibility = if (diagnosticSwitch.isChecked) View.VISIBLE else View.GONE
+        }
+        emotionalDiagnosticsView = diagnosticText
+        content.addView(diagnosticText)
+        content.addView(TextView(this).apply {
+            text = "Prueba de contraste vocal (misma frase, perfiles actuales)"
+            setPadding(0, dp(8), 0, dp(4))
+        })
+        val contrast = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        listOf(
+            AriaEmotion.NEUTRAL, AriaEmotion.HAPPY, AriaEmotion.EMBARRASSED,
+            AriaEmotion.ANGRY, AriaEmotion.SAD, AriaEmotion.EXCITED
+        ).forEach { emotion ->
+            contrast.addView(Button(this).apply {
+                text = emotion.name
+                setOnClickListener { playEmotionalContrast(emotion) }
+            })
+        }
+        content.addView(contrast)
+        diagnosticSwitch.setOnCheckedChangeListener { _, checked ->
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(EMOTION_DIAGNOSTICS, checked).apply()
+            diagnosticText.visibility = if (checked) View.VISIBLE else View.GONE
+        }
         wakeSwitch.setOnCheckedChangeListener { _, checked ->
             if (checked) enableWakeListening()
             else {
@@ -1225,8 +1259,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startVoice() {
-        if (speechOutput == null) speechOutput = LocalSpeechOutput(applicationContext) { status ->
+        if (speechOutput == null) speechOutput = LocalSpeechOutput(applicationContext, { status ->
             runOnUiThread { if (!isFinishing && !isDestroyed) toast(status) }
+        }) { diagnostics ->
+            lastSpeechDiagnostics = diagnostics
+            runOnUiThread { emotionalDiagnosticsView?.text = emotionalDiagnosticText() }
         }
     }
 
@@ -1237,7 +1274,24 @@ class MainActivity : AppCompatActivity() {
         val spokenText = com.kura.aria.voice.spokenTextForCloud(answer)
         if (spokenText.isBlank()) return
         startVoice()
-        speechOutput?.speak(spokenText, AndroidVoiceDirector.forEmotion(emotion, expression))
+        speechOutput?.speak(spokenText, AndroidVoiceDirector.forEmotion(emotion, expression), emotion, expression)
+    }
+
+    private fun emotionalDiagnosticText(): String {
+        val value = lastSpeechDiagnostics ?: return "Aún no se ha reproducido una respuesta local."
+        return "Emotion: ${value.emotion}\n" +
+            "Style: ${value.expressionStyle}\n" +
+            "Avatar: ${value.emotion}\n" +
+            "Pitch: %.2f\nRate: %.2f\nVolume: %.2f\nVoice: %s"
+                .format(value.pitch, value.rate, value.volume, value.voiceId)
+    }
+
+    private fun playEmotionalContrast(emotion: AriaEmotion) {
+        startVoice()
+        val style = AriaEmotion.styleFor(emotion, ExpressionStyle.NATURAL)
+        val direction = AndroidVoiceDirector.forEmotion(emotion, style)
+        speechOutput?.stop()
+        speechOutput?.speak("Hola Kura. Esta es una prueba de mi voz.", direction, emotion, style)
     }
 
     /** Safe diagnostics: state and voice parameters only, never conversation text. */
