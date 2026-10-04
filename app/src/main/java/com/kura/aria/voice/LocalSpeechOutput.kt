@@ -35,6 +35,9 @@ class LocalSpeechOutput(
     private var pending: PendingSpeech? = null
     private var requestId = 0L
 
+    constructor(context: Context, onStatus: (String) -> Unit) :
+        this(context, onStatus, null)
+
     init {
         tts = TextToSpeech(context.applicationContext) { result ->
             if (!closed) {
@@ -59,9 +62,9 @@ class LocalSpeechOutput(
         return synthesizer.setVoice(chosen) == TextToSpeech.SUCCESS
     }
 
-    fun speak(text: String, direction: VoiceDirection,
-              emotion: AriaEmotion? = null,
-              expression: ExpressionStyle? = null) {
+    internal fun speak(text: String, direction: VoiceDirection,
+                       emotion: AriaEmotion? = null,
+                       expression: ExpressionStyle? = null) {
         val spokenText = spokenTextForCloud(text)
         if (closed || spokenText.isBlank()) return
         if (!ready) {
