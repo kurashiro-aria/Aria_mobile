@@ -310,12 +310,11 @@ class MainActivity : AppCompatActivity() {
             menu.add("Rendimiento")
             menu.add("Personalidad")
             menu.add("Voz")
-            menu.add("Voz Cloud experimental")
-            menu.add("Escuchar muestra B2")
+            menu.add("Voz neuronal experimental")
             menu.add("Repetir última respuesta")
             menu.add("Detener voz")
             menu.add("Interfaz")
-            menu.add("Sistema • ${BuildConfig.VERSION_NAME}")
+            menu.add("Sistema • ${BuildConfig.VERSION_NAME} · Build ${BuildConfig.VERSION_CODE}")
             menu.add("Ajustes")
             setOnMenuItemClickListener {
                 when (it.title.toString()) {
@@ -329,8 +328,7 @@ class MainActivity : AppCompatActivity() {
                     "Rendimiento" -> showPerformanceDialog()
                     "Personalidad" -> toast("ARIA Personality v2 activa")
                     "Voz" -> showVoiceDialog()
-                    "Voz Cloud experimental" -> showCloudVoicePreviewDialog()
-                    "Escuchar muestra B2" -> playB2Sample()
+                    "Voz neuronal experimental" -> showNeuralTtsLabDialog()
                     "Repetir última respuesta" -> lastSpokenReply?.let { (text, emotion) ->
                         cancelCloudVoicePlayback("replay")
                         if (b2Enabled()) b2SpeechOutput?.speak(text)
@@ -1094,6 +1092,11 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(12), dp(20), dp(8))
         }
+        content.addView(TextView(this).apply {
+            text = "ARIA ${BuildConfig.VERSION_NAME}\nBuild: ${BuildConfig.VERSION_CODE}"
+            setTextColor(Color.parseColor(PURPLE))
+            setPadding(0, 0, 0, dp(12))
+        })
         val wakeSwitch = Switch(this).apply {
             text = "Escucha de micrófono siempre activa"
             isChecked = wakeEnabled()
@@ -1166,7 +1169,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun addNeuralTtsLab(content: LinearLayout) {
         content.addView(TextView(this).apply {
-            text = "TTS neuronal experimental"
+            text = "Voz neuronal experimental\nMotor: Piper / sherpa-onnx\nModelo: es_MX-claude-high"
             setPadding(0, dp(16), 0, dp(4))
         })
         val status = TextView(this).apply {
@@ -1184,6 +1187,15 @@ class MainActivity : AppCompatActivity() {
             isEnabled = neuralModelStore()?.isInstalled() == true
             setOnClickListener { runNeuralTtsPreview() }
             neuralTestButton = this
+        })
+        content.addView(Button(this).apply {
+            text = "Detener"
+            setOnClickListener {
+                neuralModelStore?.cancel()
+                neuralSpeechEngine?.cancel()
+                neuralAudioPlayer.stop()
+                neuralLabStatusView?.text = neuralLabStatus()
+            }
         })
         content.addView(TextView(this).apply {
             text = "Prueba neutral aislada. La voz automática de ARIA conserva Android TTS."
@@ -1595,9 +1607,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun showNeuralTtsLabDialog() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(8))
+        }
+        addNeuralTtsLab(content)
+        AlertDialog.Builder(this).setTitle("Voz neuronal experimental")
+            .setView(content)
+            .setNegativeButton("Cerrar") { _, _ ->
+                neuralAudioPlayer.stop()
+                neuralSpeechEngine?.cancel()
+            }
+            .show()
+    }
+
     private fun showVoiceDialog() {
         AlertDialog.Builder(this).setTitle("Voz local de ARIA")
-            .setMessage("B2 experimental está pausada para dedicar los recursos a la conversación. Puedes escuchar la muestra B2 en el menú. La lectura automática usa la voz española de Android.")
+            .setMessage("B2 experimental está pausada para dedicar los recursos a la conversación. La lectura automática usa la voz española instalada en Android.")
             .setPositiveButton("Usar voz Android") { _, _ ->
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
                     .putBoolean(VOICE_B2, false).apply()
