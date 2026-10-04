@@ -5,9 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import com.k2fsa.sherpa.onnx.GenerationConfig
 import com.k2fsa.sherpa.onnx.OfflineTts
-import com.k2fsa.sherpa.onnx.OfflineTtsConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
+import com.k2fsa.sherpa.onnx.getOfflineTtsConfig
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
@@ -18,7 +16,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** Official sherpa-onnx OfflineTts adapter for the selected Piper VITS model. */
-class SherpaPiperBackend : PiperNeuralBackend {
+internal class SherpaPiperBackend : PiperNeuralBackend {
     private val lifecycle = Any()
     private val generation = Mutex()
     private val cancelled = AtomicBoolean(false)
@@ -30,24 +28,20 @@ class SherpaPiperBackend : PiperNeuralBackend {
         synchronized(lifecycle) {
             if (tts != null) return@withContext
         }
-        val config = OfflineTtsConfig.builder()
-            .setModel(
-                OfflineTtsModelConfig.builder()
-                    .setNumThreads(2)
-                    .setDebug(false)
-                    .setVits(
-                        OfflineTtsVitsModelConfig.builder()
-                            .setModel(File(modelDirectory, PiperSpanishPrototype.MODEL_FILE).absolutePath)
-                            .setTokens(File(modelDirectory, PiperSpanishPrototype.TOKENS_FILE).absolutePath)
-                            .setDataDir(File(modelDirectory, PiperSpanishPrototype.DATA_DIR).absolutePath)
-                            .build()
-                    )
-                    .build()
-            )
-            .setMaxNumSentences(1)
-            .setSilenceScale(0.2f)
-            .build()
-        val created = OfflineTts(config)
+        val config = getOfflineTtsConfig(
+            modelDir = modelDirectory.absolutePath,
+            modelName = PiperSpanishPrototype.MODEL_FILE,
+            acousticModelName = "",
+            vocoder = "",
+            voices = "",
+            lexicon = "",
+            dataDir = File(modelDirectory, PiperSpanishPrototype.DATA_DIR).absolutePath,
+            dictDir = "",
+            ruleFsts = "",
+            ruleFars = "",
+            numThreads = 2,
+        )
+        val created = OfflineTts(config = config)
         synchronized(lifecycle) {
             if (tts == null) tts = created else created.release()
         }
@@ -104,7 +98,7 @@ class SherpaPiperBackend : PiperNeuralBackend {
 }
 
 /** Plays the returned mono PCM16 without creating a persistent player. */
-class PiperAudioTrackPlayer {
+internal class PiperAudioTrackPlayer {
     private val lock = Any()
     @Volatile private var activeTrack: AudioTrack? = null
 

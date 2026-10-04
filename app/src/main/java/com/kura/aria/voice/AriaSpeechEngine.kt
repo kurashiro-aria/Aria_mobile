@@ -12,7 +12,7 @@ import kotlinx.coroutines.CancellationException
  * engines implement this boundary so a future runtime can be added without
  * coupling MainActivity to ONNX/sherpa classes.
  */
-interface AriaSpeechEngine {
+internal interface AriaSpeechEngine {
     val descriptor: SpeechEngineDescriptor
     val state: SpeechEngineState
 
@@ -22,7 +22,7 @@ interface AriaSpeechEngine {
     fun close()
 }
 
-enum class SpeechEngineState {
+internal enum class SpeechEngineState {
     UNINITIALIZED,
     LOADING,
     READY,
@@ -31,7 +31,7 @@ enum class SpeechEngineState {
     CLOSED
 }
 
-data class SpeechEngineDescriptor(
+internal data class SpeechEngineDescriptor(
     val id: String,
     val displayName: String,
     val language: String,
@@ -42,14 +42,14 @@ data class SpeechEngineDescriptor(
     val limitation: String? = null
 )
 
-data class SpeechSynthesisRequest(
+internal data class SpeechSynthesisRequest(
     val text: String,
     val emotion: AriaEmotion = AriaEmotion.NEUTRAL,
     val expressionStyle: ExpressionStyle = ExpressionStyle.NATURAL,
     val speed: Float = 1f
 )
 
-data class SpeechAudio(
+internal data class SpeechAudio(
     val pcm16: ShortArray,
     val sampleRateHz: Int,
     val synthesisMs: Long,
@@ -61,7 +61,7 @@ data class SpeechAudio(
  * The files are intentionally external to Git/APK until their licensing and
  * size have been approved.
  */
-object PiperSpanishPrototype {
+internal object PiperSpanishPrototype {
     const val MODEL_ID = "es_MX-claude-high"
     const val MODEL_FILE = "es_MX-claude-high.onnx"
     const val CONFIG_FILE = "es_MX-claude-high.onnx.json"
@@ -82,7 +82,7 @@ object PiperSpanishPrototype {
     )
 }
 
-interface PiperNeuralBackend {
+internal interface PiperNeuralBackend {
     suspend fun load(modelDirectory: File)
     suspend fun synthesize(request: SpeechSynthesisRequest): SpeechAudio
     fun cancel()
@@ -94,7 +94,7 @@ interface PiperNeuralBackend {
  * so this boundary remains unit-testable without Android, ONNX, or audio
  * hardware; the Android factory below supplies the official implementation.
  */
-class PiperNeuralSpeechEngine(
+internal class PiperNeuralSpeechEngine(
     private val modelDirectory: File,
     private val backend: PiperNeuralBackend? = null
 ) : AriaSpeechEngine {
@@ -177,8 +177,8 @@ class PiperNeuralSpeechEngine(
 }
 
 /** The normal automatic fallback remains the existing Android TTS adapter. */
-enum class SpeechEngineSelection { NEURAL, ANDROID_TTS_FALLBACK }
+internal enum class SpeechEngineSelection { NEURAL, ANDROID_TTS_FALLBACK }
 
-fun selectSpeechEngine(neuralState: SpeechEngineState): SpeechEngineSelection =
+internal fun selectSpeechEngine(neuralState: SpeechEngineState): SpeechEngineSelection =
     if (neuralState == SpeechEngineState.READY) SpeechEngineSelection.NEURAL
     else SpeechEngineSelection.ANDROID_TTS_FALLBACK
