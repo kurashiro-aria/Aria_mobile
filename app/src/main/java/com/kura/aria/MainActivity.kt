@@ -1287,35 +1287,50 @@ class MainActivity : AppCompatActivity() {
         neuralLabState = PiperModelState.LOADING
         neuralLabStatusView?.text = "Cargando motor/modelo…"
         uiScope.launch {
-            val state = withContext(Dispatchers.Default) { engine.initialize() }
-            neuralLabState = if (state == SpeechEngineState.READY) PiperModelState.READY else PiperModelState.ERROR
-            neuralLabStatusView?.text = neuralLabStatus()
-            if (state != SpeechEngineState.READY) {
-                toast("TTS neuronal no disponible; Android TTS sigue intacto")
-                return@launch
-            }
-            val started = SystemClock.elapsedRealtime()
-            val result = withContext(Dispatchers.Default) {
-                engine.synthesize(SpeechSynthesisRequest(
-                    text = "Hola Kura. Esta es una prueba de mi voz.",
-                    emotion = AriaEmotion.NEUTRAL,
-                    expressionStyle = ExpressionStyle.NATURAL
-                ))
-            }
-            val audio = result.getOrNull()
-            neuralSynthesisMs = audio?.synthesisMs
-            neuralFirstAudioMs = audio?.firstAudioMs
-            neuralTotalMs = SystemClock.elapsedRealtime() - started
-            neuralLabStatusView?.text = neuralLabStatus()
-            if (audio == null) {
-                toast("Falló la síntesis neuronal; Android TTS sigue disponible")
-                return@launch
-            }
+            var stage = "native_model_init"
             try {
+                Log.i("ARIA.PiperTTS", "event=preview_start stage=$stage runtime=sherpa-onnx version=1.13.8")
+                val state = withContext(Dispatchers.Default) { engine.initialize() }
+                neuralLabState = if (state == SpeechEngineState.READY) PiperModelState.READY else PiperModelState.ERROR
+                neuralLabStatusView?.text = neuralLabStatus()
+                Log.i("ARIA.PiperTTS", "event=model_init_complete state=$state")
+                if (state != SpeechEngineState.READY) {
+                    Log.w("ARIA.PiperTTS", "event=preview_stopped stage=init state=$state")
+                    toast("TTS neuronal no disponible; Android TTS sigue intacto")
+                    return@launch
+                }
+                val started = SystemClock.elapsedRealtime()
+                stage = "native_generate"
+                val result = withContext(Dispatchers.Default) {
+                    engine.synthesize(SpeechSynthesisRequest(
+                        text = "Hola Kura. Esta es una prueba de mi voz.",
+                        emotion = AriaEmotion.NEUTRAL,
+                        expressionStyle = ExpressionStyle.NATURAL
+                    ))
+                }
+                val audio = result.getOrNull()
+                if (audio == null) {
+                    neuralLabState = PiperModelState.ERROR
+                    neuralLabStatusView?.text = neuralLabStatus()
+                    Log.e("ARIA.PiperTTS", "event=preview_failed stage=$stage type=${result.exceptionOrNull()?.javaClass?.simpleName ?: "Unknown"}")
+                    toast("Falló la síntesis neuronal; Android TTS sigue disponible")
+                    return@launch
+                }
+                neuralSynthesisMs = audio.synthesisMs
+                neuralFirstAudioMs = audio.firstAudioMs
+                neuralTotalMs = SystemClock.elapsedRealtime() - started
+                Log.i("ARIA.PiperTTS", "event=synthesis_complete pcm_samples=${audio.pcm16.size} sample_rate=${audio.sampleRateHz}")
+                neuralLabStatusView?.text = neuralLabStatus()
+                stage = "audio_track"
                 neuralAudioPlayer.play(audio)
+                Log.i("ARIA.PiperTTS", "event=playback_complete")
             } catch (cancel: CancellationException) {
                 throw cancel
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
+                neuralLabState = PiperModelState.ERROR
+                neuralLabStatusView?.text = neuralLabStatus() + "\nFallo en ${stage.replace('_', ' ')}"
+                // Never log spoken text, model paths, or audio; keep only stage and exception type.
+                Log.e("ARIA.PiperTTS", "event=preview_failed stage=$stage type=${error.javaClass.simpleName}")
                 toast("No se pudo reproducir la prueba neuronal")
             }
         }

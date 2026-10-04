@@ -56,6 +56,14 @@ internal data class SpeechAudio(
     val firstAudioMs: Long? = null
 )
 
+/** Reject malformed native output before it can be handed to AudioTrack. */
+internal fun validateSpeechAudio(audio: SpeechAudio): SpeechAudio {
+    require(audio.sampleRateHz in 8_000..48_000) { "Frecuencia PCM inválida" }
+    require(audio.pcm16.isNotEmpty()) { "El motor no generó muestras PCM" }
+    require(audio.synthesisMs >= 0) { "Duración de síntesis inválida" }
+    return audio
+}
+
 /**
  * Stable descriptor for the one model selected for the first prototype.
  * The files are intentionally external to Git/APK until their licensing and
@@ -151,13 +159,16 @@ internal class PiperNeuralSpeechEngine(
             return Result.failure(IllegalArgumentException("No hay texto hablable"))
         }
         return try {
-            Result.success(backend.synthesize(request.copy(
+            val audio = backend.synthesize(request.copy(
                 text = spokenText,
                 speed = request.speed.coerceIn(0.85f, 1.15f)
-            )))
+            ))
+            Result.success(validateSpeechAudio(audio))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
+            lastError = "Síntesis neuronal falló (${error.javaClass.simpleName})"
+            state = SpeechEngineState.ERROR
             Result.failure(error)
         }
     }

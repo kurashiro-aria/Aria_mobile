@@ -15,12 +15,26 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+internal data class PiperGeneratedSamples(val samples: FloatArray, val sampleRateHz: Int)
+
+/** Small seam around the JNI object so the critical generation path is testable. */
+internal interface PiperOfflineTtsRuntime {
+    fun generate(text: String, speed: Float, silenceScale: Float): PiperGeneratedSamples
+    fun release()
+}
+
+internal fun interface PiperOfflineTtsRuntimeFactory {
+    fun create(modelDirectory: File): PiperOfflineTtsRuntime
+}
+
 /** Official sherpa-onnx OfflineTts adapter for the selected Piper VITS model. */
-internal class SherpaPiperBackend : PiperNeuralBackend {
+internal class SherpaPiperBackend(
+    private val runtimeFactory: PiperOfflineTtsRuntimeFactory = PiperOfflineTtsRuntimeFactory(::SherpaOfflineTtsRuntime)
+) : PiperNeuralBackend {
     private val lifecycle = Any()
     private val generation = Mutex()
     private val cancelled = AtomicBoolean(false)
-    @Volatile private var tts: OfflineTts? = null
+    @Volatile private var tts: PiperOfflineTtsRuntime? = null
     @Volatile var lastFirstAudioMs: Long? = null
         private set
 
@@ -28,20 +42,7 @@ internal class SherpaPiperBackend : PiperNeuralBackend {
         synchronized(lifecycle) {
             if (tts != null) return@withContext
         }
-        val config = getOfflineTtsConfig(
-            modelDir = modelDirectory.absolutePath,
-            modelName = PiperSpanishPrototype.MODEL_FILE,
-            acousticModelName = "",
-            vocoder = "",
-            voices = "",
-            lexicon = "",
-            dataDir = File(modelDirectory, PiperSpanishPrototype.DATA_DIR).absolutePath,
-            dictDir = "",
-            ruleFsts = "",
-            ruleFars = "",
-            numThreads = 2,
-        )
-        val created = OfflineTts(config = config)
+        val created = runtimeFactory.create(modelDirectory)
         synchronized(lifecycle) {
             if (tts == null) tts = created else created.release()
         }
@@ -54,34 +55,24 @@ internal class SherpaPiperBackend : PiperNeuralBackend {
                 val runtime = tts ?: error("sherpa-onnx aún no está cargado")
                 cancelled.set(false)
                 val started = System.nanoTime()
-                var firstAudioMs: Long? = null
-                val config = GenerationConfig().apply {
-                    sid = 0
-                    speed = request.speed.coerceIn(0.85f, 1.15f)
-                    silenceScale = 0.2f
-                }
-                val audio = runtime.generateWithConfigAndCallback(
+                // Do not use generateWithConfigAndCallback here. sherpa-onnx v1.13.8
+                // captures a thread-local JNIEnv and a local callback reference in
+                // native code; Piper may call it from a worker thread, causing a
+                // fatal JNI abort that Kotlin try/catch cannot intercept.
+                val audio = runtime.generate(
                     text = request.text,
-                    config = config,
-                    callback = { _ ->
-                    if (cancelled.get()) {
-                        0
-                    } else {
-                        if (firstAudioMs == null) firstAudioMs = (System.nanoTime() - started) / 1_000_000
-                        1
-                    }
-                    }
+                    speed = request.speed.coerceIn(0.85f, 1.15f),
+                    silenceScale = 0.2f
                 )
                 if (cancelled.get()) throw CancellationException("Síntesis cancelada")
-                val samples = audio.samples
-                lastFirstAudioMs = firstAudioMs
+                lastFirstAudioMs = null // Non-streaming generation has no first-audio callback.
                 SpeechAudio(
-                    pcm16 = ShortArray(samples.size) { index ->
-                        (samples[index].coerceIn(-1f, 1f) * 32767f).toInt().toShort()
+                    pcm16 = ShortArray(audio.samples.size) { index ->
+                        (audio.samples[index].coerceIn(-1f, 1f) * 32767f).toInt().toShort()
                     },
-                    sampleRateHz = audio.sampleRate,
+                    sampleRateHz = audio.sampleRateHz,
                     synthesisMs = (System.nanoTime() - started) / 1_000_000,
-                    firstAudioMs = firstAudioMs
+                    firstAudioMs = null
                 )
             }
         }
@@ -91,10 +82,40 @@ internal class SherpaPiperBackend : PiperNeuralBackend {
     override fun close() {
         synchronized(lifecycle) {
             cancelled.set(true)
-            tts?.release()
+            runCatching { tts?.release() }
             tts = null
         }
     }
+
+    private class SherpaOfflineTtsRuntime(modelDirectory: File) : PiperOfflineTtsRuntime {
+        private val tts = OfflineTts(config = getOfflineTtsConfig(
+            modelDir = modelDirectory.absolutePath,
+            modelName = PiperSpanishPrototype.MODEL_FILE,
+            acousticModelName = "",
+            vocoder = "",
+            voices = "",
+            lexicon = "",
+            dataDir = File(modelDirectory, PiperSpanishPrototype.DATA_DIR).absolutePath,
+            dictDir = "",
+            ruleFsts = "",
+            ruleFars = "",
+            numThreads = 2,
+        ))
+
+        override fun generate(text: String, speed: Float, silenceScale: Float): PiperGeneratedSamples {
+            val config = GenerationConfig().apply {
+                sid = 0
+                this.speed = speed
+                this.silenceScale = silenceScale
+            }
+            // This blocking overload passes a null callback through JNI.
+            val audio = tts.generateWithConfig(text, config)
+            return PiperGeneratedSamples(audio.samples, audio.sampleRate)
+        }
+
+        override fun release() = tts.release()
+    }
+
 }
 
 /** Plays the returned mono PCM16 without creating a persistent player. */
@@ -103,12 +124,14 @@ internal class PiperAudioTrackPlayer {
     @Volatile private var activeTrack: AudioTrack? = null
 
     suspend fun play(audio: SpeechAudio): Long = withContext(Dispatchers.IO) {
+        validateSpeechAudio(audio)
         stop()
         val minBuffer = AudioTrack.getMinBufferSize(
             audio.sampleRateHz,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(audio.sampleRateHz / 5)
+        )
+        check(minBuffer > 0) { "AudioTrack rechazó el formato PCM ($minBuffer)" }
         val track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -126,6 +149,10 @@ internal class PiperAudioTrackPlayer {
             .setBufferSizeInBytes(minBuffer)
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
+        check(track.state == AudioTrack.STATE_INITIALIZED) {
+            track.release()
+            "AudioTrack no pudo inicializarse"
+        }
         synchronized(lock) { activeTrack = track }
         val started = System.nanoTime()
         try {

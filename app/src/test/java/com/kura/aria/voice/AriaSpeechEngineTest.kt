@@ -79,4 +79,63 @@ class AriaSpeechEngineTest {
         assertTrue(engine.synthesize(SpeechSynthesisRequest("*sonríe*")).isFailure)
         assertEquals(0, calls)
     }
+
+    @Test fun nativeSynthesisFailureIsReturnedAndDisablesNeuralEngine() = runBlocking {
+        val dir = installedModelDirectory("aria-native-failure")
+        val backend = object : PiperNeuralBackend {
+            override suspend fun load(modelDirectory: File) = Unit
+            override suspend fun synthesize(request: SpeechSynthesisRequest): SpeechAudio =
+                throw IllegalStateException("native generation failed")
+            override fun cancel() = Unit
+            override fun close() = Unit
+        }
+        val engine = PiperNeuralSpeechEngine(dir, backend)
+        assertEquals(SpeechEngineState.READY, engine.initialize())
+
+        val result = engine.synthesize(SpeechSynthesisRequest("Hola Kura"))
+
+        assertTrue(result.isFailure)
+        assertEquals(SpeechEngineState.ERROR, engine.state)
+        assertTrue(engine.lastError!!.contains("IllegalStateException"))
+        assertEquals(SpeechEngineSelection.ANDROID_TTS_FALLBACK, selectSpeechEngine(engine.state))
+    }
+
+    @Test fun malformedPcmIsRejectedBeforePlayback() {
+        assertTrue(runCatching { validateSpeechAudio(SpeechAudio(shortArrayOf(), 22_050, 1)) }.isFailure)
+        assertTrue(runCatching { validateSpeechAudio(SpeechAudio(shortArrayOf(1), -1, 1)) }.isFailure)
+        assertEquals(22_050, validateSpeechAudio(SpeechAudio(shortArrayOf(1), 22_050, 1)).sampleRateHz)
+    }
+
+    @Test fun sherpaGenerationUsesNonCallbackRuntimePath() = runBlocking {
+        var seenText = ""
+        var seenSpeed = 0f
+        var released = false
+        val backend = SherpaPiperBackend(PiperOfflineTtsRuntimeFactory {
+            object : PiperOfflineTtsRuntime {
+                override fun generate(text: String, speed: Float, silenceScale: Float): PiperGeneratedSamples {
+                    seenText = text
+                    seenSpeed = speed
+                    return PiperGeneratedSamples(floatArrayOf(-1f, 0f, 0.5f), 22_050)
+                }
+                override fun release() { released = true }
+            }
+        })
+        backend.load(Files.createTempDirectory("aria-sherpa-runtime").toFile())
+
+        val audio = backend.synthesize(SpeechSynthesisRequest("Prueba sin callback", speed = 9f))
+
+        assertEquals("Prueba sin callback", seenText)
+        assertEquals(1.15f, seenSpeed)
+        assertEquals(listOf((-32767).toShort(), 0.toShort(), 16383.toShort()), audio.pcm16.toList())
+        assertTrue(audio.firstAudioMs == null)
+        backend.close()
+        assertTrue(released)
+    }
+
+    private fun installedModelDirectory(prefix: String): File =
+        Files.createTempDirectory(prefix).toFile().apply {
+            File(this, PiperSpanishPrototype.MODEL_FILE).writeText("placeholder")
+            File(this, PiperSpanishPrototype.TOKENS_FILE).writeText("placeholder")
+            File(this, PiperSpanishPrototype.DATA_DIR).mkdirs()
+        }
 }
