@@ -54,7 +54,11 @@ import com.kura.aria.voice.AndroidVoiceDirector
 import com.kura.aria.voice.LocalSpeechOutput
 import com.kura.aria.voice.LocalSpeechInput
 import com.kura.aria.voice.PiperNeuralSpeechEngine
+import com.kura.aria.voice.PiperModelState
+import com.kura.aria.voice.PiperModelStore
+import com.kura.aria.voice.PiperModelPackage
 import com.kura.aria.voice.PiperSpanishPrototype
+import com.kura.aria.voice.PiperAudioTrackPlayer
 import com.kura.aria.voice.SpeechEngineState
 import com.kura.aria.voice.SpeechSynthesisRequest
 import com.kura.aria.voice.QwenB2SpeechOutput
@@ -123,6 +127,14 @@ class MainActivity : AppCompatActivity() {
     private var speechOutput: LocalSpeechOutput? = null
     private var neuralSpeechEngine: PiperNeuralSpeechEngine? = null
     private var neuralLabStatusView: TextView? = null
+    private var neuralModelStore: PiperModelStore? = null
+    private val neuralAudioPlayer = PiperAudioTrackPlayer()
+    private var neuralTestButton: Button? = null
+    private var neuralLabState = PiperModelState.NOT_INSTALLED
+    private var neuralDownloadMs: Long? = null
+    private var neuralSynthesisMs: Long? = null
+    private var neuralFirstAudioMs: Long? = null
+    private var neuralTotalMs: Long? = null
     private var speechInput: LocalSpeechInput? = null
     private var dictationBase = ""
     private var b2SpeechOutput: QwenB2SpeechOutput? = null
@@ -1163,59 +1175,132 @@ class MainActivity : AppCompatActivity() {
         }
         neuralLabStatusView = status
         content.addView(status)
-        listOf(
-            AriaEmotion.NEUTRAL to ExpressionStyle.NATURAL,
-            AriaEmotion.HAPPY to ExpressionStyle.PLAYFUL,
-            AriaEmotion.EMBARRASSED to ExpressionStyle.SHY,
-            AriaEmotion.ANGRY to ExpressionStyle.SERIOUS,
-            AriaEmotion.SAD to ExpressionStyle.COMFORTING,
-            AriaEmotion.EXCITED to ExpressionStyle.EXCITED
-        ).forEach { (emotion, expression) ->
-            content.addView(Button(this).apply {
-                text = "Probar neuronal · ${emotion.name}"
-                setOnClickListener { runNeuralTtsPreview(emotion, expression) }
-            })
-        }
+        content.addView(Button(this).apply {
+            text = "Preparar voz neuronal"
+            setOnClickListener { prepareNeuralModel() }
+        })
+        content.addView(Button(this).apply {
+            text = "Probar voz neuronal"
+            isEnabled = neuralModelStore()?.isInstalled() == true
+            setOnClickListener { runNeuralTtsPreview() }
+            neuralTestButton = this
+        })
+        content.addView(TextView(this).apply {
+            text = "Prueba neutral aislada. La voz automática de ARIA conserva Android TTS."
+            setPadding(0, dp(4), 0, 0)
+        })
     }
 
+    private fun neuralModelStore(): PiperModelStore =
+        neuralModelStore ?: PiperModelStore(File(filesDir, "neural-tts")).also { neuralModelStore = it }
+
     private fun neuralSpeechEngine(): PiperNeuralSpeechEngine =
-        neuralSpeechEngine ?: PiperNeuralSpeechEngine(
-            File(filesDir, "neural-tts/${PiperSpanishPrototype.MODEL_ID}")
-        ).also { neuralSpeechEngine = it }
+        neuralSpeechEngine ?: PiperNeuralSpeechEngine.forAndroid(neuralModelStore().modelDirectory)
+            .also { neuralSpeechEngine = it }
 
     private fun neuralLabStatus(): String {
         val engine = neuralSpeechEngine
-        val state = engine?.state ?: SpeechEngineState.UNINITIALIZED
-        val detail = engine?.lastError ?: "Runtime/model externo aún no instalado"
+        val installed = neuralModelStore?.isInstalled() == true
+        val state = when {
+            neuralLabState == PiperModelState.DOWNLOADING -> "DESCARGANDO"
+            neuralLabState == PiperModelState.LOADING -> "CARGANDO"
+            neuralLabState == PiperModelState.ERROR -> "ERROR"
+            engine?.state == SpeechEngineState.LOADING -> "CARGANDO"
+            engine?.state == SpeechEngineState.READY && installed -> "LISTO"
+            installed -> "NO CARGADO"
+            else -> "NO INSTALADO"
+        }
+        val detail = engine?.lastError
         return "Estado: $state\n" +
             "Motor: ${PiperSpanishPrototype.descriptor.displayName}\n" +
-            "Modelo: ${PiperSpanishPrototype.MODEL_ID} (${PiperSpanishPrototype.MODEL_BYTES / (1024 * 1024)} MB aprox.)\n" +
-            "Offline · ARM64 previsto · sin controles neuronales de emoción\n" +
-            detail
+            "Modelo: ${PiperSpanishPrototype.MODEL_ID} (${PiperModelPackage.MODEL_BYTES / (1024 * 1024)} MB)\n" +
+            "Runtime: sherpa-onnx 1.13.8 · arm64-v8a · PCM16 mono ${PiperSpanishPrototype.SAMPLE_RATE_HZ} Hz\n" +
+            "T_download: ${neuralDownloadMs?.let { "$it ms" } ?: "—"}\n" +
+            "T_model_load: ${engine?.modelLoadMs?.let { "$it ms" } ?: "—"}\n" +
+            "T_first_audio: ${neuralFirstAudioMs?.let { "$it ms" } ?: "—"}\n" +
+            "T_synthesis: ${neuralSynthesisMs?.let { "$it ms" } ?: "—"}\n" +
+            "T_total: ${neuralTotalMs?.let { "$it ms" } ?: "—"}" +
+            (detail?.let { "\n$it" } ?: "")
     }
 
-    private fun runNeuralTtsPreview(emotion: AriaEmotion, expression: ExpressionStyle) {
+    private fun prepareNeuralModel() {
+        if (neuralModelStore().isInstalled()) {
+            neuralLabState = PiperModelState.READY
+            neuralLabStatusView?.text = neuralLabStatus()
+            toast("La voz neuronal ya está preparada")
+            return
+        }
+        neuralLabState = PiperModelState.DOWNLOADING
+        neuralLabStatusView?.text = neuralLabStatus()
+        val started = SystemClock.elapsedRealtime()
+        uiScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    neuralModelStore().install { downloaded, total ->
+                        runOnUiThread {
+                            neuralLabStatusView?.text = neuralLabStatus() +
+                                "\nDescarga: ${downloaded / (1024 * 1024)} / ${total / (1024 * 1024)} MB"
+                        }
+                    }
+                }
+                neuralDownloadMs = SystemClock.elapsedRealtime() - started
+                neuralLabState = PiperModelState.READY
+                neuralTestButton?.isEnabled = true
+                neuralLabStatusView?.text = neuralLabStatus()
+                toast("Voz neuronal preparada; pulsa Probar")
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Throwable) {
+                neuralLabState = PiperModelState.ERROR
+                neuralLabStatusView?.text = neuralLabStatus() +
+                    "\n${error.message ?: "Error de instalación"}"
+                toast("No se pudo preparar la voz neuronal")
+            }
+        }
+    }
+
+    private fun runNeuralTtsPreview() {
+        if (!neuralModelStore().isInstalled()) {
+            toast("Primero pulsa Preparar voz neuronal")
+            return
+        }
+        neuralAudioPlayer.stop()
+        neuralSpeechEngine?.cancel()
         val engine = neuralSpeechEngine()
+        neuralLabState = PiperModelState.LOADING
         neuralLabStatusView?.text = "Cargando motor/modelo…"
         uiScope.launch {
             val state = withContext(Dispatchers.Default) { engine.initialize() }
+            neuralLabState = if (state == SpeechEngineState.READY) PiperModelState.READY else PiperModelState.ERROR
             neuralLabStatusView?.text = neuralLabStatus()
             if (state != SpeechEngineState.READY) {
-                toast("TTS neuronal no disponible; se conserva Android TTS")
+                toast("TTS neuronal no disponible; Android TTS sigue intacto")
                 return@launch
             }
             val started = SystemClock.elapsedRealtime()
             val result = withContext(Dispatchers.Default) {
                 engine.synthesize(SpeechSynthesisRequest(
                     text = "Hola Kura. Esta es una prueba de mi voz.",
-                    emotion = emotion,
-                    expressionStyle = expression
+                    emotion = AriaEmotion.NEUTRAL,
+                    expressionStyle = ExpressionStyle.NATURAL
                 ))
             }
-            neuralLabStatusView?.text = neuralLabStatus() +
-                "\nSíntesis: ${SystemClock.elapsedRealtime() - started} ms"
-            if (result.isFailure) toast("Falló la prueba neuronal; Android TTS sigue disponible")
-            else toast("Audio neuronal generado; reproducción se habilitará con el backend aprobado")
+            val audio = result.getOrNull()
+            neuralSynthesisMs = audio?.synthesisMs
+            neuralFirstAudioMs = audio?.firstAudioMs
+            neuralTotalMs = SystemClock.elapsedRealtime() - started
+            neuralLabStatusView?.text = neuralLabStatus()
+            if (audio == null) {
+                toast("Falló la síntesis neuronal; Android TTS sigue disponible")
+                return@launch
+            }
+            try {
+                neuralAudioPlayer.play(audio)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Throwable) {
+                toast("No se pudo reproducir la prueba neuronal")
+            }
         }
     }
 
@@ -1638,6 +1723,8 @@ class MainActivity : AppCompatActivity() {
             AriaForegroundService.commandListener = null
         speechOutput?.close(); speechOutput = null
         b2SpeechOutput?.close(); b2SpeechOutput = null
+        neuralModelStore?.cancel()
+        neuralSpeechEngine?.cancel(); neuralAudioPlayer.stop(); neuralSpeechEngine?.close()
         if (::cloudVoicePlayer.isInitialized) cloudVoicePlayer.close()
         if (::cloudBrain.isInitialized) runBlocking { cloudBrain.close() }
         uiScope.cancel()

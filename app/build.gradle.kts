@@ -18,6 +18,7 @@ android {
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt") } }
 
     defaultConfig {
+        ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild { cmake { targets += "qwen3_tts_jni" } }
     }
 
@@ -59,6 +60,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.8")
+    implementation("org.apache.commons:commons-compress:1.27.1")
     implementation(project(":llama"))
 }
 

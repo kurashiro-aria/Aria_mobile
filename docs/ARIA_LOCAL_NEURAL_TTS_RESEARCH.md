@@ -1,12 +1,12 @@
 # ARIA local neural TTS research
 
-Estado: prototipo aislado, no conectado a la lectura automática y sin APK en esta etapa.
+Estado: prototipo acústico aislado, no conectado a la lectura automática y sin APK en esta etapa.
 
 ## Candidatos comparados
 
 | Motor/modelo | Español / voz | Tamaño de modelo | Android ARM64/offline | Expresividad real | Licencia/riesgo | Decisión |
 |---|---|---:|---|---|---|---|
-| sherpa-onnx + Piper `es_MX-claude-high` | Español México, 1 speaker, 22.05 kHz | 63.1 MB ONNX + JSON | Sí: sherpa publica APKs `arm64-v8a` para modelos Piper | Prosodia VITS aprendida y `speed`; no hay controles neuronales de emoción ni género/edad declarados | Modelo card Apache-2.0; revisar también licencia de runtime/modelo antes de distribuir | **Elegido para el adaptador** |
+| sherpa-onnx + Piper `es_MX-claude-high` | Español México, 1 speaker, 22.05 kHz | 62,949,322 bytes ONNX; 67,207,890 bytes `.tar.bz2` | Sí: runtime oficial Android/JitPack y APKs `arm64-v8a` | Prosodia VITS aprendida y `speed`; no hay controles neuronales de emoción ni género/edad declarados | Modelo card Apache-2.0; runtime Apache-2.0 | **Elegido para la prueba acústica** |
 | sherpa-onnx + Piper `es_AR-daniela-high` | Español Argentina, 1 speaker, 22.05 kHz | 114 MB ONNX + JSON | Sí, mismo runtime | Igual limitación de emoción; el nombre no es metadato de género | Dataset del model card CC BY-SA 4.0; requiere atribución y revisión antes de distribución | No elegido por tamaño/licencia |
 | Kokoro-ONNX `kokoro-v1.0` + voces | Multilingüe, incluye ruta de fonemización española | ~326 MB FP32; ~80 MB cuantizado según proyecto | ONNX sí, pero no hay una integración Android oficial equivalente en este repo | Varias voces; no se demuestra control nativo de emoción para este prototipo | Wrapper MIT/modelo Apache-2.0; tamaño y G2P nativo elevan riesgo | No elegido para V1 |
 
@@ -21,17 +21,28 @@ Fuentes oficiales consultadas:
 
 ## Implementación
 
-Se añadió `AriaSpeechEngine` y el adaptador `PiperNeuralSpeechEngine`. El
-adaptador carga una sola vez, verifica el `.onnx`, `tokens.txt` y el directorio
-`espeak-ng-data` del paquete sherpa-onnx, sanitiza
-`*acciones*`, admite cancelación y puede recibir un backend fake en tests.
+`AriaSpeechEngine` conserva el límite desacoplado y
+`PiperNeuralSpeechEngine` usa ahora `SherpaPiperBackend` cuando se crea con
+`forAndroid()`. El backend llama a la API oficial `OfflineTts` de
+sherpa-onnx 1.13.8, configura el modelo VITS/Piper con `model.onnx`,
+`tokens.txt` y `espeak-ng-data`, y convierte el `FloatArray` devuelto a PCM16
+mono para `AudioTrack`. El runtime se obtiene como el artefacto Android
+oficial `com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.8`; el APK se limita a
+`arm64-v8a` en el dispositivo objetivo.
 
-No se añadieron binarios, `.so`, AAR ni modelos al repositorio. En el estado
-actual el adaptador informa `UNAVAILABLE` porque faltan el runtime sherpa-onnx
-ARM64 y el modelo revisado. La selección cae explícitamente a Android TTS; no
-se usa Cloud Voice, B2 ni otra aplicación.
+`PiperModelStore` descarga únicamente el archivo oficial fijado, verifica su
+SHA-256 (`ec33fb689c248fe64810aab564cba97babf0f506672cfd404928d46e751a4721`), extrae con Apache Commons Compress en un directorio
+temporal, valida el hash del ONNX (`6b7a54f5fcc8c9ce3788cd308a26cfa429ad025cdff4a7a6c34d025d0d229341`) y realiza la instalación de
+   forma atómica. No se suben binarios ni el modelo al repositorio, y no se
+   descarga de nuevo si la instalación validada ya existe.
 
-## Bloqueo antes de una prueba acústica
+El laboratorio de Ajustes solo muestra `NO INSTALADO`, `DESCARGANDO`,
+`CARGANDO`, `LISTO` o `ERROR`, ofrece **Preparar voz neuronal** y después
+**Probar voz neuronal** con la frase neutral fija. La ruta automática sigue
+usando Android TTS `es-us-x-esc-local`; Piper no afecta Cloud Voice, B2 ni el
+chat.
+
+## Limitaciones de la prueba acústica
 
 Piper es una opción práctica para calidad/prosodia local, pero no cumple por
 sí sola la exigencia de emoción neuronal controlable. `emotion` y
@@ -40,12 +51,8 @@ pero el backend Piper no los interpreta como emociones. No se debe afirmar que
 los botones de emoción producen actuación emocional hasta medirlo en el
 dispositivo.
 
-Para continuar se necesita una decisión explícita sobre:
-
-1. incorporar el runtime sherpa-onnx ARM64 revisado;
-2. obtener y validar `es_MX-claude-high.onnx` + su JSON (63.1 MB, sin subirlo
-   al repositorio si no se aprueba el tamaño/licencia);
-3. implementar la unión JNI/AudioTrack y medir carga, síntesis y RAM en el
-   Xiaomi 17T;
-4. aceptar que Piper no ofrece emociones neuronales nativas, o seleccionar
-   posteriormente otro modelo entrenado para expresividad.
+La prueba debe ejecutarse en Xiaomi 17T para obtener `T_download`,
+`T_model_load`, `T_first_audio`, `T_synthesis` y `T_total`. Piper no ofrece
+emociones neuronales nativas: `emotion`/`expressionStyle` se conservan en el
+contrato, pero esta etapa solo sintetiza neutral y no pretende demostrar
+actuación emocional.

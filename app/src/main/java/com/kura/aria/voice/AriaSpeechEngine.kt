@@ -52,7 +52,8 @@ data class SpeechSynthesisRequest(
 data class SpeechAudio(
     val pcm16: ShortArray,
     val sampleRateHz: Int,
-    val synthesisMs: Long
+    val synthesisMs: Long,
+    val firstAudioMs: Long? = null
 )
 
 /**
@@ -63,9 +64,10 @@ data class SpeechAudio(
 object PiperSpanishPrototype {
     const val MODEL_ID = "es_MX-claude-high"
     const val MODEL_FILE = "es_MX-claude-high.onnx"
+    const val CONFIG_FILE = "es_MX-claude-high.onnx.json"
     const val TOKENS_FILE = "tokens.txt"
     const val DATA_DIR = "espeak-ng-data"
-    const val MODEL_BYTES = 63_122_309L
+    const val MODEL_BYTES = PiperModelPackage.MODEL_BYTES
     const val SAMPLE_RATE_HZ = 22_050
 
     val descriptor = SpeechEngineDescriptor(
@@ -88,12 +90,9 @@ interface PiperNeuralBackend {
 }
 
 /**
- * Adapter for sherpa-onnx's OfflineTts/Piper runtime.
- *
- * This commit deliberately does not bundle native libraries or a 63 MB model.
- * Until a reviewed ARM64 runtime is supplied, the engine reports UNAVAILABLE
- * and the caller must keep using Android TTS.  A fake backend can be injected
- * in tests without requiring Android, ONNX, or audio hardware.
+ * Adapter for sherpa-onnx's OfflineTts/Piper runtime.  The backend is injected
+ * so this boundary remains unit-testable without Android, ONNX, or audio
+ * hardware; the Android factory below supplies the official implementation.
  */
 class PiperNeuralSpeechEngine(
     private val modelDirectory: File,
@@ -169,6 +168,11 @@ class PiperNeuralSpeechEngine(
         if (state == SpeechEngineState.CLOSED) return
         backend?.close()
         state = SpeechEngineState.CLOSED
+    }
+
+    companion object {
+        fun forAndroid(modelDirectory: File): PiperNeuralSpeechEngine =
+            PiperNeuralSpeechEngine(modelDirectory, SherpaPiperBackend())
     }
 }
 
