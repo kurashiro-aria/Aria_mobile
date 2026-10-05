@@ -25,13 +25,13 @@ print('APK identity and version agree with build metadata.')
 PY
 
 contents="$(unzip -l "$apk")"
-printf '%s\n' "$contents" | grep -q 'lib/arm64-v8a/libpockettts_jni.so' || {
+grep -q 'lib/arm64-v8a/libpockettts_jni.so' <<<"$contents" || {
   echo "::error::Pocket TTS JNI library missing for arm64-v8a"; exit 1;
 }
-printf '%s\n' "$contents" | grep -q 'lib/arm64-v8a/libonnxruntime.so' || {
+grep -q 'lib/arm64-v8a/libonnxruntime.so' <<<"$contents" || {
   echo "::error::ONNX Runtime missing for arm64-v8a"; exit 1;
 }
-if printf '%s\n' "$contents" | grep -Eq 'flow_lm_(main|flow)|mimi_(encoder|decoder)\.onnx|text_conditioner\.onnx'; then
+if grep -Eq 'flow_lm_(main|flow)|mimi_(encoder|decoder)\.onnx|text_conditioner\.onnx' <<<"$contents"; then
   echo "::error::Pocket model weights must not be packaged in the APK"; exit 1
 fi
 apk_bytes="$(stat -c '%s' "$apk")"
