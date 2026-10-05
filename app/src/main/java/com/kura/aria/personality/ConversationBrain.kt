@@ -6,7 +6,7 @@ import com.kura.aria.memory.AriaMemory
 import com.kura.aria.memory.MemorySelector
 import java.text.Normalizer
 
-/** Phase 1: cheap turn interpretation. Qwen still decides what ARIA says. */
+/** Phase 1: cheap turn interpretation. The Cloud Brain decides what ARIA says. */
 internal enum class ConversationIntent {
     NEW_TOPIC, FOLLOW_UP, ANSWER, QUESTION, ROLEPLAY_ACTION, ROLEPLAY_MIXED, RECALL, COMMAND, SOCIAL
 }

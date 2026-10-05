@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val ariaVersionName = "0.2.49"
+val ariaVersionName = "0.2.50"
 val cloudEndpoint = providers.gradleProperty("ARIA_CLOUD_ENDPOINT").orElse("https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev").get()
 val cloudClientToken = providers.gradleProperty("ARIA_CLOUD_CLIENT_TOKEN").orElse("").get()
 
@@ -15,11 +15,8 @@ android {
 
     buildFeatures { buildConfig = true }
 
-    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt") } }
-
     defaultConfig {
         ndk { abiFilters += "arm64-v8a" }
-        externalNativeBuild { cmake { targets += "qwen3_tts_jni" } }
     }
 
     namespace = "com.kura.aria"
@@ -46,7 +43,7 @@ android {
         applicationId = "com.kura.aria"
         minSdk = 33
         targetSdk = 35
-        versionCode = 64
+        versionCode = 65
         versionName = ariaVersionName
         resValue("string", "app_name", "ARIA Mobile $ariaVersionName")
         buildConfigField("String", "ARIA_CLOUD_ENDPOINT",
@@ -60,7 +57,6 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.8")
     implementation("org.apache.commons:commons-compress:1.27.1")
     implementation(project(":llama"))
 }

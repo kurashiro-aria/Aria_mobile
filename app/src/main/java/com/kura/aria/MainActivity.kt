@@ -57,20 +57,6 @@ import com.kura.aria.voice.AriaVoiceDirector
 import com.kura.aria.voice.AndroidVoiceDirector
 import com.kura.aria.voice.LocalSpeechOutput
 import com.kura.aria.voice.LocalSpeechInput
-import com.kura.aria.voice.PiperNeuralSpeechEngine
-import com.kura.aria.voice.PiperModelState
-import com.kura.aria.voice.PiperModelStore
-import com.kura.aria.voice.PiperModelPackage
-import com.kura.aria.voice.PiperSpanishPrototype
-import com.kura.aria.voice.VoiceLabPreset
-import com.kura.aria.voice.VoicePerformanceProfile
-import com.kura.aria.voice.PiperAudioTrackPlayer
-import com.kura.aria.voice.SpeechEngineState
-import com.kura.aria.voice.SpeechSynthesisRequest
-import com.kura.aria.voice.QwenB2SpeechOutput
-import com.kura.aria.voice.QwenLabState
-import com.kura.aria.voice.QwenVoiceLabContract
-import com.kura.aria.voice.QwenVoiceLabService
 import com.kura.aria.voice.AriaVoiceDirector.cloudCandidates
 import com.kura.aria.voice.CloudVoiceClient
 import com.kura.aria.voice.CloudVoiceException
@@ -134,20 +120,8 @@ class MainActivity : AppCompatActivity() {
     private var loadingModelLabel: TextView? = null
     private var wakeButton: Button? = null
     private var speechOutput: LocalSpeechOutput? = null
-    private var neuralSpeechEngine: PiperNeuralSpeechEngine? = null
-    private var neuralLabStatusView: TextView? = null
-    private var neuralModelStore: PiperModelStore? = null
-    private val neuralAudioPlayer = PiperAudioTrackPlayer()
-    private var neuralTestButton: Button? = null
-    private var neuralLabState = PiperModelState.NOT_INSTALLED
-    private var neuralLabPreset = VoiceLabPreset.NEUTRAL
-    private var neuralDownloadMs: Long? = null
-    private var neuralSynthesisMs: Long? = null
-    private var neuralFirstAudioMs: Long? = null
-    private var neuralTotalMs: Long? = null
     private var speechInput: LocalSpeechInput? = null
     private var dictationBase = ""
-    private var b2SpeechOutput: QwenB2SpeechOutput? = null
     private var cloudVoiceClient: CloudVoiceClient? = null
     private lateinit var cloudVoicePlayer: CloudVoicePlayer
     private val cloudVoiceMutex = Mutex()
@@ -157,7 +131,6 @@ class MainActivity : AppCompatActivity() {
     private var lastSpokenReply: Pair<String, AriaEmotion>? = null
     private var voiceInForeground = false
     private var pendingWakePermission = false
-    private var b2Preparing = false
     private val wakeCommandListener: (String) -> Unit = { command -> runOnUiThread { acceptWakeCommand(command) } }
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
@@ -183,7 +156,6 @@ class MainActivity : AppCompatActivity() {
         private const val LAST_INITIATIVE = "last_initiative"
         private const val VOICE_ENABLED = "voice_enabled"
         private const val EMOTION_DIAGNOSTICS = "emotion_diagnostics"
-        private const val VOICE_B2 = "voice_b2_experimental"
         private const val WAKE_ENABLED = "wake_listening_enabled"
         private const val BG = "#100D16"
         private const val PANEL = "#1A1523"
@@ -298,7 +270,7 @@ class MainActivity : AppCompatActivity() {
         chatHistory = ChatHistory(applicationContext)
         ariaMemory = AriaMemory(applicationContext)
         conversationManager = ConversationManager(applicationContext)
-        if (voiceEnabled() && !b2Enabled()) startVoice()
+        if (voiceEnabled()) startVoice()
         val savedMessages = chatHistory.readAll()
         if (savedMessages.isEmpty()) aria(AriaPersonality.welcome) else savedMessages.forEach { addMessage(it.role, it.text) }
         savedMessages.lastOrNull { it.role == "ARIA" }?.let {
@@ -320,8 +292,6 @@ class MainActivity : AppCompatActivity() {
             menu.add("Rendimiento")
             menu.add("Personalidad")
             menu.add("Voz")
-            menu.add("Voz neuronal experimental")
-            menu.add("Qwen Voice Lab")
             menu.add("Repetir última respuesta")
             menu.add("Detener voz")
             menu.add("Interfaz")
@@ -339,17 +309,13 @@ class MainActivity : AppCompatActivity() {
                     "Rendimiento" -> showPerformanceDialog()
                     "Personalidad" -> toast("ARIA Personality v2 activa")
                     "Voz" -> showVoiceDialog()
-                    "Voz neuronal experimental" -> showNeuralTtsLabDialog()
-                    "Qwen Voice Lab" -> showQwenVoiceLabDialog()
                     "Repetir última respuesta" -> lastSpokenReply?.let { (text, emotion) ->
                         cancelCloudVoicePlayback("replay")
-                        if (b2Enabled()) b2SpeechOutput?.speak(text)
                         else {
                             startVoice()
                             speechOutput?.speak(text, AndroidVoiceDirector.forEmotion(emotion, lastExpressionStyle))
                         }
                     } ?: toast("Aún no hay una respuesta nueva para leer")
-                    "Detener voz" -> { speechOutput?.stop(); b2SpeechOutput?.stop() }
                     "Interfaz" -> toast("Interfaz ARIA Character")
                     "Ajustes" -> showSettingsDialog()
                     else -> if (it.title?.toString()?.startsWith("Sistema") == true)
@@ -745,7 +711,6 @@ class MainActivity : AppCompatActivity() {
         stopDictation()
         if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_PAUSE)
         speechOutput?.stop()
-        b2SpeechOutput?.stop()
         samplePlayer?.release(); samplePlayer = null
         AriaMemory.command(message)?.let { command ->
             input.text.clear()
@@ -1088,9 +1053,7 @@ class MainActivity : AppCompatActivity() {
         if (stroke != null) setStroke(dp(1), Color.parseColor(stroke))
     }
 
-    private fun voiceEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_ENABLED, true)
-    // B2 permanece congelada. Conservamos la preferencia y el código para una tarea futura.
-    private fun b2Enabled() = false
+    private fun voiceEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(VOICE_ENABLED, false)
     private fun wakeEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(WAKE_ENABLED, false)
 
     private fun wakeService(action: String) {
@@ -1124,7 +1087,7 @@ class MainActivity : AppCompatActivity() {
         }
         content.addView(speechSwitch)
         content.addView(TextView(this).apply {
-            text = "B2 experimental está pausada. La lectura usa la voz española instalada en Android."
+            text = "No hay motor TTS local instalado. Pocket TTS queda pendiente de integración."
         })
         val diagnosticSwitch = Switch(this).apply {
             text = "Diagnóstico emocional"
@@ -1153,7 +1116,6 @@ class MainActivity : AppCompatActivity() {
             })
         }
         content.addView(contrast)
-        addNeuralTtsLab(content)
         diagnosticSwitch.setOnCheckedChangeListener { _, checked ->
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(EMOTION_DIAGNOSTICS, checked).apply()
             diagnosticText.visibility = if (checked) View.VISIBLE else View.GONE
@@ -1167,213 +1129,17 @@ class MainActivity : AppCompatActivity() {
         }
         speechSwitch.setOnCheckedChangeListener { _, checked ->
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, checked).apply()
-            if (checked && !b2Enabled()) startVoice()
-            if (!checked) { speechOutput?.stop(); b2SpeechOutput?.stop() }
+            if (checked) startVoice() else speechOutput?.stop()
         }
         AlertDialog.Builder(this).setTitle("Ajustes de voz").setView(content)
             .setPositiveButton("Listo", null).show()
     }
 
     /**
-     * Isolated local-neural lab. It never changes the automatic voice path:
+     * Local voice integration is intentionally unavailable until the next approved engine.
      * Android TTS remains the active fallback until a reviewed backend/model
      * is installed and explicitly approved.
      */
-    private fun addNeuralTtsLab(content: LinearLayout) {
-        content.addView(TextView(this).apply {
-            text = "Voz neuronal experimental\nCandidata A · Piper es_MX-claude-high\nFemenina · español México · 22.05 kHz · MIT"
-            setPadding(0, dp(16), 0, dp(4))
-        })
-        content.addView(RadioGroup(this).apply {
-            orientation = RadioGroup.VERTICAL
-            addView(RadioButton(this@MainActivity).apply {
-                text = "Candidata A · es_MX-claude-high · femenina · MIT · 63 MB"
-                isChecked = true
-                isEnabled = false
-            })
-        })
-        val status = TextView(this).apply {
-            setPadding(0, 0, 0, dp(8))
-            text = neuralLabStatus()
-        }
-        neuralLabStatusView = status
-        content.addView(status)
-        content.addView(Button(this).apply {
-            text = "Preparar voz neuronal"
-            setOnClickListener { prepareNeuralModel() }
-        })
-        content.addView(Button(this).apply {
-            text = "Probar voz neuronal"
-            isEnabled = neuralModelStore()?.isInstalled() == true
-            setOnClickListener { runNeuralTtsPreview() }
-            neuralTestButton = this
-        })
-        content.addView(Button(this).apply {
-            text = "Emoción de prueba: ${neuralLabPreset.label}"
-            setOnClickListener {
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Prueba de emociones")
-                    .setSingleChoiceItems(VoiceLabPreset.entries.map { it.label }.toTypedArray(), neuralLabPreset.ordinal) { dialog, which ->
-                        neuralLabPreset = VoiceLabPreset.entries[which]
-                        text = "Emoción de prueba: ${neuralLabPreset.label}"
-                        dialog.dismiss()
-                    }
-                    .setNegativeButton("Cerrar", null)
-                    .show()
-            }
-        })
-        content.addView(Button(this).apply {
-            text = "Detener"
-            setOnClickListener {
-                neuralModelStore?.cancel()
-                neuralSpeechEngine?.cancel()
-                neuralAudioPlayer.stop()
-                neuralLabStatusView?.text = neuralLabStatus()
-            }
-        })
-        content.addView(TextView(this).apply {
-            text = "Laboratorio local: velocidad y pausas PCM; Piper no ofrece control nativo de emoción o pitch.\nLa voz automática de ARIA conserva Android TTS."
-            setPadding(0, dp(4), 0, 0)
-        })
-    }
-
-    private fun neuralModelStore(): PiperModelStore =
-        neuralModelStore ?: PiperModelStore(File(filesDir, "neural-tts")).also { neuralModelStore = it }
-
-    private fun neuralSpeechEngine(): PiperNeuralSpeechEngine =
-        neuralSpeechEngine ?: PiperNeuralSpeechEngine.forAndroid(neuralModelStore().modelDirectory)
-            .also { neuralSpeechEngine = it }
-
-    private fun neuralLabStatus(): String {
-        val engine = neuralSpeechEngine
-        val installed = neuralModelStore?.isInstalled() == true
-        val state = when {
-            neuralLabState == PiperModelState.DOWNLOADING -> "DESCARGANDO"
-            neuralLabState == PiperModelState.LOADING -> "CARGANDO"
-            neuralLabState == PiperModelState.ERROR -> "ERROR"
-            engine?.state == SpeechEngineState.LOADING -> "CARGANDO"
-            engine?.state == SpeechEngineState.READY && installed -> "LISTO"
-            installed -> "NO CARGADO"
-            else -> "NO INSTALADO"
-        }
-        val detail = engine?.lastError
-        return "Estado: $state\n" +
-            "Motor: ${PiperSpanishPrototype.descriptor.displayName}\n" +
-            "Modelo: ${PiperSpanishPrototype.MODEL_ID} (${PiperModelPackage.MODEL_BYTES / (1024 * 1024)} MB)\n" +
-            "Runtime: sherpa-onnx 1.13.8 · arm64-v8a · PCM16 mono ${PiperSpanishPrototype.SAMPLE_RATE_HZ} Hz\n" +
-            "T_download: ${neuralDownloadMs?.let { "$it ms" } ?: "—"}\n" +
-            "T_model_load: ${engine?.modelLoadMs?.let { "$it ms" } ?: "—"}\n" +
-            "T_first_audio: ${neuralFirstAudioMs?.let { "$it ms" } ?: "—"}\n" +
-            "T_synthesis: ${neuralSynthesisMs?.let { "$it ms" } ?: "—"}\n" +
-            "T_total: ${neuralTotalMs?.let { "$it ms" } ?: "—"}" +
-            (detail?.let { "\n$it" } ?: "")
-    }
-
-    private fun prepareNeuralModel() {
-        if (neuralModelStore().isInstalled()) {
-            neuralLabState = PiperModelState.READY
-            neuralLabStatusView?.text = neuralLabStatus()
-            toast("La voz neuronal ya está preparada")
-            return
-        }
-        neuralLabState = PiperModelState.DOWNLOADING
-        neuralLabStatusView?.text = neuralLabStatus()
-        val started = SystemClock.elapsedRealtime()
-        var lastProgressUpdate = 0L
-        uiScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    neuralModelStore().install { downloaded, total ->
-                        val now = SystemClock.elapsedRealtime()
-                        if (downloaded == total || now - lastProgressUpdate >= 250L) {
-                            lastProgressUpdate = now
-                            runOnUiThread {
-                                neuralLabStatusView?.text = neuralLabStatus() +
-                                    "\nDescarga: ${downloaded / (1024 * 1024)} / ${total / (1024 * 1024)} MB"
-                            }
-                        }
-                    }
-                }
-                neuralDownloadMs = SystemClock.elapsedRealtime() - started
-                neuralLabState = PiperModelState.READY
-                neuralTestButton?.isEnabled = true
-                neuralLabStatusView?.text = neuralLabStatus()
-                toast("Voz neuronal preparada; pulsa Probar")
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (error: Throwable) {
-                neuralLabState = PiperModelState.ERROR
-                neuralLabStatusView?.text = neuralLabStatus() +
-                    "\n${error.message ?: "Error de instalación"}"
-                toast("No se pudo preparar la voz neuronal")
-            }
-        }
-    }
-
-    private fun runNeuralTtsPreview() {
-        if (!neuralModelStore().isInstalled()) {
-            toast("Primero pulsa Preparar voz neuronal")
-            return
-        }
-        neuralAudioPlayer.stop()
-        neuralSpeechEngine?.cancel()
-        val engine = neuralSpeechEngine()
-        neuralLabState = PiperModelState.LOADING
-        neuralLabStatusView?.text = "Cargando motor/modelo…"
-        uiScope.launch {
-            var stage = "native_model_init"
-            try {
-                Log.i("ARIA.PiperTTS", "event=preview_start stage=$stage runtime=sherpa-onnx version=1.13.8")
-                val state = withContext(Dispatchers.Default) { engine.initialize() }
-                neuralLabState = if (state == SpeechEngineState.READY) PiperModelState.READY else PiperModelState.ERROR
-                neuralLabStatusView?.text = neuralLabStatus()
-                Log.i("ARIA.PiperTTS", "event=model_init_complete state=$state")
-                if (state != SpeechEngineState.READY) {
-                    Log.w("ARIA.PiperTTS", "event=preview_stopped stage=init state=$state")
-                    toast("TTS neuronal no disponible; Android TTS sigue intacto")
-                    return@launch
-                }
-                val started = SystemClock.elapsedRealtime()
-                stage = "native_generate"
-                val result = withContext(Dispatchers.Default) {
-                    engine.synthesize(SpeechSynthesisRequest(
-                        text = "Hola Kura. ¿Cómo estás? Me alegra mucho verte otra vez.",
-                        emotion = neuralLabPreset.emotion,
-                        mood = neuralLabPreset.mood,
-                        expressionStyle = neuralLabPreset.expressionStyle,
-                        performanceProfile = VoicePerformanceProfile.from(
-                            neuralLabPreset.emotion, neuralLabPreset.mood, neuralLabPreset.expressionStyle
-                        )
-                    ))
-                }
-                val audio = result.getOrNull()
-                if (audio == null) {
-                    neuralLabState = PiperModelState.ERROR
-                    neuralLabStatusView?.text = neuralLabStatus()
-                    Log.e("ARIA.PiperTTS", "event=preview_failed stage=$stage type=${result.exceptionOrNull()?.javaClass?.simpleName ?: "Unknown"}")
-                    toast("Falló la síntesis neuronal; Android TTS sigue disponible")
-                    return@launch
-                }
-                neuralSynthesisMs = audio.synthesisMs
-                neuralFirstAudioMs = audio.firstAudioMs
-                neuralTotalMs = SystemClock.elapsedRealtime() - started
-                Log.i("ARIA.PiperTTS", "event=synthesis_complete pcm_samples=${audio.pcm16.size} sample_rate=${audio.sampleRateHz}")
-                neuralLabStatusView?.text = neuralLabStatus()
-                stage = "audio_track"
-                neuralAudioPlayer.play(audio)
-                Log.i("ARIA.PiperTTS", "event=playback_complete")
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (error: Throwable) {
-                neuralLabState = PiperModelState.ERROR
-                neuralLabStatusView?.text = neuralLabStatus() + "\nFallo en ${stage.replace('_', ' ')}"
-                // Never log spoken text, model paths, or audio; keep only stage and exception type.
-                Log.e("ARIA.PiperTTS", "event=preview_failed stage=$stage type=${error.javaClass.simpleName}")
-                toast("No se pudo reproducir la prueba neuronal")
-            }
-        }
-    }
-
     private fun enableWakeListening() {
         if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(this) &&
             !SpeechRecognizer.isRecognitionAvailable(this)) {
@@ -1434,7 +1200,6 @@ class MainActivity : AppCompatActivity() {
         cancelCloudVoicePlayback("dictation")
         if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_PAUSE)
         speechOutput?.stop()
-        b2SpeechOutput?.stop()
         dictationBase = input.text.toString().trim()
         try {
             val listener = LocalSpeechInput(this,
@@ -1469,7 +1234,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSpeechSetupDialog() {
         AlertDialog.Builder(this).setTitle("Falta reconocimiento en español")
-            .setMessage("El micrófono usa el servicio de reconocimiento del teléfono. ARIA ya tiene permiso, pero ese servicio no tiene español disponible. Puedes pedir la descarga del modelo o instalar español desde los ajustes de voz de Android. La voz B2 se configura por separado.")
+            .setMessage("El micrófono usa el servicio de reconocimiento del teléfono. ARIA ya tiene permiso, pero ese servicio no tiene español disponible. Puedes pedir la descarga del modelo o instalar español desde los ajustes de voz de Android. La voz local se habilitará cuando ARIA integre un motor TTS compatible.")
             .setPositiveButton("Descargar español") { _, _ ->
                 if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
                     toast("El servicio local no está disponible; abre Ajustes de voz")
@@ -1640,157 +1405,10 @@ class MainActivity : AppCompatActivity() {
         return cloudVoiceMutex.withLock { client.synthesize(request) }
     }
 
-    private fun playB2Sample() {
-        speechOutput?.stop()
-        b2SpeechOutput?.stop()
-        samplePlayer?.release()
-        samplePlayer = null
-        try {
-            val player = MediaPlayer()
-            samplePlayer = player
-            assets.openFd("aria-b2-reference.wav").use { sample ->
-                player.setDataSource(sample.fileDescriptor, sample.startOffset, sample.length)
-            }
-            player.setOnCompletionListener { it.release(); if (samplePlayer === it) samplePlayer = null }
-            player.prepare()
-            player.start()
-        } catch (e: Exception) {
-            samplePlayer?.release(); samplePlayer = null
-            toast("No pude reproducir la muestra B2: ${e.message ?: "audio no disponible"}")
-        }
-    }
-
-    private fun showNeuralTtsLabDialog() {
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(12), dp(20), dp(8))
-        }
-        addNeuralTtsLab(content)
-        AlertDialog.Builder(this).setTitle("Voz neuronal experimental")
-            .setView(content)
-            .setNegativeButton("Cerrar") { _, _ ->
-                neuralAudioPlayer.stop()
-                neuralSpeechEngine?.cancel()
-            }
-            .show()
-    }
-
-    /** Isolated performance lab; it never participates in automatic speech. */
-    private fun showQwenVoiceLabDialog() {
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(12), dp(20), dp(8))
-        }
-        content.addView(TextView(this).apply {
-            text = "ARIA-B5C Voice V1\nQwen3-TTS 0.6B Base Q8_0 · ARM64\n" +
-                "Laboratorio aislado: no sustituye Piper ni la voz normal de ARIA."
-            setPadding(0, 0, 0, dp(8))
-        })
-        val stateView = TextView(this).apply { text = "Estado: consultando…" }
-        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 1_000
-            visibility = View.GONE
-        }
-        val metricsView = TextView(this).apply {
-            text = "Métricas aún no disponibles"
-            setPadding(0, dp(8), 0, dp(8))
-        }
-        content.addView(stateView)
-        content.addView(progress)
-        content.addView(metricsView)
-
-        lateinit var testShort: Button
-        lateinit var testLong: Button
-        fun button(label: String, action: String): Button = Button(this).apply {
-            text = label
-            setOnClickListener { qwenLabCommand(action) }
-            content.addView(this)
-        }
-        button("DESCARGAR MODELO", QwenVoiceLabContract.ACTION_DOWNLOAD)
-        button("CANCELAR DESCARGA", QwenVoiceLabContract.ACTION_CANCEL_DOWNLOAD)
-        button("ELIMINAR MODELO", QwenVoiceLabContract.ACTION_DELETE_MODEL).apply {
-            setOnClickListener {
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Eliminar modelo Qwen")
-                    .setMessage("Se eliminarán los archivos descargados y el perfil ICL regenerable. Piper no se modifica.")
-                    .setPositiveButton("Eliminar") { _, _ -> qwenLabCommand(QwenVoiceLabContract.ACTION_DELETE_MODEL) }
-                    .setNegativeButton("Cancelar", null)
-                    .show()
-            }
-        }
-        button("CARGAR MODELO", QwenVoiceLabContract.ACTION_LOAD_MODEL)
-        testShort = button("PROBAR ARIA-B5C", QwenVoiceLabContract.ACTION_TEST_SHORT).apply { isEnabled = false }
-        testLong = button("PRUEBA ADICIONAL", QwenVoiceLabContract.ACTION_TEST_LONG).apply { isEnabled = false }
-        button("DETENER", QwenVoiceLabContract.ACTION_STOP)
-        button("LIBERAR MODELO", QwenVoiceLabContract.ACTION_RELEASE)
-
-        content.addView(TextView(this).apply {
-            text = "Texto principal: \"${QwenVoiceLabContract.SHORT_TEXT}\"\n" +
-                "El primer audio se mide al escribir el primer chunk PCM válido en AudioTrack."
-            setPadding(0, dp(8), 0, 0)
-        })
-
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                val raw = intent?.getStringExtra(QwenVoiceLabContract.EXTRA_STATE) ?: return
-                val current = runCatching { QwenLabState.valueOf(raw) }.getOrDefault(QwenLabState.ERROR)
-                val label = when (current) {
-                    QwenLabState.NOT_INSTALLED -> "NO INSTALADO"
-                    QwenLabState.DOWNLOADING -> "DESCARGANDO"
-                    QwenLabState.VERIFYING -> "VERIFICANDO"
-                    QwenLabState.INSTALLED -> "INSTALADO"
-                    QwenLabState.LOADING -> "CARGANDO"
-                    QwenLabState.READY -> "LISTO"
-                    QwenLabState.SYNTHESIZING -> "SINTETIZANDO"
-                    QwenLabState.ERROR -> "ERROR"
-                }
-                val detail = intent.getStringExtra(QwenVoiceLabContract.EXTRA_DETAIL)
-                stateView.text = "Estado: $label" + (detail?.let { "\n$it" } ?: "")
-                if (intent.hasExtra(QwenVoiceLabContract.EXTRA_PROGRESS)) {
-                    progress.visibility = View.VISIBLE
-                    progress.progress = (intent.getDoubleExtra(QwenVoiceLabContract.EXTRA_PROGRESS, 0.0) * 1_000).toInt()
-                } else if (current != QwenLabState.DOWNLOADING && current != QwenLabState.VERIFYING) {
-                    progress.visibility = View.GONE
-                }
-                metricsView.text = intent.getStringExtra(QwenVoiceLabContract.EXTRA_METRICS)
-                    ?: "Métricas aún no disponibles"
-                val ready = current == QwenLabState.READY
-                testShort.isEnabled = ready
-                testLong.isEnabled = ready
-            }
-        }
-        ContextCompat.registerReceiver(
-            this,
-            receiver,
-            IntentFilter(QwenVoiceLabContract.ACTION_STATUS),
-            ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
-        val scroll = ScrollView(this).apply { addView(content) }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Qwen Voice Lab")
-            .setView(scroll)
-            .setNegativeButton("Cerrar", null)
-            .create()
-        dialog.setOnDismissListener { runCatching { unregisterReceiver(receiver) } }
-        dialog.show()
-        qwenLabCommand(QwenVoiceLabContract.ACTION_QUERY)
-    }
-
-    private fun qwenLabCommand(action: String) {
-        startService(Intent(this, QwenVoiceLabService::class.java).setAction(action))
-    }
-
     private fun showVoiceDialog() {
         AlertDialog.Builder(this).setTitle("Voz local de ARIA")
-            .setMessage("B2 experimental está pausada para dedicar los recursos a la conversación. La lectura automática usa la voz española instalada en Android.")
-            .setPositiveButton("Usar voz Android") { _, _ ->
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
-                    .putBoolean(VOICE_B2, false).apply()
-                b2SpeechOutput?.close(); b2SpeechOutput = null
-                b2Preparing = false
-                voiceProgress.visibility = View.GONE
-                startVoice()
-            }
+            .setMessage("No hay motor TTS local instalado actualmente. ARIA conserva la entrada por voz y la Voz Cloud; Pocket TTS se integrará en una fase posterior.")
+            .setPositiveButton("Cerrar", null)
             .setNegativeButton("Cerrar", null).show()
     }
 
@@ -1807,7 +1425,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(20), dp(10), dp(20), dp(6))
         }
         content.addView(TextView(this).apply {
-            text = "Prueba aislada: no activa la voz automática ni B2. Todas las candidatas dirán exactamente la misma frase."
+            text = "Prueba aislada: no activa la voz automática. La demostración usa únicamente Voz Cloud."
             setPadding(0, 0, 0, dp(12))
         })
         val voiceSpinner = Spinner(this).apply {
@@ -1865,46 +1483,11 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private fun prepareB2Voice(replayLastReply: Boolean) {
-        // Intentionally inaccessible while B2 is paused (including old saved preferences).
-        if (!b2Enabled()) return
-        if (b2Preparing) { toast("B2 sigue descargando o cargando; mira el avance sobre el chat"); return }
-        val output = b2SpeechOutput ?: QwenB2SpeechOutput(applicationContext, { status ->
-            if (!isFinishing && !isDestroyed) {
-                voiceProgress.text = status
-                voiceProgress.visibility = View.VISIBLE
-                if (status.startsWith("Error B2:") || status == "Voz B2 lista para probar") toast(status)
-            }
-        }, { _ ->
-            if (!isFinishing && !isDestroyed && voiceEnabled()) {
-                lastSpokenReply?.let { (text, emotion) ->
-                    startVoice()
-                    speechOutput?.speak(text, AriaVoiceDirector.forEmotion(emotion))
-                }
-            }
-        }).also { b2SpeechOutput = it }
-        b2Preparing = true
-        if (replayLastReply) toast("Preparando B2. Mantén ARIA abierta durante la descarga inicial.")
-        output.prepare { ready ->
-            b2Preparing = false
-            if (ready && b2SpeechOutput === output) {
-                speechOutput?.stop()
-                if (replayLastReply) {
-                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, true)
-                        .putBoolean(VOICE_B2, true).apply()
-                    if (voiceInForeground) output.speak(lastSpokenReply?.first
-                        ?: "Hola, Kura. Soy ARIA y estoy aquí contigo.")
-                }
-            }
-        }
-    }
-
     override fun onStart() { super.onStart(); voiceInForeground = true; updateNetworkStatus() }
     override fun onStop() {
         voiceInForeground = false
         cancelCloudVoicePlayback("lifecycle_stop")
         stopDictation()
-        if (!wakeEnabled() || !voiceEnabled()) { speechOutput?.stop(); b2SpeechOutput?.stop() }
         samplePlayer?.release(); samplePlayer = null
         super.onStop()
     }
@@ -1912,9 +1495,6 @@ class MainActivity : AppCompatActivity() {
         if (AriaForegroundService.commandListener === wakeCommandListener)
             AriaForegroundService.commandListener = null
         speechOutput?.close(); speechOutput = null
-        b2SpeechOutput?.close(); b2SpeechOutput = null
-        neuralModelStore?.cancel()
-        neuralSpeechEngine?.cancel(); neuralAudioPlayer.stop(); neuralSpeechEngine?.close()
         if (::cloudVoicePlayer.isInitialized) cloudVoicePlayer.close()
         if (::cloudBrain.isInitialized) runBlocking { cloudBrain.close() }
         uiScope.cancel()

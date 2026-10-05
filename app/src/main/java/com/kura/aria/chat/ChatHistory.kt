@@ -16,7 +16,7 @@ data class ChatMessage(
 /**
  * Append-only local conversation history.
  * It is deliberately separate from the LLM context: storing messages does not feed
- * the whole history back into Qwen or consume its context window.
+ * the whole history back into a local speech engine or consume its context window.
  */
 class ChatHistory(context: Context) {
     private val file = File(context.filesDir, "history/chat.jsonl")
