@@ -19,7 +19,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
 
-internal class PocketVoiceEngine(@Suppress("UNUSED_PARAMETER") context: Context) : AutoCloseable {
+internal class PocketVoiceEngine(context: Context) : AutoCloseable {
+    private val diagnosticsDir = java.io.File(context.cacheDir, "pocket-diagnostics")
     private val dispatcher: ExecutorCoroutineDispatcher = Executors.newSingleThreadExecutor { task ->
         Thread(task, "aria-pocket-tts").apply { priority = Thread.NORM_PRIORITY }
     }.asCoroutineDispatcher()
@@ -65,6 +66,7 @@ internal class PocketVoiceEngine(@Suppress("UNUSED_PARAMETER") context: Context)
         text: String,
         emotion: AriaEmotion,
         expression: ExpressionStyle,
+        diagnosticFile: java.io.File? = null,
         onState: (String) -> Unit = {}
     ): PocketMetrics = withContext(dispatcher) {
         require(text.isNotBlank())
@@ -83,67 +85,84 @@ internal class PocketVoiceEngine(@Suppress("UNUSED_PARAMETER") context: Context)
             "temperature=${prosody.temperature} chars=${text.length}")
         onState("SINTETIZANDO")
         var firstAudioMs: Long? = null
-        var totalSamples = 0L
         val generationStarted = SystemClock.elapsedRealtime()
         val track = createAudioTrack()
         audioTrack = track
+        val underrunsBefore = track.underrunCount
+        val pipeline = PocketPcm16Pipeline(
+            writer = { bytes, offset, length ->
+                track.write(bytes, offset, length, AudioTrack.WRITE_BLOCKING).also { written ->
+                    if (written <= 0) throw PocketVoiceException(PocketVoiceError.AUDIO_FAILED)
+                }
+            },
+            onPlaybackStart = {
+                track.play()
+                firstAudioMs = SystemClock.elapsedRealtime() - requestStarted
+                onState("REPRODUCIENDO")
+                Log.i(TAG, "FIRST_AUDIO firstAudioMs=$firstAudioMs prebufferMs=${PocketAudioFormat.PREBUFFER_MS}")
+            },
+            wavWriter = diagnosticFile?.let(::PocketWavWriter)
+        )
         try {
             val runtime = native ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_CARGA)
+            var callbackError: Throwable? = null
             val ok = runtime.synthesize(text, voice.fileName, NativePocketTts.AudioSink { samples ->
                 if (cancelled.get() || Thread.currentThread().isInterrupted) return@AudioSink false
                 if (samples.isEmpty()) return@AudioSink true
-                if (firstAudioMs == null) {
-                    track.play()
-                    firstAudioMs = SystemClock.elapsedRealtime() - requestStarted
-                    onState("REPRODUCIENDO")
-                    Log.i(TAG, "FIRST_PCM samples=${samples.size} firstAudioMs=$firstAudioMs")
-                }
-                val bytes = PocketPcm.floatToPcm16(samples)
-                var offset = 0
-                while (offset < bytes.size && !cancelled.get()) {
-                    val written = track.write(bytes, offset, bytes.size - offset, AudioTrack.WRITE_BLOCKING)
-                    if (written <= 0) throw PocketVoiceException(PocketVoiceError.AUDIO_FAILED)
-                    offset += written
-                }
-                totalSamples += samples.size
-                !cancelled.get()
+                runCatching { pipeline.accept(samples) }
+                    .onFailure { callbackError = it }
+                    .isSuccess && !cancelled.get()
             })
             if (cancelled.get()) throw CancellationException("Pocket TTS detenido")
-            if (!ok || totalSamples <= 0L) throw PocketVoiceException(PocketVoiceError.SYNTHESIS_FAILED)
+            callbackError?.let { throw it }
+            if (!ok || pipeline.inspector.snapshot().sampleCount <= 0L)
+                throw PocketVoiceException(PocketVoiceError.SYNTHESIS_FAILED)
+            pipeline.finish()
             val generationMs = SystemClock.elapsedRealtime() - generationStarted
+            awaitPlaybackComplete(track, pipeline.writtenSamples)
+            if (cancelled.get()) throw CancellationException("Pocket TTS detenido")
             val totalMs = SystemClock.elapsedRealtime() - requestStarted
-            val durationMs = totalSamples * 1000L / PocketModelSpec.SAMPLE_RATE
+            val pcmStats = pipeline.inspector.snapshot()
+            val underruns = (track.underrunCount - underrunsBefore).coerceAtLeast(0)
             val metrics = PocketMetrics(
                 modelLoadMs = if (modelLoad > 0) modelLoad else lastMetrics.modelLoadMs,
                 voiceProfileMs = null,
                 firstAudioMs = firstAudioMs,
                 generationMs = generationMs,
                 totalMs = totalMs,
-                audioDurationMs = durationMs,
-                rtf = if (durationMs > 0) generationMs.toDouble() / durationMs else null,
+                audioDurationMs = pcmStats.durationMs,
+                rtf = if (pcmStats.durationMs > 0) generationMs.toDouble() / pcmStats.durationMs else null,
                 ramBeforeMiB = ramBefore,
                 ramAfterMiB = Debug.getPss().toLong() / 1024L,
+                pcmStats = pcmStats,
+                audioUnderruns = underruns,
+                diagnosticWav = diagnosticFile?.takeIf { it.isFile && it.length() > 44L }?.absolutePath,
                 voice = voice.name,
                 state = "COMPLETADO"
             )
             lastMetrics = metrics
             onState("COMPLETADO")
             Log.i(TAG, "SYNTHESIS_COMPLETED firstAudioMs=${metrics.firstAudioMs} generationMs=$generationMs " +
-                "totalMs=$totalMs audioMs=$durationMs rtf=${metrics.rtf}")
+                "totalMs=$totalMs audioMs=${pcmStats.durationMs} rtf=${metrics.rtf} samples=${pcmStats.sampleCount} " +
+                "min=${pcmStats.minimum} max=${pcmStats.maximum} peak=${pcmStats.peakAbsolute} rms=${pcmStats.rms} " +
+                "dc=${pcmStats.dcOffset} nan=${pcmStats.nanCount} inf=${pcmStats.infiniteCount} " +
+                "clipped=${pcmStats.clippedSamples} underruns=$underruns")
             metrics
         } catch (cancelledError: CancellationException) {
+            pipeline.abort()
             lastMetrics = lastMetrics.copy(state = "DETENIDO")
             onState("DETENIDO")
             throw cancelledError
         } catch (error: Throwable) {
+            pipeline.abort()
             val code = (error as? PocketVoiceException)?.code ?: PocketVoiceError.SYNTHESIS_FAILED
             lastMetrics = lastMetrics.copy(state = "ERROR", error = code)
             onState("ERROR: ${code.name}")
             throw if (error is PocketVoiceException) error else PocketVoiceException(code, error)
         } finally {
             runCatching { track.stop() }
-            track.flush()
-            track.release()
+            runCatching { track.flush() }
+            runCatching { track.release() }
             if (audioTrack === track) audioTrack = null
         }
     }
@@ -183,10 +202,32 @@ internal class PocketVoiceEngine(@Suppress("UNUSED_PARAMETER") context: Context)
                 .setSampleRate(PocketModelSpec.SAMPLE_RATE)
                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                 .build())
-            .setBufferSizeInBytes(maxOf(min * 2, PocketModelSpec.SAMPLE_RATE / 2))
+            // Two seconds of capacity: one second is prefilled before play(), leaving
+            // room for the next decoder chunk without blocking the native producer.
+            .setBufferSizeInBytes(maxOf(min * 2, PocketAudioFormat.SAMPLE_RATE *
+                PocketAudioFormat.PCM16_BYTES_PER_SAMPLE * 2))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .setSessionId(AudioManager.AUDIO_SESSION_ID_GENERATE)
             .build()
+    }
+
+    private fun awaitPlaybackComplete(track: AudioTrack, writtenSamples: Long) {
+        if (writtenSamples <= 0L || track.playState != AudioTrack.PLAYSTATE_PLAYING) return
+        val played = Integer.toUnsignedLong(track.playbackHeadPosition)
+        val remaining = (writtenSamples - played).coerceAtLeast(0L)
+        val timeoutAt = SystemClock.elapsedRealtime() +
+            (remaining * 1_000L / PocketAudioFormat.SAMPLE_RATE) + PLAYBACK_DRAIN_GRACE_MS
+        while (!cancelled.get() && SystemClock.elapsedRealtime() < timeoutAt) {
+            if (Integer.toUnsignedLong(track.playbackHeadPosition) >= writtenSamples) return
+            SystemClock.sleep(10L)
+        }
+        if (!cancelled.get()) Log.w(TAG, "AUDIO_DRAIN_TIMEOUT writtenSamples=$writtenSamples " +
+            "playedSamples=${Integer.toUnsignedLong(track.playbackHeadPosition)}")
+    }
+
+    fun diagnosticFile(): java.io.File {
+        diagnosticsDir.mkdirs()
+        return java.io.File(diagnosticsDir, "pocket_audio_quality.wav")
     }
 
     override fun close() {
@@ -197,5 +238,8 @@ internal class PocketVoiceEngine(@Suppress("UNUSED_PARAMETER") context: Context)
         dispatcher.close()
     }
 
-    companion object { private const val TAG = "ARIA.PocketVoice" }
+    companion object {
+        private const val TAG = "ARIA.PocketVoice"
+        private const val PLAYBACK_DRAIN_GRACE_MS = 2_000L
+    }
 }

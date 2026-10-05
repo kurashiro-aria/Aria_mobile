@@ -38,10 +38,30 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
         val pack = models.installedPack()
             ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)
         val voice = selectedVoice ?: throw PocketVoiceException(PocketVoiceError.VOZ_NO_DISPONIBLE)
-        return engine.synthesize(pack, voice, text, emotion, expression, onState)
+        return engine.synthesize(pack, voice, text, emotion, expression, onState = onState)
+    }
+
+    suspend fun runAudioDiagnostic(onState: (String) -> Unit = {}): PocketMetrics {
+        val pack = models.installedPack()
+            ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)
+        val voice = selectedVoice ?: throw PocketVoiceException(PocketVoiceError.VOZ_NO_DISPONIBLE)
+        return engine.synthesize(
+            pack,
+            voice,
+            AUDIO_DIAGNOSTIC_TEXT,
+            AriaEmotion.NEUTRAL,
+            ExpressionStyle.NATURAL,
+            engine.diagnosticFile(),
+            onState
+        )
     }
 
     fun stop() = engine.stop()
     suspend fun release() = engine.release()
     override fun close() = engine.close()
+
+    companion object {
+        const val AUDIO_DIAGNOSTIC_TEXT =
+            "Hola Kura, soy Aria. Esta es una prueba de calidad de audio."
+    }
 }

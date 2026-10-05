@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val ariaVersionName = "0.2.51"
+val ariaVersionName = "0.2.52"
 val cloudEndpoint = providers.gradleProperty("ARIA_CLOUD_ENDPOINT").orElse("https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev").get()
 val cloudClientToken = providers.gradleProperty("ARIA_CLOUD_CLIENT_TOKEN").orElse("").get()
 
@@ -47,7 +47,7 @@ android {
         applicationId = "com.kura.aria"
         minSdk = 33
         targetSdk = 35
-        versionCode = 66
+        versionCode = 67
         versionName = ariaVersionName
         resValue("string", "app_name", "ARIA Mobile $ariaVersionName")
         buildConfigField("String", "ARIA_CLOUD_ENDPOINT",

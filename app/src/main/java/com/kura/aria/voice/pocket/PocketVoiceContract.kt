@@ -3,8 +3,6 @@ package com.kura.aria.voice.pocket
 import com.kura.aria.emotion.AriaEmotion
 import com.kura.aria.personality.ExpressionStyle
 import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 internal object PocketModelSpec {
     const val ID = "pocket-spanish-fp32-v052"
@@ -13,7 +11,7 @@ internal object PocketModelSpec {
     const val DOWNLOAD_BYTES = 207_487_086L
     const val ARCHIVE_SHA256 = "f83dc41bd0d5c7634d385fdadef496881d398ca99d1886ff25d90cb59e384412"
     const val RUNTIME = "PocketTTS.cpp e801e7d + ONNX Runtime Android 1.20.0"
-    const val SAMPLE_RATE = 24_000
+    const val SAMPLE_RATE = PocketAudioFormat.SAMPLE_RATE
     const val FORMAT_VERSION = 1
 
     val sharedFiles = listOf("mimi_encoder.onnx", "text_conditioner.onnx", "tokenizer.model")
@@ -80,6 +78,9 @@ internal data class PocketMetrics(
     val rtf: Double? = null,
     val ramBeforeMiB: Long? = null,
     val ramAfterMiB: Long? = null,
+    val pcmStats: PocketPcmStats? = null,
+    val audioUnderruns: Int? = null,
+    val diagnosticWav: String? = null,
     val model: String = PocketModelSpec.DISPLAY_NAME,
     val voice: String? = null,
     val state: String = "NO INSTALADO",
@@ -121,14 +122,6 @@ internal object PocketInstallValidator {
             "Ruta ZIP inválida"
         }
         return target
-    }
-}
-
-internal object PocketPcm {
-    fun floatToPcm16(samples: FloatArray): ByteArray {
-        val output = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-        samples.forEach { output.putShort((it.coerceIn(-1f, 1f) * 32767f).toInt().toShort()) }
-        return output.array()
     }
 }
 
