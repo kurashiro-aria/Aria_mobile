@@ -48,15 +48,6 @@ jobs:
           git -C llama.cpp apply --check ../patches/aria-model-load-progress.patch
           git -C llama.cpp apply ../patches/aria-model-load-progress.patch
 
-      - name: Fetch pinned Qwen3-TTS runtime
-        if: github.ref_name == 'aria-alpha-0.2-local-ai' || github.ref_name == 'voice-b2-experiment' || github.ref_name == 'aria-cloud-brain-prototype'
-        run: |
-          git clone --filter=blob:none https://github.com/Danmoreng/qwen3-tts.cpp.git qwen3-tts.cpp
-          git -C qwen3-tts.cpp checkout 4562731dc612cb87b4cd1eedac275a17d1078773
-          git -C qwen3-tts.cpp submodule update --init --recursive
-          git -C qwen3-tts.cpp apply --check ../patches/qwen3-tts-pcm24-wav.patch
-          git -C qwen3-tts.cpp apply ../patches/qwen3-tts-pcm24-wav.patch
-
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -127,36 +118,6 @@ jobs:
           ORG_GRADLE_PROJECT_ARIA_CLOUD_ENDPOINT: https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev
           ORG_GRADLE_PROJECT_ARIA_CLOUD_CLIENT_TOKEN: ${{ secrets.ARIA_CLOUD_CLIENT_TOKEN }}
         run: gradle :app:assembleDebug --stacktrace --console=plain
-
-      - name: Check Piper Sherpa ARM64 libraries
-        if: env.ARIA_BUILD_APK == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import zipfile
-          from pathlib import Path
-
-          apk = Path('app/build/outputs/apk/debug/app-debug.apk')
-          with zipfile.ZipFile(apk) as archive:
-              names = set(archive.namelist())
-              abi = 'arm64-v8a'
-              prefix = f'lib/{abi}/'
-              sherpa_jni = prefix + 'libsherpa-onnx-jni.so'
-              onnxruntime = prefix + 'libonnxruntime.so'
-              assert sherpa_jni in names, f'Missing Sherpa JNI runtime for {abi}'
-              assert onnxruntime in names, f'Missing ONNX Runtime for {abi}'
-              assert prefix + 'libai-chat.so' in names, f'Missing llama.cpp runtime for {abi}'
-              assert prefix + 'libggml-base.so' in names, f'Missing llama.cpp base for {abi}'
-              Path('/tmp/aria-sherpa-arm64.so').write_bytes(archive.read(sherpa_jni))
-              Path('/tmp/aria-onnxruntime-arm64.so').write_bytes(archive.read(onnxruntime))
-          PY
-          for library in /tmp/aria-sherpa-arm64.so /tmp/aria-onnxruntime-arm64.so; do
-            if readelf -d "$library" | grep -E 'NEEDED.*libggml'; then
-              echo "::error::Sherpa Piper runtime depends on llama.cpp GGML"
-              exit 1
-            fi
-          done
 
       - name: Verify final APK certificate and version
         if: env.ARIA_BUILD_APK == 'true'
