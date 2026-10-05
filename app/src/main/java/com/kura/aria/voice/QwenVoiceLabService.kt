@@ -21,6 +21,15 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 
+private data class PreparedQwenVoiceProfile(
+    val file: File,
+    val summary: QwenIclPromptSummary,
+    val cacheHit: Boolean,
+    val cacheLoadMs: Long,
+    val buildColdMs: Long?,
+    val cacheWriteMs: Long?,
+)
+
 /**
  * Experimental Qwen host. The manifest places it in :qwen_voice so a native
  * abort/OOM cannot terminate ARIA's UI/brain process.
@@ -124,8 +133,14 @@ class QwenVoiceLabService : Service() {
         state = QwenLabState.LOADING
         publish(detail = "Preparando perfil ARIA-B5C V1")
         val profileStarted = SystemClock.elapsedRealtime()
-        val preparedPrompt = prepareVoiceProfile()
+        val preparedProfile = prepareVoiceProfile()
         val profileMs = SystemClock.elapsedRealtime() - profileStarted
+
+        publish(detail = if (preparedProfile.cacheHit) {
+            "Perfil ARIA-B5C cargado desde caché"
+        } else {
+            "Perfil ARIA-B5C creado y guardado"
+        })
 
         publish(detail = "Cargando Qwen3-TTS 0.6B Base Q8_0")
         val loadStarted = SystemClock.elapsedRealtime()
@@ -140,24 +155,34 @@ class QwenVoiceLabService : Service() {
             if (capabilities?.supportsCloning != true || capabilities.modelKind != 1) {
                 fail(QwenLabFailureCode.GGUF_INCOMPATIBLE, "El GGUF no expone Base con voice cloning")
             }
+            if (preparedProfile.summary.speakerEmbeddingValues != capabilities.speakerEmbeddingDim ||
+                preparedProfile.summary.referenceCodebooks != ICL_CODEBOOKS) {
+                profileCache().invalidate()
+                fail(QwenLabFailureCode.GGUF_INCOMPATIBLE, "El perfil ICL no coincide con el modelo Qwen fijado")
+            }
         } catch (error: Throwable) {
             native.close()
             throw error
         }
         engine = native
-        promptFile = preparedPrompt
+        promptFile = preparedProfile.file
         metrics = metrics.copy(
             verifyMs = verifyMs,
             modelLoadMs = SystemClock.elapsedRealtime() - loadStarted,
             voiceProfileLoadMs = profileMs,
-            storageBytes = store.storageBytes() + preparedPrompt.length(),
+            profileBuildColdMs = preparedProfile.buildColdMs,
+            profileCacheWriteMs = preparedProfile.cacheWriteMs,
+            profileCacheLoadMs = preparedProfile.cacheLoadMs,
+            profileCacheHit = preparedProfile.cacheHit,
+            profileCacheBytes = preparedProfile.file.length(),
+            storageBytes = store.storageBytes() + preparedProfile.file.length(),
             peakRamMib = currentPssMib(),
         )
         state = QwenLabState.READY
         publish(detail = "Listo · streaming ICL real")
     }
 
-    private fun prepareVoiceProfile(): File {
+    private fun prepareVoiceProfile(): PreparedQwenVoiceProfile {
         val profile = AriaB5CVoiceProfile.V1
         val directory = File(filesDir, "qwen-voice-lab/profiles/${profile.id}-v${profile.version}").apply { mkdirs() }
         val reference = File(directory, profile.referenceAsset)
@@ -177,13 +202,41 @@ class QwenVoiceLabService : Service() {
         if (referenceFormat.channels != 1 || referenceFormat.sampleRate != 24_000) {
             fail(QwenLabFailureCode.VOICE_PROFILE_FAILED, "ARIA-B5C debe ser WAV mono a 24 kHz")
         }
-        val prompt = File(directory, profile.promptFileName)
-        val marker = File(directory, ".profile-v1")
-        val expectedMarker = "${profile.referenceSha256}|${sha256(profile.referenceTranscript)}|${Qwen06BAndroidPackage.MODEL_REVISION}"
-        if (prompt.isFile && prompt.length() > 0L && marker.readTextOrNull() == expectedMarker) return prompt
+        val cache = profileCache(directory)
+        val cacheStarted = SystemClock.elapsedRealtime()
+        val lookup = cache.lookup()
+        if (lookup.canUse && lookup.prompt != null && lookup.summary != null) {
+            val validator = QwenEngine()
+            val nativeValid = try {
+                validator.validateIclPrompt(lookup.prompt.absolutePath)
+            } finally {
+                validator.close()
+            }
+            if (nativeValid) {
+                var cacheWriteMs: Long? = null
+                if (lookup.status == QwenIclCacheStatus.LEGACY_HIT) {
+                    val writeStarted = SystemClock.elapsedRealtime()
+                    cache.promoteLegacy(lookup.prompt, lookup.summary)
+                    cacheWriteMs = SystemClock.elapsedRealtime() - writeStarted
+                }
+                return PreparedQwenVoiceProfile(
+                    file = lookup.prompt,
+                    summary = lookup.summary,
+                    cacheHit = true,
+                    cacheLoadMs = SystemClock.elapsedRealtime() - cacheStarted,
+                    buildColdMs = null,
+                    cacheWriteMs = cacheWriteMs,
+                )
+            }
+            Log.w(LOG_TAG, "event=icl_cache_rejected reason=native_parser")
+        } else if (lookup.status != QwenIclCacheStatus.MISS) {
+            Log.w(LOG_TAG, "event=icl_cache_rejected reason=${lookup.detail}")
+        }
+        cache.invalidate()
 
         val temporary = File(directory, ".${profile.promptFileName}.tmp")
         temporary.delete()
+        val buildStarted = SystemClock.elapsedRealtime()
         val encoder = QwenEngine()
         encoder.setBackendPreference(QwenEngine.BACKEND_CPU)
         encoder.setCpuThreads(max(2, Runtime.getRuntime().availableProcessors().coerceAtMost(6)))
@@ -194,15 +247,38 @@ class QwenVoiceLabService : Service() {
             if (!encoder.extractIclPrompt(reference.absolutePath, profile.referenceTranscript, temporary.absolutePath)) {
                 fail(QwenLabFailureCode.ICL_FAILED, encoder.iclFailureDetail("No se pudo extraer el perfil ICL"))
             }
+            if (!encoder.validateIclPrompt(temporary.absolutePath)) {
+                fail(QwenLabFailureCode.ICL_FAILED, "El runtime rechazó el perfil ICL recién creado")
+            }
         } finally {
             encoder.close()
         }
+        val buildMs = SystemClock.elapsedRealtime() - buildStarted
         if (!temporary.isFile || temporary.length() <= 0L) fail(QwenLabFailureCode.ICL_FAILED, "El perfil ICL quedó vacío")
-        prompt.delete()
-        if (!temporary.renameTo(prompt)) fail(QwenLabFailureCode.STORAGE_ACCESS_FAILED, "No se pudo guardar el perfil ICL")
-        marker.writeText(expectedMarker)
-        return prompt
+        val writeStarted = SystemClock.elapsedRealtime()
+        val installed = try {
+            cache.install(temporary)
+        } catch (error: Throwable) {
+            throw QwenLabException(QwenLabFailureCode.STORAGE_ACCESS_FAILED, "No se pudo guardar el perfil ICL", error)
+        }
+        val writeMs = SystemClock.elapsedRealtime() - writeStarted
+        return PreparedQwenVoiceProfile(
+            file = installed.prompt ?: fail(QwenLabFailureCode.ICL_FAILED, "La caché ICL no quedó disponible"),
+            summary = installed.summary ?: fail(QwenLabFailureCode.ICL_FAILED, "La caché ICL quedó incompleta"),
+            cacheHit = false,
+            cacheLoadMs = SystemClock.elapsedRealtime() - cacheStarted - buildMs - writeMs,
+            buildColdMs = buildMs,
+            cacheWriteMs = writeMs,
+        )
     }
+
+    private fun profileCache(
+        directory: File = File(filesDir, "qwen-voice-lab/profiles/${AriaB5CVoiceProfile.V1.id}-v${AriaB5CVoiceProfile.V1.version}"),
+    ): QwenIclProfileCache = QwenIclProfileCache(
+        directory = directory,
+        promptFileName = AriaB5CVoiceProfile.V1.promptFileName,
+        identity = QwenIclCacheIdentity.forProfile(AriaB5CVoiceProfile.V1),
+    )
 
     private fun synthesize(text: String) {
         val native = engine
@@ -372,8 +448,16 @@ class QwenVoiceLabService : Service() {
         append("Streaming real: SÍ\n")
         append("T_download: ").append(metrics.downloadMs.ms()).append('\n')
         append("T_verify: ").append(metrics.verifyMs.ms()).append('\n')
-        append("T_model_load: ").append(metrics.modelLoadMs.ms()).append('\n')
-        append("T_voice_profile_load: ").append(metrics.voiceProfileLoadMs.ms()).append('\n')
+        append("T_model_load_cold: ").append(metrics.modelLoadMs.ms()).append('\n')
+        append("T_profile_build_cold: ").append(metrics.profileBuildColdMs.ms()).append('\n')
+        append("T_profile_cache_write: ").append(metrics.profileCacheWriteMs.ms()).append('\n')
+        append("T_profile_cache_load: ").append(metrics.profileCacheLoadMs.ms()).append('\n')
+        append("Perfil ICL: ").append(when (metrics.profileCacheHit) {
+            true -> "WARM RUN · CACHE HIT"
+            false -> "FIRST RUN · CACHE MISS"
+            null -> "—"
+        }).append(" · ").append(metrics.profileCacheBytes?.let { "$it bytes" } ?: "—").append('\n')
+        append("T_voice_profile_total: ").append(metrics.voiceProfileLoadMs.ms()).append('\n')
         append("T_first_audio: ").append(metrics.firstAudioMs.ms())
             .append(" · ").append(metrics.firstAudioClassification).append('\n')
         append("T_generation: ").append(metrics.generationMs.ms()).append('\n')
@@ -421,8 +505,6 @@ class QwenVoiceLabService : Service() {
 
     private fun sha256(file: File): String = file.inputStream().buffered().use { sha256(it) }
 
-    private fun sha256(text: String): String = sha256(text.byteInputStream())
-
     private fun sha256(input: java.io.InputStream): String {
         val digest = MessageDigest.getInstance("SHA-256")
         input.use {
@@ -436,8 +518,6 @@ class QwenVoiceLabService : Service() {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun File.readTextOrNull(): String? = runCatching { readText() }.getOrNull()
-
     override fun onDestroy() {
         store.cancel()
         generation.incrementAndGet()
@@ -450,5 +530,6 @@ class QwenVoiceLabService : Service() {
     private companion object {
         const val LOG_TAG = "ARIA.QwenVoiceLab"
         const val SYNTHESIS_TIMEOUT_SECONDS = 150L
+        const val ICL_CODEBOOKS = 16
     }
 }

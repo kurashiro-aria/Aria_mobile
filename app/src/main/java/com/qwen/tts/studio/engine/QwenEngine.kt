@@ -133,6 +133,10 @@ class QwenEngine : AutoCloseable {
     fun extractIclPrompt(referenceWav: String, referenceText: String, outputPath: String): Boolean =
         nativeExtractIclPrompt(nativePtr, referenceWav, referenceText, outputPath)
 
+    /** Uses the pinned runtime's own qwen3_tts_icl_prompt_v1 parser. */
+    fun validateIclPrompt(promptPath: String): Boolean =
+        nativeValidateIclPrompt(nativePtr, promptPath)
+
     fun getAvailableSpeakers(): List<String> {
         val raw = nativeGetAvailableSpeakers(nativePtr).orEmpty()
         return raw.lineSequence()
@@ -190,5 +194,6 @@ class QwenEngine : AutoCloseable {
         referenceText: String,
         outputPath: String,
     ): Boolean
+    private external fun nativeValidateIclPrompt(ptr: Long, promptPath: String): Boolean
     private external fun nativeGetAvailableSpeakers(ptr: Long): String?
 }

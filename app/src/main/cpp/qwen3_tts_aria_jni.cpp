@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <cmath>
 #include <cstring>
+#include "qwen3_tts.h"
 #include "qwen3_tts_c.h"
 
 namespace {
@@ -64,6 +65,22 @@ int32_t emit_chunk(const qwen3_tts_audio_chunk_t* chunk, void* opaque) {
 }
 
 }  // namespace
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_qwen_tts_studio_engine_QwenEngine_nativeValidateIclPrompt(
+    JNIEnv* env,
+    jobject,
+    jlong context,
+    jstring prompt_path
+) {
+    if (context == 0 || prompt_path == nullptr) return JNI_FALSE;
+    const char* native_prompt = env->GetStringUTFChars(prompt_path, nullptr);
+    if (native_prompt == nullptr) return JNI_FALSE;
+    qwen3_tts::icl_prompt prompt;
+    const bool valid = qwen3_tts::load_icl_prompt_file(native_prompt, prompt);
+    env->ReleaseStringUTFChars(prompt_path, native_prompt);
+    return valid ? JNI_TRUE : JNI_FALSE;
+}
 
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynthesizeWithIclPromptStreaming(
