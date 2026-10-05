@@ -311,10 +311,8 @@ class MainActivity : AppCompatActivity() {
                     "Voz" -> showVoiceDialog()
                     "Repetir última respuesta" -> lastSpokenReply?.let { (text, emotion) ->
                         cancelCloudVoicePlayback("replay")
-                        else {
-                            startVoice()
-                            speechOutput?.speak(text, AndroidVoiceDirector.forEmotion(emotion, lastExpressionStyle))
-                        }
+                        startVoice()
+                        speechOutput?.speak(text, AndroidVoiceDirector.forEmotion(emotion, lastExpressionStyle))
                     } ?: toast("Aún no hay una respuesta nueva para leer")
                     "Interfaz" -> toast("Interfaz ARIA Character")
                     "Ajustes" -> showSettingsDialog()
