@@ -41,5 +41,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps the user's local ARIA AI session and loaded model available while switching apps" />
         </service>
+
+        <service
+            android:name=".voice.QwenVoiceLabService"
+            android:exported="false"
+            android:process=":qwen_voice"
+            android:stopWithTask="false" />
     </application>
 </manifest>

@@ -150,6 +150,7 @@ target_compile_definitions(qwen3_tts PRIVATE QWEN3_TTS_EXPORT)
 
 add_library(qwen3_tts_jni SHARED
     "${QWEN3_TTS_ROOT}/src/qwen3_tts_jni.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/qwen3_tts_aria_jni.cpp"
 )
 target_include_directories(qwen3_tts_jni PRIVATE "${QWEN3_TTS_ROOT}/src")
 target_compile_definitions(qwen3_tts_jni PRIVATE QWEN3_TTS_STATIC)

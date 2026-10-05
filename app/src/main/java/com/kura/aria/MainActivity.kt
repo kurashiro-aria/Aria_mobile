@@ -2,7 +2,10 @@ package com.kura.aria
 
 import android.app.Activity
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -65,6 +68,9 @@ import com.kura.aria.voice.PiperAudioTrackPlayer
 import com.kura.aria.voice.SpeechEngineState
 import com.kura.aria.voice.SpeechSynthesisRequest
 import com.kura.aria.voice.QwenB2SpeechOutput
+import com.kura.aria.voice.QwenLabState
+import com.kura.aria.voice.QwenVoiceLabContract
+import com.kura.aria.voice.QwenVoiceLabService
 import com.kura.aria.voice.AriaVoiceDirector.cloudCandidates
 import com.kura.aria.voice.CloudVoiceClient
 import com.kura.aria.voice.CloudVoiceException
@@ -315,6 +321,7 @@ class MainActivity : AppCompatActivity() {
             menu.add("Personalidad")
             menu.add("Voz")
             menu.add("Voz neuronal experimental")
+            menu.add("Qwen Voice Lab")
             menu.add("Repetir última respuesta")
             menu.add("Detener voz")
             menu.add("Interfaz")
@@ -333,6 +340,7 @@ class MainActivity : AppCompatActivity() {
                     "Personalidad" -> toast("ARIA Personality v2 activa")
                     "Voz" -> showVoiceDialog()
                     "Voz neuronal experimental" -> showNeuralTtsLabDialog()
+                    "Qwen Voice Lab" -> showQwenVoiceLabDialog()
                     "Repetir última respuesta" -> lastSpokenReply?.let { (text, emotion) ->
                         cancelCloudVoicePlayback("replay")
                         if (b2Enabled()) b2SpeechOutput?.speak(text)
@@ -1665,6 +1673,110 @@ class MainActivity : AppCompatActivity() {
                 neuralSpeechEngine?.cancel()
             }
             .show()
+    }
+
+    /** Isolated performance lab; it never participates in automatic speech. */
+    private fun showQwenVoiceLabDialog() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(8))
+        }
+        content.addView(TextView(this).apply {
+            text = "ARIA-B5C Voice V1\nQwen3-TTS 0.6B Base Q8_0 · ARM64\n" +
+                "Laboratorio aislado: no sustituye Piper ni la voz normal de ARIA."
+            setPadding(0, 0, 0, dp(8))
+        })
+        val stateView = TextView(this).apply { text = "Estado: consultando…" }
+        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1_000
+            visibility = View.GONE
+        }
+        val metricsView = TextView(this).apply {
+            text = "Métricas aún no disponibles"
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        content.addView(stateView)
+        content.addView(progress)
+        content.addView(metricsView)
+
+        lateinit var testShort: Button
+        lateinit var testLong: Button
+        fun button(label: String, action: String): Button = Button(this).apply {
+            text = label
+            setOnClickListener { qwenLabCommand(action) }
+            content.addView(this)
+        }
+        button("DESCARGAR MODELO", QwenVoiceLabContract.ACTION_DOWNLOAD)
+        button("CANCELAR DESCARGA", QwenVoiceLabContract.ACTION_CANCEL_DOWNLOAD)
+        button("ELIMINAR MODELO", QwenVoiceLabContract.ACTION_DELETE_MODEL).apply {
+            setOnClickListener {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Eliminar modelo Qwen")
+                    .setMessage("Se eliminarán los archivos descargados y el perfil ICL regenerable. Piper no se modifica.")
+                    .setPositiveButton("Eliminar") { _, _ -> qwenLabCommand(QwenVoiceLabContract.ACTION_DELETE_MODEL) }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            }
+        }
+        button("CARGAR MODELO", QwenVoiceLabContract.ACTION_LOAD_MODEL)
+        testShort = button("PROBAR ARIA-B5C", QwenVoiceLabContract.ACTION_TEST_SHORT).apply { isEnabled = false }
+        testLong = button("PRUEBA ADICIONAL", QwenVoiceLabContract.ACTION_TEST_LONG).apply { isEnabled = false }
+        button("DETENER", QwenVoiceLabContract.ACTION_STOP)
+        button("LIBERAR MODELO", QwenVoiceLabContract.ACTION_RELEASE)
+
+        content.addView(TextView(this).apply {
+            text = "Texto principal: \"${QwenVoiceLabContract.SHORT_TEXT}\"\n" +
+                "El primer audio se mide al escribir el primer chunk PCM válido en AudioTrack."
+            setPadding(0, dp(8), 0, 0)
+        })
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val raw = intent?.getStringExtra(QwenVoiceLabContract.EXTRA_STATE) ?: return
+                val current = runCatching { QwenLabState.valueOf(raw) }.getOrDefault(QwenLabState.ERROR)
+                val label = when (current) {
+                    QwenLabState.NOT_INSTALLED -> "NO INSTALADO"
+                    QwenLabState.DOWNLOADING -> "DESCARGANDO"
+                    QwenLabState.VERIFYING -> "VERIFICANDO"
+                    QwenLabState.INSTALLED -> "INSTALADO"
+                    QwenLabState.LOADING -> "CARGANDO"
+                    QwenLabState.READY -> "LISTO"
+                    QwenLabState.ERROR -> "ERROR"
+                }
+                val detail = intent.getStringExtra(QwenVoiceLabContract.EXTRA_DETAIL)
+                stateView.text = "Estado: $label" + (detail?.let { "\n$it" } ?: "")
+                if (intent.hasExtra(QwenVoiceLabContract.EXTRA_PROGRESS)) {
+                    progress.visibility = View.VISIBLE
+                    progress.progress = (intent.getDoubleExtra(QwenVoiceLabContract.EXTRA_PROGRESS, 0.0) * 1_000).toInt()
+                } else if (current != QwenLabState.DOWNLOADING && current != QwenLabState.VERIFYING) {
+                    progress.visibility = View.GONE
+                }
+                metricsView.text = intent.getStringExtra(QwenVoiceLabContract.EXTRA_METRICS)
+                    ?: "Métricas aún no disponibles"
+                val ready = current == QwenLabState.READY
+                testShort.isEnabled = ready
+                testLong.isEnabled = ready
+            }
+        }
+        ContextCompat.registerReceiver(
+            this,
+            receiver,
+            IntentFilter(QwenVoiceLabContract.ACTION_STATUS),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        val scroll = ScrollView(this).apply { addView(content) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Qwen Voice Lab")
+            .setView(scroll)
+            .setNegativeButton("Cerrar", null)
+            .create()
+        dialog.setOnDismissListener { runCatching { unregisterReceiver(receiver) } }
+        dialog.show()
+        qwenLabCommand(QwenVoiceLabContract.ACTION_QUERY)
+    }
+
+    private fun qwenLabCommand(action: String) {
+        startService(Intent(this, QwenVoiceLabService::class.java).setAction(action))
     }
 
     private fun showVoiceDialog() {
