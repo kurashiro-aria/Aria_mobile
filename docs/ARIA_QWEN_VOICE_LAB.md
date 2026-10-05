@@ -1,4 +1,4 @@
-# ARIA Qwen Voice Lab — 0.2.46
+# ARIA Qwen Voice Lab — 0.2.47
 
 Laboratorio aislado para medir en Android ARM64 la clonación real de
 ARIA-B5C con Qwen3-TTS 0.6B Base. No forma parte de la lectura automática y no
@@ -17,6 +17,10 @@ reemplaza Piper.
 - Descarga total: 1,283,766,112 bytes. Los pesos no están dentro del APK.
 - Perfil: `aria_voice_B5C_MASTER.wav`, SHA-256
   `b2bc79dc5a7504fe531d5fbd729a4b946423585efb1afff2ef9ab5a058f0a6b5`.
+
+El MASTER es PCM24 mono a 24 kHz y permanece bit-identical. ARIA aplica al
+runtime fijado un parche mínimo para leer PCM24 directamente; no convierte ni
+sobrescribe la referencia y no cambia los pesos descargados.
 
 ## Ruta real
 

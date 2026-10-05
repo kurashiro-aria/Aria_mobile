@@ -54,6 +54,8 @@ jobs:
           git clone --filter=blob:none https://github.com/Danmoreng/qwen3-tts.cpp.git qwen3-tts.cpp
           git -C qwen3-tts.cpp checkout 4562731dc612cb87b4cd1eedac275a17d1078773
           git -C qwen3-tts.cpp submodule update --init --recursive
+          git -C qwen3-tts.cpp apply --check ../patches/qwen3-tts-pcm24-wav.patch
+          git -C qwen3-tts.cpp apply ../patches/qwen3-tts-pcm24-wav.patch
 
       - name: Set up Java 17
         uses: actions/setup-java@v4

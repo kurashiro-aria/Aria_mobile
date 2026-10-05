@@ -74,13 +74,13 @@ class QwenVoiceLabService : Service() {
             try {
                 operation()
             } catch (oom: OutOfMemoryError) {
-                safeFailure(stage, "Memoria insuficiente")
+                safeFailure(stage, oom)
                 releaseEngine()
             } catch (cancelled: java.util.concurrent.CancellationException) {
                 state = if (store.isInstalled()) QwenLabState.INSTALLED else QwenLabState.NOT_INSTALLED
                 publish(detail = "Operación cancelada")
             } catch (error: Throwable) {
-                safeFailure(stage, error.javaClass.simpleName)
+                safeFailure(stage, error)
             }
         }
     }
@@ -115,11 +115,11 @@ class QwenVoiceLabService : Service() {
             publish(detail = "Modelo ya residente en RAM")
             return
         }
-        require(store.isInstalled()) { "Modelo no instalado" }
+        if (!store.isInstalled()) fail(QwenLabFailureCode.MODEL_FILE_MISSING, "Faltan archivos del modelo Qwen")
         state = QwenLabState.VERIFYING
         publish(detail = "Verificando SHA-256")
         val verifyStarted = SystemClock.elapsedRealtime()
-        check(store.verifyInstalled()) { "Modelo corrupto o SHA-256 inválido" }
+        if (!store.verifyInstalled()) fail(QwenLabFailureCode.MODEL_SHA_INVALID, "El modelo no superó la verificación SHA-256")
         val verifyMs = SystemClock.elapsedRealtime() - verifyStarted
         state = QwenLabState.LOADING
         publish(detail = "Preparando perfil ARIA-B5C V1")
@@ -133,12 +133,12 @@ class QwenVoiceLabService : Service() {
         native.setBackendPreference(QwenEngine.BACKEND_CPU)
         native.setCpuThreads(max(2, Runtime.getRuntime().availableProcessors().coerceAtMost(6)))
         try {
-            check(native.loadModels(store.modelDirectory.absolutePath, Qwen06BAndroidPackage.TALKER_FILE)) {
-                native.getLastError() ?: "Fallo de carga nativa"
+            if (!native.loadModels(store.modelDirectory.absolutePath, Qwen06BAndroidPackage.TALKER_FILE)) {
+                fail(QwenLabFailureCode.LOAD_MODEL_FAILED, native.loadFailureDetail())
             }
             val capabilities = native.getModelCapabilities()
-            check(capabilities?.supportsCloning == true && capabilities.modelKind == 1) {
-                "El modelo cargado no es Base con voice cloning"
+            if (capabilities?.supportsCloning != true || capabilities.modelKind != 1) {
+                fail(QwenLabFailureCode.GGUF_INCOMPATIBLE, "El GGUF no expone Base con voice cloning")
             }
         } catch (error: Throwable) {
             native.close()
@@ -166,7 +166,16 @@ class QwenVoiceLabService : Service() {
             assets.open(profile.referenceAsset).use { input ->
                 reference.outputStream().buffered().use { output -> input.copyTo(output) }
             }
-            check(sha256(reference) == profile.referenceSha256) { "ARIA-B5C MASTER no supera SHA-256" }
+            if (sha256(reference) != profile.referenceSha256) {
+                fail(QwenLabFailureCode.VOICE_PROFILE_FAILED, "ARIA-B5C MASTER no superó SHA-256")
+            }
+        }
+        val referenceFormat = QwenReferenceWavInspector.inspect(reference)
+        if (!referenceFormat.isSupportedByPinnedRuntime) {
+            fail(QwenLabFailureCode.VOICE_PROFILE_FAILED, "Formato WAV de ARIA-B5C no compatible con el runtime fijado")
+        }
+        if (referenceFormat.channels != 1 || referenceFormat.sampleRate != 24_000) {
+            fail(QwenLabFailureCode.VOICE_PROFILE_FAILED, "ARIA-B5C debe ser WAV mono a 24 kHz")
         }
         val prompt = File(directory, profile.promptFileName)
         val marker = File(directory, ".profile-v1")
@@ -179,18 +188,18 @@ class QwenVoiceLabService : Service() {
         encoder.setBackendPreference(QwenEngine.BACKEND_CPU)
         encoder.setCpuThreads(max(2, Runtime.getRuntime().availableProcessors().coerceAtMost(6)))
         try {
-            check(encoder.loadIclPromptEncoder(store.modelDirectory.absolutePath, Qwen06BAndroidPackage.TALKER_FILE)) {
-                encoder.getLastError() ?: "No se pudo cargar el encoder ICL"
+            if (!encoder.loadIclPromptEncoder(store.modelDirectory.absolutePath, Qwen06BAndroidPackage.TALKER_FILE)) {
+                fail(QwenLabFailureCode.ICL_FAILED, encoder.iclFailureDetail("No se pudo cargar el encoder ICL"))
             }
-            check(encoder.extractIclPrompt(reference.absolutePath, profile.referenceTranscript, temporary.absolutePath)) {
-                encoder.getLastError() ?: "No se pudo extraer el perfil ICL"
+            if (!encoder.extractIclPrompt(reference.absolutePath, profile.referenceTranscript, temporary.absolutePath)) {
+                fail(QwenLabFailureCode.ICL_FAILED, encoder.iclFailureDetail("No se pudo extraer el perfil ICL"))
             }
         } finally {
             encoder.close()
         }
-        check(temporary.isFile && temporary.length() > 0L) { "Perfil ICL vacío" }
+        if (!temporary.isFile || temporary.length() <= 0L) fail(QwenLabFailureCode.ICL_FAILED, "El perfil ICL quedó vacío")
         prompt.delete()
-        check(temporary.renameTo(prompt)) { "No se pudo guardar el perfil ICL" }
+        if (!temporary.renameTo(prompt)) fail(QwenLabFailureCode.STORAGE_ACCESS_FAILED, "No se pudo guardar el perfil ICL")
         marker.writeText(expectedMarker)
         return prompt
     }
@@ -377,10 +386,31 @@ class QwenVoiceLabService : Service() {
 
     private fun Long?.ms(): String = this?.let { "$it ms" } ?: "—"
 
-    private fun safeFailure(stage: String, reason: String) {
+    private fun safeFailure(stage: String, error: Throwable) {
+        val failure = QwenVoiceLabDiagnostics.classify(stage, error)
         state = QwenLabState.ERROR
-        Log.e(LOG_TAG, "event=lab_failure stage=$stage type=$reason")
-        publish(detail = "Error en $stage: $reason. ARIA y Piper siguen disponibles.")
+        Log.e(LOG_TAG, "event=lab_failure stage=$stage code=${failure.code} type=${failure.throwableType}")
+        publish(detail = "${failure.code}: ${failure.safeDetail}. ARIA y Piper siguen disponibles.")
+    }
+
+    private fun QwenEngine.loadFailureDetail(): String {
+        val nativeError = getLastError().orEmpty()
+        return when {
+            nativeError.contains("vocoder", ignoreCase = true) || nativeError.contains("tokenizer", ignoreCase = true) ->
+                "No se pudo cargar tokenizer/códec Qwen"
+            nativeError.contains("open TTS model", ignoreCase = true) -> "No se pudo abrir el GGUF talker"
+            else -> "El runtime nativo rechazó el modelo Qwen"
+        }
+    }
+
+    private fun QwenEngine.iclFailureDetail(fallback: String): String {
+        val nativeError = getLastError().orEmpty()
+        return when {
+            nativeError.contains("reference audio", ignoreCase = true) -> "El runtime no pudo leer el WAV ARIA-B5C"
+            nativeError.contains("speaker encoder", ignoreCase = true) -> "No se pudo cargar el encoder de voz B5C"
+            nativeError.contains("speech tokenizer", ignoreCase = true) -> "No se pudo cargar el encoder del códec Qwen"
+            else -> fallback
+        }
     }
 
     private fun publishFailure(stage: String, reason: String) {
