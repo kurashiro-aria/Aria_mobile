@@ -13,7 +13,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 
 enum class QwenLabState {
-    NOT_INSTALLED, DOWNLOADING, VERIFYING, INSTALLED, LOADING, READY, ERROR
+    NOT_INSTALLED, DOWNLOADING, VERIFYING, INSTALLED, LOADING, READY, SYNTHESIZING, ERROR
 }
 
 data class QwenModelArtifact(

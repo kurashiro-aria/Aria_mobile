@@ -47,6 +47,17 @@ class QwenVoiceLabStateMachine(initial: QwenLabState) {
         state = if (success) QwenLabState.READY else QwenLabState.ERROR
     }
 
+    fun requestSynthesis(): Boolean {
+        if (state != QwenLabState.READY || !runtimeLoaded) return false
+        state = QwenLabState.SYNTHESIZING
+        return true
+    }
+
+    fun finishSynthesis() {
+        check(state == QwenLabState.SYNTHESIZING)
+        state = QwenLabState.READY
+    }
+
     fun synthesisFailed() {
         state = QwenLabState.ERROR
     }

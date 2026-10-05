@@ -17,6 +17,7 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
@@ -42,7 +43,7 @@ class QwenVoiceLabService : Service() {
     private lateinit var store: QwenModelStore
     private var engine: QwenEngine? = null // Worker thread only.
     private var promptFile: File? = null // Worker thread only.
-    private var state = QwenLabState.NOT_INSTALLED
+    @Volatile private var state = QwenLabState.NOT_INSTALLED
     private var inferenceNumber = 0
     private var metrics = QwenVoiceLabMetrics()
 
@@ -67,8 +68,8 @@ class QwenVoiceLabService : Service() {
                 submit("delete") { releaseEngine(); store.delete(); deleteProfile(); state = QwenLabState.NOT_INSTALLED; metrics = QwenVoiceLabMetrics(); publish() }
             }
             QwenVoiceLabContract.ACTION_LOAD_MODEL -> submit("load") { load() }
-            QwenVoiceLabContract.ACTION_TEST_SHORT -> submit("synthesis") { synthesize(QwenVoiceLabContract.SHORT_TEXT) }
-            QwenVoiceLabContract.ACTION_TEST_LONG -> submit("synthesis") { synthesize(QwenVoiceLabContract.LONG_TEXT) }
+            QwenVoiceLabContract.ACTION_TEST_SHORT -> requestSynthesis(QwenVoiceLabContract.SHORT_TEXT)
+            QwenVoiceLabContract.ACTION_TEST_LONG -> requestSynthesis(QwenVoiceLabContract.LONG_TEXT)
             QwenVoiceLabContract.ACTION_STOP -> stopSynthesis()
             QwenVoiceLabContract.ACTION_RELEASE -> {
                 stopSynthesis()
@@ -76,6 +77,19 @@ class QwenVoiceLabService : Service() {
             }
         }
         return START_NOT_STICKY
+    }
+
+    @Synchronized
+    private fun requestSynthesis(text: String) {
+        if (state != QwenLabState.READY) {
+            Log.w(LOG_TAG, "event=synthesis_rejected state=${state.name}")
+            publish(detail = "La síntesis requiere el motor en estado LISTO")
+            return
+        }
+        state = QwenLabState.SYNTHESIZING
+        Log.i(LOG_TAG, "event=synthesis_stage stage=SYNTHESIS_REQUESTED")
+        publish(detail = "SYNTHESIS_REQUESTED · SINTETIZANDO")
+        submit("synthesis") { synthesize(text) }
     }
 
     private fun submit(stage: String, operation: () -> Unit) {
@@ -179,6 +193,7 @@ class QwenVoiceLabService : Service() {
             peakRamMib = currentPssMib(),
         )
         state = QwenLabState.READY
+        Log.i(LOG_TAG, "event=synthesis_stage stage=READY")
         publish(detail = "Listo · streaming ICL real")
     }
 
@@ -283,7 +298,7 @@ class QwenVoiceLabService : Service() {
     private fun synthesize(text: String) {
         val native = engine
         val prompt = promptFile
-        require(state == QwenLabState.READY && native != null && prompt?.isFile == true) {
+        require(state == QwenLabState.SYNTHESIZING && native != null && prompt?.isFile == true) {
             "Primero carga el modelo"
         }
         stopAudioOnly()
@@ -295,60 +310,76 @@ class QwenVoiceLabService : Service() {
         var peakRam = currentPssMib()
         var player: AudioTrack? = null
         val callbackFailure = AtomicReference<String?>(null)
+        val generationStarted = AtomicBoolean(false)
         inferenceNumber += 1
-        publish(detail = "Generando inferencia $inferenceNumber…")
+        publish(detail = "SYNTHESIS_REQUESTED · inferencia $inferenceNumber")
 
-        watchdog.schedule({
+        val timeout = watchdog.schedule({
             if (generation.compareAndSet(ticket, ticket + 1L)) {
                 publishFailure("timeout", "La síntesis superó 150 s; cerrando solo el proceso Qwen")
                 Process.killProcess(Process.myPid())
             }
         }, SYNTHESIS_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 
-        val result = native.synthesizeWithIclPromptStreaming(
-            text = text,
-            iclPromptPath = prompt.absolutePath,
-            params = QwenEngine.NativeParams(languageId = 2050, maxAudioTokens = 256),
-            chunkSeconds = 1.0f,
-            leftContextSeconds = 2.0f,
-            collectAudio = false,
-        ) { audio, rate, _, _, _, _, _, _, _, _ ->
-            if (ticket != generation.get()) return@synthesizeWithIclPromptStreaming false
-            if (!validPcm(audio, rate)) {
-                callbackFailure.set("PCM inválido")
-                return@synthesizeWithIclPromptStreaming false
+        native.setProgressCallback { _, _ ->
+            if (generationStarted.compareAndSet(false, true)) {
+                Log.i(LOG_TAG, "event=synthesis_stage stage=GENERATION_STARTED inference=$inferenceNumber")
+                publish(detail = "GENERATION_STARTED · inferencia $inferenceNumber")
             }
-            try {
-                val output = player ?: createTrack(rate).also {
-                    player = it
-                    activeTrack.set(it)
-                    sampleRate = rate
-                    it.play()
-                }
-                if (rate != sampleRate) {
-                    callbackFailure.set("Sample rate cambió durante streaming")
+        }
+        Log.i(LOG_TAG, "event=synthesis_stage stage=JNI_ENTERED inference=$inferenceNumber")
+        publish(detail = "JNI_ENTERED · inferencia $inferenceNumber")
+        val result = try {
+            native.synthesizeWithIclPromptStreaming(
+                text = text,
+                iclPromptPath = prompt.absolutePath,
+                params = QwenEngine.NativeParams(languageId = 2050, maxAudioTokens = 256),
+                chunkSeconds = 1.0f,
+                leftContextSeconds = 2.0f,
+                collectAudio = false,
+            ) { audio, rate, _, _, _, _, _, _, _, _ ->
+                if (ticket != generation.get()) return@synthesizeWithIclPromptStreaming false
+                if (!validPcm(audio, rate)) {
+                    callbackFailure.set("PCM inválido")
                     return@synthesizeWithIclPromptStreaming false
                 }
-                var cursor = 0
-                while (cursor < audio.size && ticket == generation.get()) {
-                    val count = output.write(audio, cursor, audio.size - cursor, AudioTrack.WRITE_BLOCKING)
-                    if (count <= 0) {
-                        callbackFailure.set("AudioTrack rechazó PCM")
+                try {
+                    val output = player ?: createTrack(rate).also {
+                        player = it
+                        activeTrack.set(it)
+                        sampleRate = rate
+                        Log.i(LOG_TAG, "event=synthesis_stage stage=FIRST_PCM inference=$inferenceNumber")
+                        it.play()
+                        Log.i(LOG_TAG, "event=synthesis_stage stage=PLAYING inference=$inferenceNumber")
+                    }
+                    if (rate != sampleRate) {
+                        callbackFailure.set("Sample rate cambió durante streaming")
                         return@synthesizeWithIclPromptStreaming false
                     }
-                    cursor += count
-                    samplesWritten += count
-                    if (firstAudioMs == null) {
-                        firstAudioMs = SystemClock.elapsedRealtime() - started
-                        publish(detail = "Primer audio reproducido")
+                    var cursor = 0
+                    while (cursor < audio.size && ticket == generation.get()) {
+                        val count = output.write(audio, cursor, audio.size - cursor, AudioTrack.WRITE_BLOCKING)
+                        if (count <= 0) {
+                            callbackFailure.set("AudioTrack rechazó PCM")
+                            return@synthesizeWithIclPromptStreaming false
+                        }
+                        cursor += count
+                        samplesWritten += count
+                        if (firstAudioMs == null) {
+                            firstAudioMs = SystemClock.elapsedRealtime() - started
+                            publish(detail = "PLAYING · primer PCM reproducido")
+                        }
                     }
+                    peakRam = max(peakRam, currentPssMib())
+                    ticket == generation.get()
+                } catch (error: Throwable) {
+                    callbackFailure.set(error.javaClass.simpleName)
+                    false
                 }
-                peakRam = max(peakRam, currentPssMib())
-                ticket == generation.get()
-            } catch (error: Throwable) {
-                callbackFailure.set(error.javaClass.simpleName)
-                false
             }
+        } finally {
+            native.setProgressCallback(null)
+            timeout.cancel(false)
         }
         val generationMs = SystemClock.elapsedRealtime() - started
         callbackFailure.get()?.let { error(it) }
@@ -367,12 +398,14 @@ class QwenVoiceLabService : Service() {
             inferenceNumber = inferenceNumber,
         )
         state = QwenLabState.READY
+        Log.i(LOG_TAG, "event=synthesis_stage stage=COMPLETED inference=$inferenceNumber")
         publish(detail = "Inferencia $inferenceNumber completa")
     }
 
     private fun stopSynthesis() {
         generation.incrementAndGet()
         stopAudioOnly()
+        if (engine != null && promptFile?.isFile == true) state = QwenLabState.READY
         publish(detail = "Detenido")
     }
 

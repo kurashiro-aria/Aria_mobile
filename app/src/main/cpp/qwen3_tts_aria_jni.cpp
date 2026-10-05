@@ -1,4 +1,5 @@
 #include <jni.h>
+#include <android/log.h>
 #include <cmath>
 #include <cstring>
 #include "qwen3_tts.h"
@@ -95,6 +96,8 @@ Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynthesizeWithIclPromptStreamin
     jboolean collect_audio,
     jobject callback
 ) {
+    __android_log_print(ANDROID_LOG_INFO, "ARIA.QwenVoiceLab",
+                        "event=synthesis_stage stage=JNI_ENTERED_NATIVE");
     if (context == 0 || text == nullptr || prompt_path == nullptr || callback == nullptr) return nullptr;
     const char* native_text = env->GetStringUTFChars(text, nullptr);
     const char* native_prompt = env->GetStringUTFChars(prompt_path, nullptr);
@@ -134,6 +137,9 @@ Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynthesizeWithIclPromptStreamin
     qwen3_tts_result_t result = qwen3_tts_synthesize_with_icl_prompt_streaming(
         reinterpret_cast<qwen3_tts_context_t*>(context), native_text, native_prompt,
         streaming, emit_chunk, &state);
+    __android_log_print(ANDROID_LOG_INFO, "ARIA.QwenVoiceLab",
+                        "event=synthesis_native_return success=%d audio_samples=%zu",
+                        result.success, result.audio_len);
     env->DeleteGlobalRef(callback_ref);
     env->ReleaseStringUTFChars(text, native_text);
     env->ReleaseStringUTFChars(prompt_path, native_prompt);

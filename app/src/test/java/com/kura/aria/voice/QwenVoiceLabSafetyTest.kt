@@ -43,4 +43,17 @@ class QwenVoiceLabSafetyTest {
         assertEquals("REQUIERE OPTIMIZACIÓN", QwenVoiceLabMetrics(firstAudioMs = 8_000).firstAudioClassification)
         assertEquals("NO APTO COMO VOZ PRINCIPAL", QwenVoiceLabMetrics(firstAudioMs = 10_001).firstAudioClassification)
     }
+
+    @Test fun readyTestButtonImmediatelyDispatchesSynthesisRequest() {
+        val machine = QwenVoiceLabStateMachine(QwenLabState.INSTALLED)
+        machine.beginLoad()
+        machine.finishLoad(true)
+
+        assertTrue(machine.requestSynthesis())
+        assertEquals(QwenLabState.SYNTHESIZING, machine.state)
+        assertFalse(machine.requestSynthesis())
+
+        machine.finishSynthesis()
+        assertEquals(QwenLabState.READY, machine.state)
+    }
 }
