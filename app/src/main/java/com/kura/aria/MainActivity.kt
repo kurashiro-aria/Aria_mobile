@@ -64,6 +64,13 @@ import com.kura.aria.voice.CloudVoicePlayer
 import com.kura.aria.voice.CloudVoiceRequest
 import com.kura.aria.voice.HttpCloudVoiceClient
 import com.kura.aria.voice.CloudVoiceSessionGate
+import com.kura.aria.voice.pocket.LocalVoiceEngine
+import com.kura.aria.voice.pocket.PocketInstallPhase
+import com.kura.aria.voice.pocket.PocketFallbackPolicy
+import com.kura.aria.voice.pocket.PocketMetrics
+import com.kura.aria.voice.pocket.PocketModelSpec
+import com.kura.aria.voice.pocket.PocketVoiceController
+import com.kura.aria.voice.pocket.PocketVoiceException
 import com.kura.aria.brain.BrainPipeline
 import com.kura.aria.brain.BrainState
 import com.kura.aria.brain.CloudContextBuilder
@@ -120,6 +127,11 @@ class MainActivity : AppCompatActivity() {
     private var loadingModelLabel: TextView? = null
     private var wakeButton: Button? = null
     private var speechOutput: LocalSpeechOutput? = null
+    private lateinit var pocketVoice: PocketVoiceController
+    private var pocketVoiceJob: Job? = null
+    private var pocketInstallJob: Job? = null
+    private var pocketDialogRefresh: (() -> Unit)? = null
+    private var lastPocketMetrics: PocketMetrics? = null
     private var speechInput: LocalSpeechInput? = null
     private var dictationBase = ""
     private var cloudVoiceClient: CloudVoiceClient? = null
@@ -139,6 +151,18 @@ class MainActivity : AppCompatActivity() {
         } else {
             pendingWakePermission = false
             toast("Necesito permiso del micrófono para escuchar")
+        }
+    }
+    private val pocketVoiceImport = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null || !::pocketVoice.isInitialized) return@registerForActivityResult
+        uiScope.launch {
+            try {
+                val voice = withContext(Dispatchers.IO) { pocketVoice.importVoice(uri) }
+                toast("Voz importada: ${voice.name}")
+                pocketDialogRefresh?.invoke()
+            } catch (error: Throwable) {
+                toast(error.message ?: "No pude importar la referencia de voz")
+            }
         }
     }
 
@@ -264,13 +288,14 @@ class MainActivity : AppCompatActivity() {
         }
         setContentView(screen)
         cloudVoicePlayer = CloudVoicePlayer(applicationContext)
+        pocketVoice = PocketVoiceController(applicationContext)
         showPortrait(AriaEmotion.NEUTRAL)
         updateNetworkStatus()
 
         chatHistory = ChatHistory(applicationContext)
         ariaMemory = AriaMemory(applicationContext)
         conversationManager = ConversationManager(applicationContext)
-        if (voiceEnabled()) startVoice()
+        if (voiceEnabled() && pocketVoice.preferences.engine == LocalVoiceEngine.ANDROID_FALLBACK) startVoice()
         val savedMessages = chatHistory.readAll()
         if (savedMessages.isEmpty()) aria(AriaPersonality.welcome) else savedMessages.forEach { addMessage(it.role, it.text) }
         savedMessages.lastOrNull { it.role == "ARIA" }?.let {
@@ -310,10 +335,9 @@ class MainActivity : AppCompatActivity() {
                     "Personalidad" -> toast("ARIA Personality v2 activa")
                     "Voz" -> showVoiceDialog()
                     "Repetir última respuesta" -> lastSpokenReply?.let { (text, emotion) ->
-                        cancelCloudVoicePlayback("replay")
-                        startVoice()
-                        speechOutput?.speak(text, AndroidVoiceDirector.forEmotion(emotion, lastExpressionStyle))
+                        speakReply(text, emotion, lastExpressionStyle)
                     } ?: toast("Aún no hay una respuesta nueva para leer")
+                    "Detener voz" -> stopLocalVoice()
                     "Interfaz" -> toast("Interfaz ARIA Character")
                     "Ajustes" -> showSettingsDialog()
                     else -> if (it.title?.toString()?.startsWith("Sistema") == true)
@@ -708,7 +732,7 @@ class MainActivity : AppCompatActivity() {
         cancelCloudVoicePlayback("new_turn")
         stopDictation()
         if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_PAUSE)
-        speechOutput?.stop()
+        stopLocalVoice()
         samplePlayer?.release(); samplePlayer = null
         AriaMemory.command(message)?.let { command ->
             input.text.clear()
@@ -1085,7 +1109,9 @@ class MainActivity : AppCompatActivity() {
         }
         content.addView(speechSwitch)
         content.addView(TextView(this).apply {
-            text = "No hay motor TTS local instalado. Pocket TTS queda pendiente de integración."
+            text = if (::pocketVoice.isInitialized && pocketVoice.installed)
+                "Pocket TTS está instalado. El motor y la voz se eligen desde Voz."
+            else "Pocket TTS puede instalarse desde Voz. Android TTS queda como fallback de emergencia."
         })
         val diagnosticSwitch = Switch(this).apply {
             text = "Diagnóstico emocional"
@@ -1127,7 +1153,8 @@ class MainActivity : AppCompatActivity() {
         }
         speechSwitch.setOnCheckedChangeListener { _, checked ->
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, checked).apply()
-            if (checked) startVoice() else speechOutput?.stop()
+            if (checked && pocketVoice.preferences.engine == LocalVoiceEngine.ANDROID_FALLBACK) startVoice()
+            else if (!checked) stopLocalVoice()
         }
         AlertDialog.Builder(this).setTitle("Ajustes de voz").setView(content)
             .setPositiveButton("Listo", null).show()
@@ -1197,7 +1224,7 @@ class MainActivity : AppCompatActivity() {
     private fun startDictation() {
         cancelCloudVoicePlayback("dictation")
         if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_PAUSE)
-        speechOutput?.stop()
+        stopLocalVoice()
         dictationBase = input.text.toString().trim()
         try {
             val listener = LocalSpeechInput(this,
@@ -1232,7 +1259,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSpeechSetupDialog() {
         AlertDialog.Builder(this).setTitle("Falta reconocimiento en español")
-            .setMessage("El micrófono usa el servicio de reconocimiento del teléfono. ARIA ya tiene permiso, pero ese servicio no tiene español disponible. Puedes pedir la descarga del modelo o instalar español desde los ajustes de voz de Android. La voz local se habilitará cuando ARIA integre un motor TTS compatible.")
+            .setMessage("El micrófono usa el servicio de reconocimiento del teléfono. ARIA ya tiene permiso, pero ese servicio no tiene español disponible. Puedes pedir la descarga del modelo o instalar español desde los ajustes de voz de Android. Pocket TTS es independiente y solo sintetiza las respuestas.")
             .setPositiveButton("Descargar español") { _, _ ->
                 if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
                     toast("El servicio local no está disponible; abre Ajustes de voz")
@@ -1267,14 +1294,51 @@ class MainActivity : AppCompatActivity() {
     private fun speakReply(answer: String, emotion: AriaEmotion,
                            expression: ExpressionStyle = ExpressionStyle.NATURAL) {
         cancelCloudVoicePlayback("new_reply")
-        speechOutput?.stop()
+        stopLocalVoice()
         val spokenText = com.kura.aria.voice.spokenTextForCloud(answer)
         if (spokenText.isBlank()) return
+        if (pocketVoice.preferences.engine == LocalVoiceEngine.POCKET && pocketVoice.installed) {
+            var playedPocketAudio = false
+            pocketVoiceJob = uiScope.launch {
+                try {
+                    lastPocketMetrics = pocketVoice.speak(spokenText, emotion, expression) { state ->
+                        if (state == "REPRODUCIENDO") playedPocketAudio = true
+                        Log.i("ARIA.PocketVoice", "state=$state")
+                    }
+                    emotionalDiagnosticsView?.text = emotionalDiagnosticText()
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Throwable) {
+                    val message = (error as? PocketVoiceException)?.code?.userMessage
+                        ?: "Pocket TTS no está disponible"
+                    Log.e("ARIA.PocketVoice", "synthesis_failed=${error.javaClass.simpleName}", error)
+                    if (voiceEnabled() && PocketFallbackPolicy.useAndroidFallback(
+                            LocalVoiceEngine.POCKET, pocketVoice.installed, playedPocketAudio, false)) {
+                        toast("$message · usando voz Android")
+                        speakWithAndroid(spokenText, emotion, expression)
+                    } else toast(message)
+                }
+            }
+        } else {
+            speakWithAndroid(spokenText, emotion, expression)
+        }
+    }
+
+    private fun speakWithAndroid(text: String, emotion: AriaEmotion, expression: ExpressionStyle) {
         startVoice()
-        speechOutput?.speak(spokenText, AndroidVoiceDirector.forEmotion(emotion, expression), emotion, expression)
+        speechOutput?.speak(text, AndroidVoiceDirector.forEmotion(emotion, expression), emotion, expression)
+    }
+
+    private fun stopLocalVoice() {
+        pocketVoiceJob?.cancel()
+        pocketVoiceJob = null
+        if (::pocketVoice.isInitialized) pocketVoice.stop()
+        speechOutput?.stop()
     }
 
     private fun emotionalDiagnosticText(): String {
+        lastPocketMetrics?.takeIf { pocketVoice.preferences.engine == LocalVoiceEngine.POCKET }?.let { value ->
+            return pocketMetricsText(value)
+        }
         val value = lastSpeechDiagnostics ?: return "Aún no se ha reproducido una respuesta local."
         return "Emotion: ${value.emotion}\n" +
             "Style: ${value.expressionStyle}\n" +
@@ -1284,11 +1348,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun playEmotionalContrast(emotion: AriaEmotion) {
-        startVoice()
         val style = AriaEmotion.styleFor(emotion, ExpressionStyle.NATURAL)
-        val direction = AndroidVoiceDirector.forEmotion(emotion, style)
-        speechOutput?.stop()
-        speechOutput?.speak("Hola Kura. Esta es una prueba de mi voz.", direction, emotion, style)
+        speakReply("Hola Kura. Esta es una prueba de mi voz.", emotion, style)
     }
 
     /** Safe diagnostics: state and voice parameters only, never conversation text. */
@@ -1404,10 +1465,207 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showVoiceDialog() {
-        AlertDialog.Builder(this).setTitle("Voz local de ARIA")
-            .setMessage("No hay motor TTS local instalado actualmente. ARIA conserva la entrada por voz y la Voz Cloud; Pocket TTS se integrará en una fase posterior.")
-            .setPositiveButton("Cerrar", null)
-            .setNegativeButton("Cerrar", null).show()
+        var runtimeState: String? = null
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(10), dp(20), dp(12))
+        }
+        val intro = TextView(this).apply {
+            text = "Pocket TTS funciona localmente. El paquete español se descarga una vez y permanece en el almacenamiento privado de ARIA."
+        }
+        val engineSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf("Pocket local", "Android TTS · fallback"))
+            setSelection(if (pocketVoice.preferences.engine == LocalVoiceEngine.POCKET) 0 else 1)
+        }
+        val enabledSwitch = Switch(this).apply {
+            text = "Voz activa · leer respuestas automáticamente"
+            isChecked = voiceEnabled()
+        }
+        val statusView = TextView(this).apply { setPadding(0, dp(10), 0, dp(4)) }
+        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+        }
+        val voiceLabel = TextView(this).apply { text = "Voz de ARIA"; setPadding(0, dp(12), 0, 0) }
+        val voiceSpinner = Spinner(this)
+        val install = Button(this)
+        val cancel = Button(this).apply { text = "CANCELAR DESCARGA" }
+        val load = Button(this).apply { text = "CARGAR MODELO" }
+        val test = Button(this).apply { text = "▶ PROBAR VOZ" }
+        val stop = Button(this).apply { text = "■ DETENER" }
+        val release = Button(this).apply { text = "LIBERAR MODELO" }
+        val importVoice = Button(this).apply { text = "IMPORTAR VOZ DE REFERENCIA (WAV)" }
+        val delete = Button(this).apply { text = "ELIMINAR DATOS POCKET" }
+        val metrics = TextView(this).apply { setPadding(0, dp(12), 0, 0) }
+
+        column.addView(intro)
+        column.addView(TextView(this).apply { text = "Motor de voz"; setPadding(0, dp(12), 0, 0) })
+        column.addView(engineSpinner)
+        column.addView(enabledSwitch)
+        column.addView(statusView)
+        column.addView(progress)
+        column.addView(install)
+        column.addView(cancel)
+        column.addView(load)
+        column.addView(voiceLabel)
+        column.addView(voiceSpinner)
+        column.addView(test)
+        column.addView(stop)
+        column.addView(release)
+        column.addView(importVoice)
+        column.addView(delete)
+        column.addView(TextView(this).apply {
+            text = "Diagnóstico Pocket"; setTextColor(Color.parseColor(PURPLE)); setPadding(0, dp(14), 0, 0)
+        })
+        column.addView(metrics)
+
+        val refresh = refresh@{
+            if (isFinishing || isDestroyed) return@refresh
+            val state = pocketVoice.models.status
+            val installed = pocketVoice.installed
+            val voices = pocketVoice.voices
+            val selectedId = pocketVoice.preferences.selectedVoiceId
+            val labels = voices.map { if (it.custom) "${it.name} · Mi voz" else "${it.name} · Incluida" }
+            val currentLabel = (voiceSpinner.selectedItem as? String)
+            voiceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
+            val selectedIndex = voices.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: 0
+            if (labels.isNotEmpty()) voiceSpinner.setSelection(selectedIndex.coerceAtMost(labels.lastIndex))
+            val stateLabel = runtimeState ?: when (state.phase) {
+                PocketInstallPhase.NOT_INSTALLED -> "NO INSTALADO"
+                PocketInstallPhase.DOWNLOADING -> "DESCARGANDO · ${state.progress}%"
+                PocketInstallPhase.VERIFYING -> "VERIFICANDO SHA-256"
+                PocketInstallPhase.INSTALLED -> "INSTALADO"
+                PocketInstallPhase.LOADING -> "CARGANDO"
+                PocketInstallPhase.READY -> "LISTO"
+                PocketInstallPhase.ERROR -> "ERROR · ${state.detail ?: "sin detalle"}"
+            }
+            statusView.text = buildString {
+                append("Estado: ").append(stateLabel)
+                append("\nModelo: ").append(PocketModelSpec.DISPLAY_NAME)
+                append("\nDescarga: 197.9 MiB · SHA-256 verificado")
+                append("\nStreaming PCM real: SÍ · 24 kHz mono")
+                if (installed) append("\nAlmacenamiento: %.1f MiB".format(pocketVoice.models.installedBytes() / 1048576.0))
+            }
+            progress.visibility = if (state.phase in setOf(PocketInstallPhase.DOWNLOADING, PocketInstallPhase.VERIFYING)) View.VISIBLE else View.GONE
+            progress.progress = state.progress
+            install.text = if (state.phase == PocketInstallPhase.ERROR) "REINTENTAR DESCARGA" else "DESCARGAR POCKET"
+            install.isEnabled = !installed && pocketInstallJob?.isActive != true
+            cancel.visibility = if (pocketInstallJob?.isActive == true) View.VISIBLE else View.GONE
+            load.isEnabled = installed
+            voiceSpinner.isEnabled = voices.isNotEmpty()
+            test.isEnabled = installed && voices.isNotEmpty()
+            importVoice.isEnabled = installed
+            delete.isEnabled = installed
+            metrics.text = pocketMetricsText(lastPocketMetrics ?: pocketVoice.metrics)
+            @Suppress("UNUSED_VARIABLE") val retainedSelection = currentLabel
+        }
+        pocketDialogRefresh = refresh
+
+        engineSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                pocketVoice.preferences.engine = if (position == 0) LocalVoiceEngine.POCKET else LocalVoiceEngine.ANDROID_FALLBACK
+                if (position == 0) speechOutput?.stop() else pocketVoice.stop()
+                refresh()
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+        }
+        enabledSwitch.setOnCheckedChangeListener { _, checked ->
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(VOICE_ENABLED, checked).apply()
+            if (!checked) stopLocalVoice()
+        }
+        voiceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                pocketVoice.voices.getOrNull(position)?.let { pocketVoice.selectVoice(it.id) }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+        }
+        install.setOnClickListener {
+            if (pocketInstallJob?.isActive == true) return@setOnClickListener
+            runtimeState = null
+            pocketInstallJob = uiScope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        pocketVoice.models.install { runOnUiThread { refresh() } }
+                    }
+                    toast("Pocket TTS instalado y verificado")
+                } catch (cancelled: CancellationException) { toast("Descarga cancelada") }
+                catch (error: Throwable) { toast(error.message ?: "Descarga fallida") }
+                finally { refresh() }
+            }
+            refresh()
+        }
+        cancel.setOnClickListener { pocketInstallJob?.cancel(); pocketInstallJob = null; refresh() }
+        load.setOnClickListener {
+            pocketVoiceJob?.cancel()
+            pocketVoiceJob = uiScope.launch {
+                try {
+                    pocketVoice.load { value -> runOnUiThread { runtimeState = value; refresh() } }
+                    runtimeState = "LISTO"
+                } catch (error: Throwable) { runtimeState = "ERROR · ${error.message ?: error.javaClass.simpleName}" }
+                finally { refresh() }
+            }
+        }
+        test.setOnClickListener {
+            stopLocalVoice()
+            val voices = pocketVoice.voices
+            voices.getOrNull(voiceSpinner.selectedItemPosition)?.let { pocketVoice.selectVoice(it.id) }
+            pocketVoiceJob = uiScope.launch {
+                try {
+                    lastPocketMetrics = pocketVoice.speak(
+                        "Hola Kura, soy Aria. ¿Qué hacemos ahora?",
+                        AriaEmotion.HAPPY,
+                        ExpressionStyle.PLAYFUL
+                    ) { value -> runOnUiThread { runtimeState = value; refresh() } }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Throwable) { toast(error.message ?: "Prueba Pocket fallida") }
+                finally { refresh() }
+            }
+        }
+        stop.setOnClickListener { stopLocalVoice(); runtimeState = "DETENIDO"; refresh() }
+        release.setOnClickListener {
+            stopLocalVoice()
+            uiScope.launch { pocketVoice.release(); runtimeState = "INSTALADO"; refresh() }
+        }
+        importVoice.setOnClickListener { pocketVoiceImport.launch(arrayOf("audio/wav", "audio/x-wav", "audio/*")) }
+        delete.setOnClickListener {
+            AlertDialog.Builder(this).setTitle("Eliminar Pocket TTS")
+                .setMessage("Se eliminarán solo el modelo y las voces Pocket de ARIA. No se tocarán datos antiguos de Qwen/Piper ni el chat.")
+                .setNegativeButton("Cancelar", null)
+                .setPositiveButton("Eliminar") { _, _ ->
+                    stopLocalVoice()
+                    uiScope.launch(Dispatchers.IO) {
+                        runCatching { pocketVoice.release(); pocketVoice.models.deleteInstalled() }
+                            .onSuccess { runOnUiThread { runtimeState = null; refresh(); toast("Datos Pocket eliminados") } }
+                            .onFailure { runOnUiThread { toast(it.message ?: "No pude eliminar Pocket") } }
+                    }
+                }.show()
+        }
+
+        val scrollContent = ScrollView(this).apply { addView(column) }
+        val dialog = AlertDialog.Builder(this).setTitle("Voz local de ARIA · Pocket")
+            .setView(scrollContent).setNegativeButton("Cerrar", null).create()
+        dialog.setOnDismissListener {
+            pocketDialogRefresh = null
+            // Stop an audition, but keep the loaded model reusable by normal chat.
+            if (pocketVoiceJob?.isActive == true) stopLocalVoice()
+        }
+        refresh()
+        dialog.show()
+    }
+
+    private fun pocketMetricsText(value: PocketMetrics): String = buildString {
+        append("POCKET STATUS: ").append(value.state)
+        append("\nMODEL: ").append(value.model)
+        append("\nVOICE: ").append(value.voice ?: pocketVoice.selectedVoice?.name ?: "—")
+        append("\nMODEL LOAD: ").append(value.modelLoadMs?.let { "$it ms" } ?: "—")
+        append("\nVOICE PROFILE: ").append(value.voiceProfileMs?.let { "$it ms" } ?: "incluido en primer audio")
+        append("\nT_FIRST_AUDIO: ").append(value.firstAudioMs?.let { "$it ms" } ?: "—")
+        append("\nT_GENERATION: ").append(value.generationMs?.let { "$it ms" } ?: "—")
+        append("\nT_TOTAL: ").append(value.totalMs?.let { "$it ms" } ?: "—")
+        append("\nAUDIO DURATION: ").append(value.audioDurationMs?.let { "$it ms" } ?: "—")
+        append("\nRTF: ").append(value.rtf?.let { "%.2f".format(it) } ?: "—")
+        append("\nRAM: ").append(value.ramAfterMiB?.let { "$it MiB" } ?: "—")
+        value.error?.let { append("\nERROR: ").append(it.name) }
     }
 
     private fun showCloudVoicePreviewDialog() {
@@ -1485,6 +1743,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         voiceInForeground = false
         cancelCloudVoicePlayback("lifecycle_stop")
+        stopLocalVoice()
         stopDictation()
         samplePlayer?.release(); samplePlayer = null
         super.onStop()
@@ -1492,6 +1751,9 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         if (AriaForegroundService.commandListener === wakeCommandListener)
             AriaForegroundService.commandListener = null
+        pocketInstallJob?.cancel()
+        pocketInstallJob = null
+        if (::pocketVoice.isInitialized) pocketVoice.close()
         speechOutput?.close(); speechOutput = null
         if (::cloudVoicePlayer.isInitialized) cloudVoicePlayer.close()
         if (::cloudBrain.isInitialized) runBlocking { cloudBrain.close() }

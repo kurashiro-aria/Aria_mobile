@@ -19,5 +19,23 @@ element = metadata['elements'][0]
 assert values['name'] == metadata['applicationId'] == 'com.kura.aria'
 assert int(values['versionCode']) == element['versionCode']
 assert values['versionName'] == element['versionName']
+assert int(values['versionCode']) == 66
+assert values['versionName'] == '0.2.51'
 print('APK identity and version agree with build metadata.')
 PY
+
+contents="$(unzip -l "$apk")"
+printf '%s\n' "$contents" | grep -q 'lib/arm64-v8a/libpockettts_jni.so' || {
+  echo "::error::Pocket TTS JNI library missing for arm64-v8a"; exit 1;
+}
+printf '%s\n' "$contents" | grep -q 'lib/arm64-v8a/libonnxruntime.so' || {
+  echo "::error::ONNX Runtime missing for arm64-v8a"; exit 1;
+}
+if printf '%s\n' "$contents" | grep -Eq 'flow_lm_(main|flow)|mimi_(encoder|decoder)\.onnx|text_conditioner\.onnx'; then
+  echo "::error::Pocket model weights must not be packaged in the APK"; exit 1
+fi
+apk_bytes="$(stat -c '%s' "$apk")"
+test "$apk_bytes" -lt $((200 * 1024 * 1024)) || {
+  echo "::error::APK unexpectedly contains a large model payload"; exit 1;
+}
+echo "Pocket runtime present for arm64-v8a; Pocket model weights are outside the APK."

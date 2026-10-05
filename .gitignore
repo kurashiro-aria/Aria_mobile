@@ -5,6 +5,9 @@ local.properties
 *.apk
 *.aab
 llama.cpp/
+/gradle/libs.versions.toml
+/app/src/main/jniLibs/
+/app/src/main/third_party/
 checkpoints_v2/
 voice-samples/
 processed/

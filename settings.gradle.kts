@@ -10,8 +10,6 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // Official sherpa-onnx Android artifacts are published through JitPack.
-        maven { url = uri("https://jitpack.io") }
     }
 }
 rootProject.name = "ARIA Mobile"

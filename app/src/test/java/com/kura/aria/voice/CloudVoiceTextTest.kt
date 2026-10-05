@@ -22,6 +22,12 @@ class CloudVoiceTextTest {
         assertEquals("Hola, Kura.", spokenTextForCloud("Hola, Kura."))
     }
 
+    @Test fun ttsTranscriptRemovesMarkdownButKeepsVisibleMeaning() {
+        assertEquals("Título Hola Kura y documentación.", spokenTextForCloud(
+            "# Título\n- **Hola** Kura y [documentación](https://example.com)."))
+        assertEquals("valor", spokenTextForCloud("`valor`"))
+    }
+
     @Test fun speechChunksKeepNaturalSentenceOrder() {
         assertEquals(
             listOf("Primera frase. Segunda frase! Tercera frase?"),

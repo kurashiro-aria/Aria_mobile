@@ -3,11 +3,12 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val ariaVersionName = "0.2.50"
+val ariaVersionName = "0.2.51"
 val cloudEndpoint = providers.gradleProperty("ARIA_CLOUD_ENDPOINT").orElse("https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev").get()
 val cloudClientToken = providers.gradleProperty("ARIA_CLOUD_CLIENT_TOKEN").orElse("").get()
 
 android {
+    ndkVersion = "27.2.12479018"
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -17,6 +18,9 @@ android {
 
     defaultConfig {
         ndk { abiFilters += "arm64-v8a" }
+        externalNativeBuild {
+            cmake { cppFlags += listOf("-std=c++17", "-O3") }
+        }
     }
 
     namespace = "com.kura.aria"
@@ -43,13 +47,20 @@ android {
         applicationId = "com.kura.aria"
         minSdk = 33
         targetSdk = 35
-        versionCode = 65
+        versionCode = 66
         versionName = ariaVersionName
         resValue("string", "app_name", "ARIA Mobile $ariaVersionName")
         buildConfigField("String", "ARIA_CLOUD_ENDPOINT",
             "\"${cloudEndpoint.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         buildConfigField("String", "ARIA_CLOUD_CLIENT_TOKEN",
             "\"${cloudClientToken.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 }
 

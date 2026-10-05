@@ -6,6 +6,12 @@ package com.kura.aria.voice
  */
 internal fun spokenTextForCloud(text: String): String =
     text.replace(Regex("\\*[^*]*\\*"), " ")
+        .replace(Regex("```[a-zA-Z0-9_-]*"), " ")
+        .replace("```", " ")
+        .replace(Regex("\\[([^]]+)]\\([^)]*\\)")) { match -> match.groupValues[1] }
+        .replace(Regex("(?m)^\\s{0,3}#{1,6}\\s+"), "")
+        .replace(Regex("(?m)^\\s*(?:[-+•]|>|\\d+[.)])\\s+"), "")
+        .replace(Regex("[*_~`]+"), "")
         .replace(Regex("\\s+"), " ")
         .trim()
 
