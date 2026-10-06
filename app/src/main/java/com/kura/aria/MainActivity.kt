@@ -75,6 +75,7 @@ import com.kura.aria.voice.pocket.PocketMetrics
 import com.kura.aria.voice.pocket.PocketModelSpec
 import com.kura.aria.voice.pocket.PocketVoiceController
 import com.kura.aria.voice.pocket.PocketVoiceException
+import com.kura.aria.voice.pocket.PocketDiagnosticWav
 import com.kura.aria.brain.BrainPipeline
 import com.kura.aria.brain.BrainState
 import com.kura.aria.brain.CloudContextBuilder
