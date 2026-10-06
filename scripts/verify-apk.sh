@@ -19,8 +19,8 @@ element = metadata['elements'][0]
 assert values['name'] == metadata['applicationId'] == 'com.kura.aria'
 assert int(values['versionCode']) == element['versionCode']
 assert values['versionName'] == element['versionName']
-assert int(values['versionCode']) == 67
-assert values['versionName'] == '0.2.52'
+assert int(values['versionCode']) == 68
+assert values['versionName'] == '0.2.53'
 print('APK identity and version agree with build metadata.')
 PY
 
