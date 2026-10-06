@@ -11,7 +11,12 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
     private val engine = PocketVoiceEngine(context.applicationContext)
 
     val installed: Boolean get() = models.installedPack() != null
-    val voices: List<PocketVoice> get() = models.voices()
+    val voices: List<PocketVoice> get() = models.voices().also { available ->
+        if (preferences.selectedVoiceId == null) {
+            (available.firstOrNull { it.id == PocketBuiltinVoiceProfile.ID } ?: available.firstOrNull())
+                ?.let { preferences.selectedVoiceId = it.id }
+        }
+    }
     val selectedVoice: PocketVoice?
         get() = PocketVoiceSelection.selected(voices, preferences.selectedVoiceId)
     val metrics: PocketMetrics get() = engine.lastMetrics

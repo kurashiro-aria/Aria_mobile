@@ -242,7 +242,9 @@ internal class PocketModelManager(private val context: Context) {
             val item = voicesJson.getJSONObject(index)
             PocketVoice(item.getString("id"), item.getString("name"), item.getString("file"))
         }
-        val custom = readCustomMetadata(root).filter { File(root, "voices/${it.fileName}").isFile }
+        val custom = (readCustomMetadata(root) + ensureAriaVoiceProfile(root))
+            .distinctBy { it.id }
+            .filter { it.profile != null || File(root, "voices/${it.fileName}").isFile }
         return PocketPack(
             id = json.getString("id"),
             name = json.getString("name"),
@@ -254,6 +256,26 @@ internal class PocketModelManager(private val context: Context) {
             root = root,
             voices = (bundled + custom).distinctBy { it.id }
         )
+    }
+
+    @Synchronized
+    private fun ensureAriaVoiceProfile(root: File): PocketVoice {
+        val profile = PocketBuiltinVoiceProfile.profile
+        val install = PocketVoiceProfileStore(File(root, "voices")).installBundled(
+            profile,
+            context.resources.openRawResource(com.kura.aria.R.raw.aria_d_b2),
+            PocketBuiltinVoiceProfile.EMBEDDING_SHA256
+        )
+        val voice = PocketVoice(profile.id, profile.name, profile.voiceFileName, custom = true, profile = profile)
+        val existing = readCustomMetadata(root).firstOrNull { it.id == profile.id }
+        if (existing != voice) {
+            writeCustomMetadata(root, readCustomMetadata(root).filterNot { it.id == profile.id } + voice,
+                newVoice = voice)
+        }
+        if (install == PocketVoiceProfileStore.BundledInstall.REPAIRED) {
+            android.util.Log.w("PocketModelManager", "Repaired packaged ARIA-D-B2 Pocket profile")
+        }
+        return voice
     }
 
     private fun readCustomMetadata(root: File): List<PocketVoice> {

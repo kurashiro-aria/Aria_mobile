@@ -8,6 +8,7 @@ import java.nio.ByteOrder
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.UUID
 
 /** Metadata paired with PocketTTS.cpp's native Mimi embedding cache (.emb). */
@@ -26,6 +27,21 @@ internal data class PocketVoiceProfile(
 }
 
 internal enum class PocketVoiceProfileState { VALID, INVALID }
+
+internal object PocketBuiltinVoiceProfile {
+    const val ID = "aria-d-b2"
+    const val NAME = "ARIA-D-B2"
+    const val EMBEDDING_SHA256 = "c3e2f606431b3655852a3b3256896adf1ff6b8fe1e1e54c04914ad6d8c34b599"
+    const val EMBEDDING_BYTES = 1_540_128L
+    val profile = PocketVoiceProfile(
+        id = ID,
+        name = NAME,
+        formatId = PocketVoiceProfileFormat.ID,
+        runtimeId = PocketModelSpec.PROFILE_RUNTIME_ID,
+        modelId = PocketModelSpec.ID,
+        embeddingFileName = "$ID.emb"
+    )
+}
 
 internal object PocketVoiceProfileFormat {
     const val ID = "pocket-cpp-emb1"
@@ -99,6 +115,8 @@ internal object PocketVoiceProfileValidator {
 
 /** Stages and validates one .emb, then publishes it atomically in Pocket's cache directory. */
 internal class PocketVoiceProfileStore(private val voicesDir: File) {
+    enum class BundledInstall { INSTALLED, REUSED, REPAIRED }
+
     fun import(profile: PocketVoiceProfile, source: InputStream): PocketVoiceProfile {
         require(PocketVoiceProfileValidator.validateMetadata(profile)) { "Perfil Pocket incompatible" }
         val destination = PocketVoiceProfileValidator.embeddingFile(profile, voicesDir)
@@ -139,6 +157,75 @@ internal class PocketVoiceProfileStore(private val voicesDir: File) {
             staging.delete()
             throw error
         }
+    }
+
+    /** Installs the packaged canonical profile, repairing only a missing or invalid copy. */
+    fun installBundled(profile: PocketVoiceProfile, source: InputStream, expectedSha256: String): BundledInstall {
+        require(PocketVoiceProfileValidator.validateMetadata(profile)) { "Perfil Pocket incompatible" }
+        val destination = PocketVoiceProfileValidator.embeddingFile(profile, voicesDir)
+            ?: throw IllegalArgumentException("Ruta del perfil inválida")
+        val cacheDir = destination.parentFile ?: throw IllegalArgumentException("Directorio de caché inválido")
+        require(cacheDir.mkdirs() || cacheDir.isDirectory)
+        val canonicalRoot = File(voicesDir, ".cache").canonicalFile
+        require(cacheDir.canonicalFile == canonicalRoot && destination.parentFile?.canonicalFile == canonicalRoot) {
+            "Ruta del perfil fuera de la caché Pocket"
+        }
+        synchronized(PUBLISH_LOCK) {
+            val hadDestination = destination.exists()
+            if (hadDestination && PocketVoiceProfileFormat.validateEmbedding(destination) &&
+                sha256(destination).equals(expectedSha256, ignoreCase = true)) {
+                source.close()
+                return BundledInstall.REUSED
+            }
+            val staging = File(cacheDir, ".${profile.id}-${UUID.randomUUID()}.emb.part")
+            try {
+                source.use { input ->
+                    staging.outputStream().use { output ->
+                        val digest = MessageDigest.getInstance("SHA-256")
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        var total = 0L
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            require(total <= PocketVoiceProfileFormat.MAX_BYTES) { "Perfil Pocket demasiado grande" }
+                            digest.update(buffer, 0, count)
+                            output.write(buffer, 0, count)
+                        }
+                        output.fd.sync()
+                        require(total == PocketBuiltinVoiceProfile.EMBEDDING_BYTES &&
+                            digest.digest().joinToString("") { "%02x".format(it) }.equals(expectedSha256, true)) {
+                            "El perfil Pocket empaquetado no coincide con su SHA-256 esperado"
+                        }
+                    }
+                }
+                require(PocketVoiceProfileFormat.validateEmbedding(staging)) { "Archivo .emb inválido" }
+                try {
+                    val options = if (hadDestination) arrayOf(
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING
+                    ) else arrayOf(StandardCopyOption.ATOMIC_MOVE)
+                    Files.move(staging.toPath(), destination.toPath(), *options)
+                } catch (_: AtomicMoveNotSupportedException) {
+                    if (hadDestination) Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    else if (!staging.renameTo(destination)) throw IllegalStateException("No pude publicar el perfil Pocket")
+                }
+                return if (hadDestination) BundledInstall.REPAIRED else BundledInstall.INSTALLED
+            } catch (error: Throwable) {
+                staging.delete()
+                throw error
+            }
+        }
+    }
+
+    private fun sha256(file: File): String = file.inputStream().use { input ->
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+        }
+        digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private companion object {

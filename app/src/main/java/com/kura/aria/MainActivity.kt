@@ -67,6 +67,7 @@ import com.kura.aria.voice.CloudVoiceSessionGate
 import com.kura.aria.voice.pocket.LocalVoiceEngine
 import com.kura.aria.voice.pocket.PocketInstallPhase
 import com.kura.aria.voice.pocket.PocketAudioFormat
+import com.kura.aria.voice.pocket.PocketBuiltinVoiceProfile
 import com.kura.aria.voice.pocket.PocketFallbackPolicy
 import com.kura.aria.voice.pocket.PocketMetrics
 import com.kura.aria.voice.pocket.PocketModelSpec
@@ -1528,7 +1529,13 @@ class MainActivity : AppCompatActivity() {
             val installed = pocketVoice.installed
             val voices = pocketVoice.voices
             val selectedId = pocketVoice.preferences.selectedVoiceId
-            val labels = voices.map { if (it.custom) "${it.name} · Mi voz" else "${it.name} · Incluida" }
+            val labels = voices.map {
+                when {
+                    it.id == PocketBuiltinVoiceProfile.ID -> "${it.name} · Voz oficial"
+                    it.custom -> "${it.name} · Mi voz"
+                    else -> "${it.name} · Incluida"
+                }
+            }
             val currentLabel = (voiceSpinner.selectedItem as? String)
             voiceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
             val selectedIndex = voices.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: 0
@@ -1616,7 +1623,7 @@ class MainActivity : AppCompatActivity() {
             pocketVoiceJob = uiScope.launch {
                 try {
                     lastPocketMetrics = pocketVoice.speak(
-                        "Hola Kura, soy Aria. ¿Qué hacemos ahora?",
+                        "Hola Kura, soy Aria. Al fin puedo hablar contigo con mi propia voz. ¿Qué hacemos ahora?",
                         AriaEmotion.HAPPY,
                         ExpressionStyle.PLAYFUL
                     ) { value -> runOnUiThread { runtimeState = value; refresh() } }

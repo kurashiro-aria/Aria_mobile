@@ -10,8 +10,69 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
 import java.io.RandomAccessFile
+import java.security.MessageDigest
 
 class PocketVoiceProfileTest {
+    @Test fun productionResourceMatchesApprovedAriaD2Artifact() {
+        val productionAsset = sequenceOf(
+            File("src/main/res/raw/aria_d_b2.emb"),
+            File("app/src/main/res/raw/aria_d_b2.emb")
+        ).first(File::isFile)
+        val bytes = productionAsset.readBytes()
+        val sha256 = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        assertEquals(PocketBuiltinVoiceProfile.EMBEDDING_BYTES, bytes.size.toLong())
+        assertEquals(PocketBuiltinVoiceProfile.EMBEDDING_SHA256, sha256)
+        assertTrue(PocketVoiceProfileFormat.validateEmbedding(productionAsset))
+        val header = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(PocketVoiceProfileFormat.MAGIC, header.int)
+        assertEquals(3, header.int)
+        assertEquals(1L, header.long)
+        assertEquals(376L, header.long)
+        assertEquals(1024L, header.long)
+    }
+
+    @Test fun bundledProfileIsReusedAndCorruptCopyIsSafelyRepaired() {
+        val bytes = javaClass.getResourceAsStream("/com/kura/aria/voice/pocket/aria_d_b2.emb")!!
+            .use { it.readBytes() }
+        val voices = Files.createTempDirectory("pocket-bundled-profile").toFile()
+        try {
+            val store = PocketVoiceProfileStore(voices)
+            val profile = PocketBuiltinVoiceProfile.profile
+            val installed = File(voices, ".cache/${profile.id}.emb")
+            assertEquals(PocketVoiceProfileStore.BundledInstall.INSTALLED,
+                store.installBundled(profile, ByteArrayInputStream(bytes), PocketBuiltinVoiceProfile.EMBEDDING_SHA256))
+            assertTrue(bytes.contentEquals(installed.readBytes()))
+
+            val before = installed.readBytes()
+            assertEquals(PocketVoiceProfileStore.BundledInstall.REUSED,
+                store.installBundled(profile, ByteArrayInputStream(bytes), PocketBuiltinVoiceProfile.EMBEDDING_SHA256))
+            assertTrue(before.contentEquals(installed.readBytes()))
+
+            installed.writeBytes(byteArrayOf(1, 2, 3))
+            val corrupt = installed.readBytes()
+            assertTrue(runCatching {
+                store.installBundled(profile, ByteArrayInputStream(bytes), "0".repeat(64))
+            }.isFailure)
+            assertTrue(corrupt.contentEquals(installed.readBytes()))
+
+            assertEquals(PocketVoiceProfileStore.BundledInstall.REPAIRED,
+                store.installBundled(profile, ByteArrayInputStream(bytes), PocketBuiltinVoiceProfile.EMBEDDING_SHA256))
+            assertTrue(bytes.contentEquals(installed.readBytes()))
+            assertFalse(File(voices, profile.voiceFileName).exists())
+            assertFalse(File(voices, ".cache/${profile.id}.kv").exists())
+        } finally { voices.deleteRecursively() }
+    }
+
+    @Test fun stableAriaD2SelectionRestoresThePreviouslySelectedProfile() {
+        val profile = PocketBuiltinVoiceProfile.profile
+        val voices = listOf(
+            PocketVoice("legacy", "Legacy", "legacy.wav"),
+            PocketVoice(profile.id, profile.name, profile.voiceFileName, true, profile)
+        )
+        assertEquals(profile.id, PocketVoiceSelection.selected(voices, profile.id)?.id)
+    }
+
     @Test fun acceptsRealPocketEncoderOutputAndImportsItWithoutReferenceAudio() {
         val bytes = javaClass.getResourceAsStream("/com/kura/aria/voice/pocket/aria_d_b2.emb")!!
             .use { it.readBytes() }
