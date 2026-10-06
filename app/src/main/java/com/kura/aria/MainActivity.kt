@@ -3,6 +3,7 @@ package com.kura.aria
 import android.app.Activity
 import android.Manifest
 import android.content.BroadcastReceiver
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -33,6 +34,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
@@ -1499,6 +1501,7 @@ class MainActivity : AppCompatActivity() {
         val importVoice = Button(this).apply { text = "IMPORTAR VOZ DE REFERENCIA (WAV)" }
         val delete = Button(this).apply { text = "ELIMINAR DATOS POCKET" }
         val audioDiagnostic = Button(this).apply { text = "GENERAR PRUEBA DE AUDIO" }
+        val shareAudioDiagnostic = Button(this).apply { text = "Compartir WAV diagnóstico Pocket" }
         val metrics = TextView(this).apply { setPadding(0, dp(12), 0, 0) }
 
         column.addView(intro)
@@ -1521,6 +1524,7 @@ class MainActivity : AppCompatActivity() {
             text = "Diagnóstico Pocket"; setTextColor(Color.parseColor(PURPLE)); setPadding(0, dp(14), 0, 0)
         })
         column.addView(audioDiagnostic)
+        column.addView(shareAudioDiagnostic)
         column.addView(metrics)
 
         val refresh = refresh@{
@@ -1646,6 +1650,25 @@ class MainActivity : AppCompatActivity() {
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Throwable) { toast(error.message ?: "Prueba de audio fallida") }
                 finally { refresh() }
+            }
+        }
+        shareAudioDiagnostic.setOnClickListener {
+            val file = PocketDiagnosticWav.file(cacheDir)
+            if (!PocketDiagnosticWav.isShareable(file)) {
+                toast("Primero haz hablar a ARIA para generar el WAV diagnóstico.")
+                return@setOnClickListener
+            }
+            try {
+                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+                val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "audio/wav"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    clipData = ClipData.newUri(contentResolver, "pocket_audio_quality.wav", uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(sendIntent, "Compartir WAV diagnóstico Pocket"))
+            } catch (error: Throwable) {
+                toast(error.message ?: "No pude compartir el WAV diagnóstico Pocket")
             }
         }
         stop.setOnClickListener { stopLocalVoice(); runtimeState = "DETENIDO"; refresh() }

@@ -42,5 +42,15 @@
                 android:value="Keeps the user's local ARIA AI session and loaded model available while switching apps" />
         </service>
 
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/pocket_diagnostic_paths" />
+        </provider>
+
     </application>
 </manifest>
