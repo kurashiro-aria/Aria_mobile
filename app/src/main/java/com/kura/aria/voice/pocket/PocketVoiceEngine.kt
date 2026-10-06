@@ -72,7 +72,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         require(text.isNotBlank())
         if (!PocketInstallValidator.hasRequiredFiles(pack))
             throw PocketVoiceException(PocketVoiceError.MODELO_CORRUPTO)
-        if (!java.io.File(pack.voicesDir, voice.fileName).isFile)
+        if (!PocketInstallValidator.isVoiceAvailable(pack.voicesDir, voice))
             throw PocketVoiceException(PocketVoiceError.VOZ_NO_DISPONIBLE)
 
         cancelled.set(false)

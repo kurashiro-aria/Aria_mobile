@@ -23,6 +23,9 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
 
     fun importVoice(uri: Uri): PocketVoice = models.importVoice(uri).also { selectVoice(it.id) }
 
+    fun importPocketVoiceProfile(uri: Uri, profile: PocketVoiceProfile): PocketVoice =
+        models.importPocketVoiceProfile(uri, profile).also { selectVoice(it.id) }
+
     suspend fun load(onState: (String) -> Unit = {}): Long {
         val pack = models.installedPack()
             ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)

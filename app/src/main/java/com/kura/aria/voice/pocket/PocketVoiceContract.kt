@@ -11,6 +11,7 @@ internal object PocketModelSpec {
     const val DOWNLOAD_BYTES = 207_487_086L
     const val ARCHIVE_SHA256 = "f83dc41bd0d5c7634d385fdadef496881d398ca99d1886ff25d90cb59e384412"
     const val RUNTIME = "PocketTTS.cpp e801e7d + ONNX Runtime Android 1.20.0"
+    const val PROFILE_RUNTIME_ID = "pocketcpp-e801e7d6c2692121a39e80ae525cb5265174a495-pocket-spanish-fp32-v052"
     const val SAMPLE_RATE = PocketAudioFormat.SAMPLE_RATE
     const val FORMAT_VERSION = 1
 
@@ -34,7 +35,8 @@ internal data class PocketVoice(
     val id: String,
     val name: String,
     val fileName: String,
-    val custom: Boolean = false
+    val custom: Boolean = false,
+    val profile: PocketVoiceProfile? = null
 )
 
 internal data class PocketPack(
@@ -114,7 +116,11 @@ internal object PocketInstallValidator {
         pack.languageTag.startsWith("es", ignoreCase = true) &&
             pack.voices.isNotEmpty() &&
             requiredModelNames(pack.precision).all { File(pack.modelsDir, it).isFile && File(pack.modelsDir, it).length() > 0L } &&
-            pack.voices.all { File(pack.voicesDir, it.fileName).isFile && File(pack.voicesDir, it.fileName).length() > 44L }
+            pack.voices.all { isVoiceAvailable(pack.voicesDir, it) }
+
+    fun isVoiceAvailable(voicesDir: File, voice: PocketVoice): Boolean = voice.profile?.let {
+        PocketVoiceProfileValidator.isInstalledProfileValid(it, voicesDir)
+    } ?: File(voicesDir, voice.fileName).let { it.isFile && it.length() > 44L }
 
     fun safeArchivePath(root: File, entry: String): File {
         val target = File(root, entry).canonicalFile

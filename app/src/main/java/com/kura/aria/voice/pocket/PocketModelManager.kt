@@ -15,6 +15,9 @@ import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
@@ -103,6 +106,7 @@ internal class PocketModelManager(private val context: Context) {
         status = PocketInstallStatus(PocketInstallPhase.NOT_INSTALLED)
     }
 
+    @Synchronized
     fun importVoice(uri: Uri): PocketVoice {
         val pack = installedPack() ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)
         val original = displayName(uri).substringBeforeLast('.').ifBlank { "Voz personalizada" }
@@ -134,6 +138,30 @@ internal class PocketModelManager(private val context: Context) {
         writeCustomMetadata(pack.root, readCustomMetadata(pack.root) + voice,
             newVoice = voice, referenceSha256 = sha256(destination))
         return voice
+    }
+
+    /** Imports a validated C++ EMB1 profile; the original WAV is not required at synthesis time. */
+    @Synchronized
+    fun importPocketVoiceProfile(uri: Uri, profile: PocketVoiceProfile): PocketVoice {
+        val pack = installedPack() ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)
+        require(PocketVoiceProfileValidator.validateMetadata(profile)) { "Perfil Pocket incompatible" }
+        require(pack.voices.none { it.id == profile.id }) { "Ya existe una voz con ese id" }
+        val input = context.contentResolver.openInputStream(uri)
+            ?: throw IllegalArgumentException("No pude abrir el perfil Pocket")
+        val store = PocketVoiceProfileStore(pack.voicesDir)
+        store.import(profile, input)
+        val voice = PocketVoice(profile.id, profile.name, profile.voiceFileName, custom = true, profile = profile)
+        try {
+            writeCustomMetadata(pack.root, readCustomMetadata(pack.root) + voice)
+            // A .kv belongs to a particular conditioning state. Never let a stale
+            // snapshot from an earlier profile with the same id override this EMB1.
+            File(pack.voicesDir, ".cache/${profile.id}.kv").delete()
+            return voice
+        } catch (error: Throwable) {
+            File(pack.voicesDir, ".cache/${profile.id}.emb").delete()
+            File(pack.voicesDir, ".cache/${profile.id}.kv").delete()
+            throw error
+        }
     }
 
     private suspend fun download(destination: File, progress: (Int) -> Unit) {
@@ -228,13 +256,35 @@ internal class PocketModelManager(private val context: Context) {
         )
     }
 
-    private fun readCustomMetadata(root: File): List<PocketVoice> = runCatching {
-        val values = JSONArray(File(root, "custom-voices.json").readText())
-        (0 until values.length()).map { index ->
+    private fun readCustomMetadata(root: File): List<PocketVoice> {
+        val values = runCatching { JSONArray(File(root, "custom-voices.json").readText()) }
+            .getOrNull() ?: return emptyList()
+        return (0 until values.length()).mapNotNull { index -> runCatching {
             val item = values.getJSONObject(index)
-            PocketVoice(item.getString("id"), item.getString("name"), item.getString("file"), true)
-        }
-    }.getOrDefault(emptyList())
+            val id = item.getString("id")
+            val name = item.getString("name")
+            val fileName = item.getString("file")
+            require(fileName == File(fileName).name && !fileName.contains('\\'))
+            val profileJson = item.optJSONObject("pocketProfile")
+            if (profileJson != null) {
+                val profile = PocketVoiceProfile(
+                    id = profileJson.getString("id"),
+                    name = profileJson.getString("name"),
+                    formatId = profileJson.getString("formatId"),
+                    runtimeId = profileJson.getString("runtimeId"),
+                    modelId = profileJson.getString("modelId"),
+                    embeddingFileName = profileJson.getString("embeddingFile"),
+                    sampleRate = profileJson.getInt("sampleRate")
+                )
+                require(id == profile.id && name == profile.name && fileName == profile.voiceFileName)
+                require(PocketVoiceProfileValidator.isInstalledProfileValid(profile, File(root, "voices")))
+                PocketVoice(id, name, fileName, true, profile)
+            } else {
+                require(File(root, "voices/$fileName").isFile)
+                PocketVoice(id, name, fileName, true)
+            }
+        }.getOrNull() }.distinctBy { it.id }
+    }
 
     private fun writeCustomMetadata(
         root: File,
@@ -248,15 +298,39 @@ internal class PocketModelManager(private val context: Context) {
             val old = (0 until (previous?.length() ?: 0)).mapNotNull { index ->
                 previous?.optJSONObject(index)
             }.firstOrNull { item -> item.optString("id") == it.id }
-            json.put(JSONObject().put("id", it.id).put("name", it.name).put("file", it.fileName)
+            val entry = JSONObject().put("id", it.id).put("name", it.name).put("file", it.fileName)
                 .put("profileVersion", 1)
                 .put("model", PocketModelSpec.ID)
                 .put("sampleRate", PocketModelSpec.SAMPLE_RATE)
                 .put("referenceSha256", if (it == newVoice) referenceSha256 else old?.optString("referenceSha256"))
                 .put("createdAt", if (it == newVoice) System.currentTimeMillis() else old?.optLong("createdAt"))
-                .put("state", "READY"))
+                .put("state", "READY")
+            it.profile?.let { profile ->
+                entry.put("pocketProfile", JSONObject()
+                    .put("id", profile.id)
+                    .put("name", profile.name)
+                    .put("formatId", profile.formatId)
+                    .put("runtimeId", profile.runtimeId)
+                    .put("modelId", profile.modelId)
+                    .put("embeddingFile", profile.embeddingFileName)
+                    .put("sampleRate", profile.sampleRate))
+            }
+            json.put(entry)
         }
-        File(root, "custom-voices.json").writeText(json.toString(2))
+        val target = File(root, "custom-voices.json")
+        val staged = File(root, ".custom-voices-${UUID.randomUUID()}.json.tmp")
+        try {
+            FileOutputStream(staged).use { output ->
+                output.write(json.toString(2).toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            try {
+                Files.move(staged.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(staged.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally { staged.delete() }
     }
 
     private fun displayName(uri: Uri): String {
