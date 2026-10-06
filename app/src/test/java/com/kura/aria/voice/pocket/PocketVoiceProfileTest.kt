@@ -9,8 +9,30 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
+import java.io.RandomAccessFile
 
 class PocketVoiceProfileTest {
+    @Test fun acceptsRealPocketEncoderOutputAndImportsItWithoutReferenceAudio() {
+        val bytes = javaClass.getResourceAsStream("/com/kura/aria/voice/pocket/aria_d_b2.emb")!!
+            .use { it.readBytes() }
+        val voices = Files.createTempDirectory("pocket-real-import").toFile()
+        try {
+            val header = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            assertEquals(PocketVoiceProfileFormat.MAGIC, header.int)
+            assertEquals(3, header.int)
+            assertEquals(1L, header.long)
+            assertEquals(376L, header.long)
+            assertEquals(1024L, header.long)
+            assertEquals(PocketVoiceProfileFormat.MAX_BYTES, bytes.size)
+            assertTrue(PocketVoiceProfileFormat.validateEmbedding(write(voices, "source.emb", bytes)))
+            val profile = profile("aria-d-b2").copy(name = "ARIA-D-B2")
+            PocketVoiceProfileStore(voices).import(profile, ByteArrayInputStream(bytes))
+            assertTrue(PocketVoiceProfileValidator.isInstalledProfileValid(profile, voices))
+            assertFalse(File(voices, profile.voiceFileName).exists())
+            assertFalse(File(voices, ".cache/${profile.id}.kv").exists())
+        } finally { voices.deleteRecursively() }
+    }
+
     @Test fun importsValidEmbAsReusableProfileWithoutWaveOrKv() {
         val voices = Files.createTempDirectory("pocket-profile").toFile()
         try {
@@ -25,13 +47,36 @@ class PocketVoiceProfileTest {
         } finally { voices.deleteRecursively() }
     }
 
-    @Test fun rejectsBadMagicTruncatedPayloadAndIncompatibleShape() {
+    @Test fun rejectsBadMagicRankDimensionsTruncationAndPayloadMismatch() {
         val voices = Files.createTempDirectory("pocket-invalid").toFile()
         try {
             val badMagic = validEmb().also { it[0] = 0 }
             assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "bad-magic.emb", badMagic)))
+
+            val badRank = validEmb().also { ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).putInt(4, 4) }
+            assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "bad-rank.emb", badRank)))
+
             assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "truncated.emb", validEmb().dropLast(1).toByteArray())))
-            assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "bad-shape.emb", validEmb(channels = 7))))
+            assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "trailing.emb", validEmb() + byteArrayOf(0))))
+
+            val badBatch = validEmb().also { ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).putLong(8, 2) }
+            val badFrames = validEmb().also { ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).putLong(16, 377) }
+            val badFeature = validEmb().also { ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).putLong(24, 8) }
+            assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "bad-batch.emb", badBatch)))
+            assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "too-many-frames.emb", badFrames)))
+            assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "bad-feature-width.emb", badFeature)))
+
+            val inconsistentPayload = validEmb().dropLast(4).toByteArray()
+            assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "payload-mismatch.emb", inconsistentPayload)))
+
+            val nan = validEmb().also { ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).putFloat(32, Float.NaN) }
+            val inf = validEmb().also { ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).putFloat(32, Float.POSITIVE_INFINITY) }
+            assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "nan.emb", nan)))
+            assertFalse(PocketVoiceProfileFormat.validateEmbedding(write(voices, "inf.emb", inf)))
+
+            val oversized = File(voices, "oversized.emb")
+            RandomAccessFile(oversized, "rw").use { it.setLength(PocketVoiceProfileFormat.MAX_BYTES.toLong() + 1) }
+            assertFalse(PocketVoiceProfileFormat.validateEmbedding(oversized))
         } finally { voices.deleteRecursively() }
     }
 
@@ -99,14 +144,15 @@ class PocketVoiceProfileTest {
         embeddingFileName = "$id.emb"
     )
 
-    private fun validEmb(channels: Int = 8): ByteArray {
-        val values = 2
-        return ByteBuffer.allocate(8 + 3 * 8 + channels * values * 4)
+    private fun validEmb(frames: Int = 2): ByteArray {
+        val features = 1024
+        val values = frames * features
+        return ByteBuffer.allocate(8 + 3 * 8 + values * 4)
             .order(ByteOrder.LITTLE_ENDIAN)
             .putInt(PocketVoiceProfileFormat.MAGIC)
             .putInt(3)
-            .putLong(1).putLong(channels.toLong()).putLong(values.toLong())
-            .apply { repeat(channels * values) { putFloat(it / 10f) } }
+            .putLong(1).putLong(frames.toLong()).putLong(features.toLong())
+            .apply { repeat(values) { putFloat(it / 10f) } }
             .array()
     }
 

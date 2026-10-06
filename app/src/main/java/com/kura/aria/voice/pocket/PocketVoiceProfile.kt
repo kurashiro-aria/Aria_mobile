@@ -2,6 +2,7 @@ package com.kura.aria.voice.pocket
 
 import java.io.File
 import java.io.InputStream
+import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.AtomicMoveNotSupportedException
@@ -29,24 +30,43 @@ internal enum class PocketVoiceProfileState { VALID, INVALID }
 internal object PocketVoiceProfileFormat {
     const val ID = "pocket-cpp-emb1"
     const val MAGIC = 0x31424D45 // "EMB1" as little-endian uint32
-    const val MAX_BYTES = 1 shl 20
-    private const val EXPECTED_CHANNELS = 8
-    private const val MAX_FRAMES = 4096
+    private const val RANK = 3
+    private const val BATCH = 1L
+    private const val FEATURE_SIZE = 1024L
+    // Pocket's pinned Mimi encoder accepts at most 30 s at 24 kHz and emits
+    // at most 376 conditioning frames for that input. Axis 1 is dynamic;
+    // the final axis is the encoder's fixed 1024-wide conditioning feature.
+    private const val MAX_FRAMES = 376L
+    private const val HEADER_BYTES = 8L + RANK * 8L
+    const val MAX_BYTES = 8 + 3 * 8 + 376 * 1024 * 4
 
     /** The pinned C++ cache is [magic:u32][rank:i32][shape:i64*rank][float32*elements]. */
     fun validateEmbedding(file: File): Boolean = runCatching {
-        if (!file.isFile || file.length() !in 36L..MAX_BYTES.toLong()) return false
-        val bytes = file.readBytes()
+        val length = file.length()
+        if (!file.isFile || length !in (HEADER_BYTES + FEATURE_SIZE * Float.SIZE_BYTES)..MAX_BYTES.toLong()) return false
+        val bytes = file.inputStream().use { input ->
+            val output = ByteArrayOutputStream(length.toInt())
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (output.size().toLong() + count > MAX_BYTES.toLong()) return false
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        }
+        if (file.length() != length || bytes.size.toLong() != length) return false
         val input = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        if (input.remaining() < HEADER_BYTES.toInt()) return false
         if (input.int != MAGIC) return false
         val rank = input.int
-        if (rank != 3) return false
+        if (rank != RANK) return false
         val shape = LongArray(rank) { input.long }
-        if (shape[0] != 1L || shape[1] != EXPECTED_CHANNELS.toLong() ||
-            shape[2] !in 1L..MAX_FRAMES.toLong()) return false
-        val elements = shape.fold(1L) { acc, dim -> Math.multiplyExact(acc, dim) }
-        val expectedBytes = 8L + rank * 8L + elements * 4L
-        if (expectedBytes != bytes.size.toLong()) return false
+        if (shape[0] != BATCH || shape[1] !in 1L..MAX_FRAMES || shape[2] != FEATURE_SIZE) return false
+        val elements = Math.multiplyExact(Math.multiplyExact(shape[0], shape[1]), shape[2])
+        val payloadBytes = Math.multiplyExact(elements, Float.SIZE_BYTES.toLong())
+        val expectedBytes = Math.addExact(HEADER_BYTES, payloadBytes)
+        if (expectedBytes != length || expectedBytes != bytes.size.toLong()) return false
         while (input.hasRemaining()) if (!input.float.isFinite()) return false
         true
     }.getOrDefault(false)
