@@ -332,19 +332,32 @@ internal class PocketPcm16Pipeline(
     val floatInspector = if (floatWavWriter != null) PocketFloatInspector() else null
     val pcm16Inspector = if (floatWavWriter != null) PocketPcm16Inspector() else null
     val quantizationInspector = if (floatWavWriter != null) PocketQuantizationInspector() else null
+    private var diagnosticsActive = wavWriter != null || floatWavWriter != null
     var playbackStarted = false
         private set
     var writtenSamples = 0L
         private set
 
     fun accept(samples: FloatArray) {
-        floatWavWriter?.append(samples)
+        if (diagnosticsActive) {
+            try {
+                floatWavWriter?.append(samples)
+            } catch (_: Throwable) {
+                abortDiagnostics()
+            }
+        }
         floatInspector?.accept(samples)
         inspector.accept(samples)
         val bytes = PocketPcm.floatToPcm16(samples)
         pcm16Inspector?.accept(bytes)
         quantizationInspector?.accept(samples, bytes)
-        wavWriter?.append(bytes)
+        if (diagnosticsActive) {
+            try {
+                wavWriter?.append(bytes)
+            } catch (_: Throwable) {
+                abortDiagnostics()
+            }
+        }
         if (!playbackStarted) {
             pending.write(bytes)
             if (pending.size() >= prebufferBytes) startPlayback()
@@ -355,13 +368,22 @@ internal class PocketPcm16Pipeline(
 
     fun finish() {
         if (!playbackStarted && pending.size() > 0) startPlayback()
-        wavWriter?.finish()
-        floatWavWriter?.finish()
+        if (!diagnosticsActive) return
+        try {
+            wavWriter?.finish()
+            floatWavWriter?.finish()
+        } catch (_: Throwable) {
+            abortDiagnostics()
+        }
     }
 
-    fun abort() {
-        wavWriter?.abort()
-        floatWavWriter?.abort()
+    fun abort() = abortDiagnostics()
+
+    private fun abortDiagnostics() {
+        if (!diagnosticsActive) return
+        diagnosticsActive = false
+        runCatching { wavWriter?.abort() }
+        runCatching { floatWavWriter?.abort() }
     }
 
     private fun startPlayback() {

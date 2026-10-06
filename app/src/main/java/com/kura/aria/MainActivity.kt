@@ -1655,17 +1655,26 @@ class MainActivity : AppCompatActivity() {
         }
         shareAudioDiagnostic.setOnClickListener {
             val files = PocketDiagnosticWav.files(cacheDir)
-            if (!PocketDiagnosticWav.areShareable(files)) {
-                toast("Primero haz hablar a ARIA para generar ambos WAV del diagnóstico.")
+            val floatFile = files[0]
+            val pcmFile = files[1]
+            Log.i("ARIA.PocketVoice", "Pocket diagnostic share: " +
+                "float32 exists=${floatFile.isFile} float32 bytes=${floatFile.length()} " +
+                "pcm16 exists=${pcmFile.isFile} pcm16 bytes=${pcmFile.length()}")
+            PocketDiagnosticWav.missingMessage(cacheDir)?.let { message ->
+                toast(message)
                 return@setOnClickListener
             }
             try {
-                val uris = files.map { FileProvider.getUriForFile(this, "$packageName.fileprovider", it) }
-                val sendIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-                    type = "audio/wav"
+                val uris = PocketDiagnosticWav.shareUris(files) {
+                    FileProvider.getUriForFile(this, "$packageName.fileprovider", it)
+                }
+                Log.i("ARIA.PocketVoice", "Pocket diagnostic share: uriCount=${uris.size} " +
+                    "float32=${floatFile.name} pcm16=${pcmFile.name}")
+                val sendIntent = Intent(PocketDiagnosticWav.SHARE_ACTION).apply {
+                    type = PocketDiagnosticWav.SHARE_MIME_TYPE
                     putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
-                    clipData = ClipData.newUri(contentResolver, files.first().name, uris.first()).apply {
-                        uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+                    clipData = ClipData.newUri(contentResolver, floatFile.name, uris[0]).apply {
+                        addItem(ClipData.Item(uris[1]))
                     }
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }

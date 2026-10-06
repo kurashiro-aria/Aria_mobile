@@ -6,9 +6,10 @@ import com.kura.aria.emotion.AriaEmotion
 import com.kura.aria.personality.ExpressionStyle
 
 internal class PocketVoiceController(context: Context) : AutoCloseable {
-    val models = PocketModelManager(context.applicationContext)
-    val preferences = PocketVoicePreferences(context.applicationContext)
-    private val engine = PocketVoiceEngine(context.applicationContext)
+    private val appContext = context.applicationContext
+    val models = PocketModelManager(appContext)
+    val preferences = PocketVoicePreferences(appContext)
+    private val engine = PocketVoiceEngine(appContext)
 
     val installed: Boolean get() = models.installedPack() != null
     val voices: List<PocketVoice> get() = models.voices().also { available ->
@@ -46,7 +47,15 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
         val pack = models.installedPack()
             ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)
         val voice = selectedVoice ?: throw PocketVoiceException(PocketVoiceError.VOZ_NO_DISPONIBLE)
-        return engine.synthesize(pack, voice, text, emotion, expression, onState = onState)
+        return engine.synthesize(
+            pack,
+            voice,
+            text,
+            emotion,
+            expression,
+            onState = onState,
+            diagnosticTargets = PocketDiagnosticWav.forNormalChat(appContext.cacheDir)
+        )
     }
 
     suspend fun runAudioDiagnostic(onState: (String) -> Unit = {}): PocketMetrics {
@@ -59,9 +68,8 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
             AUDIO_DIAGNOSTIC_TEXT,
             AriaEmotion.NEUTRAL,
             ExpressionStyle.NATURAL,
-            engine.diagnosticFile(),
-            onState,
-            diagnosticFloatFile = engine.diagnosticFloatFile()
+            onState = onState,
+            diagnosticTargets = PocketDiagnosticWav.forVoiceTest(appContext.cacheDir)
         )
     }
 

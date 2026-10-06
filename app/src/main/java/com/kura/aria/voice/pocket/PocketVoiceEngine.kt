@@ -20,7 +20,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
 
 internal class PocketVoiceEngine(context: Context) : AutoCloseable {
-    private val diagnosticsDir = java.io.File(context.cacheDir, "pocket-diagnostics")
     private val dispatcher: ExecutorCoroutineDispatcher = Executors.newSingleThreadExecutor { task ->
         Thread(task, "aria-pocket-tts").apply { priority = Thread.NORM_PRIORITY }
     }.asCoroutineDispatcher()
@@ -66,9 +65,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         text: String,
         emotion: AriaEmotion,
         expression: ExpressionStyle,
-        diagnosticFile: java.io.File? = null,
         onState: (String) -> Unit = {},
-        diagnosticFloatFile: java.io.File? = null
+        diagnosticTargets: PocketDiagnosticTargets? = null
     ): PocketMetrics = withContext(dispatcher) {
         require(text.isNotBlank())
         if (!PocketInstallValidator.hasRequiredFiles(pack))
@@ -76,6 +74,11 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         if (!PocketInstallValidator.isVoiceAvailable(pack.voicesDir, voice))
             throw PocketVoiceException(PocketVoiceError.VOZ_NO_DISPONIBLE)
 
+        val diagnosticCapture = diagnosticTargets?.let { targets ->
+            runCatching { PocketDiagnosticWav.beginCapture(targets) }
+                .onFailure { error -> Log.w(TAG, "Pocket diagnostic capture initialization failed: ${error.javaClass.simpleName}") }
+                .getOrNull()
+        }
         cancelled.set(false)
         val requestStarted = SystemClock.elapsedRealtime()
         val ramBefore = Debug.getPss().toLong() / 1024L
@@ -102,8 +105,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 onState("REPRODUCIENDO")
                 Log.i(TAG, "FIRST_AUDIO firstAudioMs=$firstAudioMs prebufferMs=${PocketAudioFormat.PREBUFFER_MS}")
             },
-            wavWriter = diagnosticFile?.let(::PocketWavWriter),
-            floatWavWriter = diagnosticFloatFile?.let(::PocketFloatWavWriter)
+            wavWriter = diagnosticCapture?.stagedTargets?.pcm16File?.let(::PocketWavWriter),
+            floatWavWriter = diagnosticCapture?.stagedTargets?.float32File?.let(::PocketFloatWavWriter)
         )
         try {
             val runtime = native ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_CARGA)
@@ -123,6 +126,14 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             val generationMs = SystemClock.elapsedRealtime() - generationStarted
             awaitPlaybackComplete(track, pipeline.writtenSamples)
             if (cancelled.get()) throw CancellationException("Pocket TTS detenido")
+            val diagnosticPublished = diagnosticCapture?.publish() == true
+            diagnosticTargets?.let { targets ->
+                val floatFile = targets.float32File
+                val pcmFile = targets.pcm16File
+                Log.i(TAG, "Pocket diagnostic generation: float32 exists=${floatFile.isFile} " +
+                    "float32 bytes=${floatFile.length()} pcm16 exists=${pcmFile.isFile} " +
+                    "pcm16 bytes=${pcmFile.length()} sameInference=$diagnosticPublished")
+            }
             val totalMs = SystemClock.elapsedRealtime() - requestStarted
             val pcmStats = pipeline.inspector.snapshot()
             val underruns = (track.underrunCount - underrunsBefore).coerceAtLeast(0)
@@ -141,8 +152,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 pcm16Stats = pipeline.pcm16Inspector?.snapshot(),
                 conversionStats = pipeline.quantizationInspector?.snapshot(),
                 audioUnderruns = underruns,
-                diagnosticWav = diagnosticFile?.takeIf { it.isFile && it.length() > 44L }?.absolutePath,
-                diagnosticFloatWav = diagnosticFloatFile?.takeIf { it.isFile && it.length() > 44L }?.absolutePath,
+                diagnosticWav = diagnosticTargets?.pcm16File?.takeIf { diagnosticPublished }?.absolutePath,
+                diagnosticFloatWav = diagnosticTargets?.float32File?.takeIf { diagnosticPublished }?.absolutePath,
                 voice = voice.name,
                 state = "COMPLETADO"
             )
@@ -156,11 +167,13 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             metrics
         } catch (cancelledError: CancellationException) {
             pipeline.abort()
+            diagnosticCapture?.abort()
             lastMetrics = lastMetrics.copy(state = "DETENIDO")
             onState("DETENIDO")
             throw cancelledError
         } catch (error: Throwable) {
             pipeline.abort()
+            diagnosticCapture?.abort()
             val code = (error as? PocketVoiceException)?.code ?: PocketVoiceError.SYNTHESIS_FAILED
             lastMetrics = lastMetrics.copy(state = "ERROR", error = code)
             onState("ERROR: ${code.name}")
@@ -229,16 +242,6 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         }
         if (!cancelled.get()) Log.w(TAG, "AUDIO_DRAIN_TIMEOUT writtenSamples=$writtenSamples " +
             "playedSamples=${Integer.toUnsignedLong(track.playbackHeadPosition)}")
-    }
-
-    fun diagnosticFile(): java.io.File {
-        diagnosticsDir.mkdirs()
-        return java.io.File(diagnosticsDir, "pocket_audio_quality.wav")
-    }
-
-    fun diagnosticFloatFile(): java.io.File {
-        diagnosticsDir.mkdirs()
-        return java.io.File(diagnosticsDir, "pocket_audio_pre_pcm_f32.wav")
     }
 
     override fun close() {
