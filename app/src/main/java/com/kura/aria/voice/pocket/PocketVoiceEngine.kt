@@ -67,7 +67,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         emotion: AriaEmotion,
         expression: ExpressionStyle,
         diagnosticFile: java.io.File? = null,
-        onState: (String) -> Unit = {}
+        onState: (String) -> Unit = {},
+        diagnosticFloatFile: java.io.File? = null
     ): PocketMetrics = withContext(dispatcher) {
         require(text.isNotBlank())
         if (!PocketInstallValidator.hasRequiredFiles(pack))
@@ -101,7 +102,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 onState("REPRODUCIENDO")
                 Log.i(TAG, "FIRST_AUDIO firstAudioMs=$firstAudioMs prebufferMs=${PocketAudioFormat.PREBUFFER_MS}")
             },
-            wavWriter = diagnosticFile?.let(::PocketWavWriter)
+            wavWriter = diagnosticFile?.let(::PocketWavWriter),
+            floatWavWriter = diagnosticFloatFile?.let(::PocketFloatWavWriter)
         )
         try {
             val runtime = native ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_CARGA)
@@ -135,8 +137,12 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 ramBeforeMiB = ramBefore,
                 ramAfterMiB = Debug.getPss().toLong() / 1024L,
                 pcmStats = pcmStats,
+                floatStats = pipeline.floatInspector?.snapshot(),
+                pcm16Stats = pipeline.pcm16Inspector?.snapshot(),
+                conversionStats = pipeline.quantizationInspector?.snapshot(),
                 audioUnderruns = underruns,
                 diagnosticWav = diagnosticFile?.takeIf { it.isFile && it.length() > 44L }?.absolutePath,
+                diagnosticFloatWav = diagnosticFloatFile?.takeIf { it.isFile && it.length() > 44L }?.absolutePath,
                 voice = voice.name,
                 state = "COMPLETADO"
             )
@@ -228,6 +234,11 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
     fun diagnosticFile(): java.io.File {
         diagnosticsDir.mkdirs()
         return java.io.File(diagnosticsDir, "pocket_audio_quality.wav")
+    }
+
+    fun diagnosticFloatFile(): java.io.File {
+        diagnosticsDir.mkdirs()
+        return java.io.File(diagnosticsDir, "pocket_audio_pre_pcm_f32.wav")
     }
 
     override fun close() {

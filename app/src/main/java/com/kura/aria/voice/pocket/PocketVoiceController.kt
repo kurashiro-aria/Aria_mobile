@@ -60,7 +60,8 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
             AriaEmotion.NEUTRAL,
             ExpressionStyle.NATURAL,
             engine.diagnosticFile(),
-            onState
+            onState,
+            diagnosticFloatFile = engine.diagnosticFloatFile()
         )
     }
 

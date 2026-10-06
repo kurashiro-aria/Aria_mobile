@@ -1502,7 +1502,7 @@ class MainActivity : AppCompatActivity() {
         val importVoice = Button(this).apply { text = "IMPORTAR VOZ DE REFERENCIA (WAV)" }
         val delete = Button(this).apply { text = "ELIMINAR DATOS POCKET" }
         val audioDiagnostic = Button(this).apply { text = "GENERAR PRUEBA DE AUDIO" }
-        val shareAudioDiagnostic = Button(this).apply { text = "Compartir WAV diagnóstico Pocket" }
+        val shareAudioDiagnostic = Button(this).apply { text = "Compartir diagnóstico Pocket" }
         val metrics = TextView(this).apply { setPadding(0, dp(12), 0, 0) }
 
         column.addView(intro)
@@ -1654,22 +1654,24 @@ class MainActivity : AppCompatActivity() {
             }
         }
         shareAudioDiagnostic.setOnClickListener {
-            val file = PocketDiagnosticWav.file(cacheDir)
-            if (!PocketDiagnosticWav.isShareable(file)) {
-                toast("Primero haz hablar a ARIA para generar el WAV diagnóstico.")
+            val files = PocketDiagnosticWav.files(cacheDir)
+            if (!PocketDiagnosticWav.areShareable(files)) {
+                toast("Primero haz hablar a ARIA para generar ambos WAV del diagnóstico.")
                 return@setOnClickListener
             }
             try {
-                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-                val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                val uris = files.map { FileProvider.getUriForFile(this, "$packageName.fileprovider", it) }
+                val sendIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
                     type = "audio/wav"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    clipData = ClipData.newUri(contentResolver, "pocket_audio_quality.wav", uri)
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+                    clipData = ClipData.newUri(contentResolver, files.first().name, uris.first()).apply {
+                        uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+                    }
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-                startActivity(Intent.createChooser(sendIntent, "Compartir WAV diagnóstico Pocket"))
+                startActivity(Intent.createChooser(sendIntent, "Compartir diagnóstico Pocket"))
             } catch (error: Throwable) {
-                toast(error.message ?: "No pude compartir el WAV diagnóstico Pocket")
+                toast(error.message ?: "No pude compartir el diagnóstico Pocket")
             }
         }
         stop.setOnClickListener { stopLocalVoice(); runtimeState = "DETENIDO"; refresh() }
@@ -1716,18 +1718,31 @@ class MainActivity : AppCompatActivity() {
         append("\nAUDIO DURATION: ").append(value.audioDurationMs?.let { "$it ms" } ?: "—")
         append("\nRTF: ").append(value.rtf?.let { "%.2f".format(it) } ?: "—")
         append("\nRAM: ").append(value.ramAfterMiB?.let { "$it MiB" } ?: "—")
-        append("\nPCM: FLOAT32 → PCM16 · ${PocketAudioFormat.SAMPLE_RATE} Hz · mono")
-        value.pcmStats?.let { pcm ->
-            append("\nSAMPLES: ").append(pcm.sampleCount)
-            append("\nMIN / MAX: ").append("%.5f / %.5f".format(pcm.minimum, pcm.maximum))
-            append("\nPEAK / RMS: ").append("%.5f / %.5f".format(pcm.peakAbsolute, pcm.rms))
-            append("\nDC OFFSET: ").append("%.6f".format(pcm.dcOffset))
-            append("\nNaN / Inf / clipped: ")
-                .append(pcm.nanCount).append(" / ").append(pcm.infiniteCount)
-                .append(" / ").append(pcm.clippedSamples)
+        append("\nFLOAT32 PRE-PCM: IEEE 754 · ${PocketAudioFormat.SAMPLE_RATE} Hz · mono")
+        value.floatStats?.let { f32 ->
+            append("\nSAMPLES / DURATION: ").append(f32.sampleCount).append(" / ").append(f32.durationMs).append(" ms")
+            append("\nMIN / MAX: ").append("%.6f / %.6f".format(f32.minimum, f32.maximum))
+            append("\nPEAK / RMS / MEAN: ").append("%.6f / %.6f / %.6f".format(f32.peakAbsolute, f32.rms, f32.mean))
+            append("\nNaN / +Inf / -Inf: ").append(f32.nanCount).append(" / ")
+                .append(f32.positiveInfinityCount).append(" / ").append(f32.negativeInfinityCount)
+            append("\n> +1 / < -1 / outside %: ").append(f32.aboveOneCount).append(" / ")
+                .append(f32.belowMinusOneCount).append(" / ").append("%.5f".format(f32.outsideRangePercent))
         }
+        append("\nPCM16 OUTPUT: FLOAT32 → PCM16 · ${PocketAudioFormat.SAMPLE_RATE} Hz · mono")
+        value.pcm16Stats?.let { pcm16 ->
+            append("\nSAMPLES / DURATION: ").append(pcm16.sampleCount).append(" / ").append(pcm16.durationMs).append(" ms")
+            append("\nMIN / MAX: ").append(pcm16.minimum).append(" / ").append(pcm16.maximum)
+            append("\nPEAK / RMS: ").append(pcm16.peakAbsolute).append(" / ").append("%.2f".format(pcm16.rms))
+            append("\nClipped +32767 / -32768: ").append(pcm16.clippedPositiveCount).append(" / ").append(pcm16.clippedNegativeCount)
+        }
+        value.conversionStats?.let { error ->
+            append("\nQUANTIZATION ERROR max / mean abs / RMS: ")
+                .append("%.9f / %.9f / %.9f".format(error.maxAbsoluteError, error.meanAbsoluteError, error.rmsError))
+        }
+        value.floatStats?.let { append("\nFLOAT32 DC OFFSET: ").append("%.8f".format(it.mean)) }
         append("\nAUDIOTRACK UNDERRUNS: ").append(value.audioUnderruns ?: "—")
-        append("\nWAV generado: ").append(if (value.diagnosticWav != null) "OK · pocket_audio_quality.wav" else "—")
+        append("\nWAV PCM16: ").append(if (value.diagnosticWav != null) "OK · pocket_audio_quality.wav" else "—")
+        append("\nWAV FLOAT32: ").append(if (value.diagnosticFloatWav != null) "OK · pocket_audio_pre_pcm_f32.wav" else "—")
         value.error?.let { append("\nERROR: ").append(it.name) }
     }
 

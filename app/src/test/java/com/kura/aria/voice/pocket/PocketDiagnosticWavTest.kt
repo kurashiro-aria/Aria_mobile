@@ -41,6 +41,31 @@ class PocketDiagnosticWavTest {
     }
 
     @Test
+    fun resolvesAndPreservesBothDiagnosticFilesForSharing() {
+        val cache = temporaryFolder.newFolder("cache-both")
+        val files = PocketDiagnosticWav.files(cache)
+        files.forEachIndexed { index, file ->
+            file.parentFile!!.mkdirs()
+            file.writeBytes(ByteArray(96) { (it + index).toByte() })
+        }
+        val before = files.map { it.readBytes() }
+
+        assertTrue(PocketDiagnosticWav.areShareable(files))
+        assertEquals("pocket_audio_pre_pcm_f32.wav", files[0].name)
+        assertEquals("pocket_audio_quality.wav", files[1].name)
+        assertTrue(files.zip(before).all { (file, bytes) -> bytes.contentEquals(file.readBytes()) })
+    }
+
+    @Test
+    fun rejectsSharingWhenEitherDiagnosticIsMissing() {
+        val cache = temporaryFolder.newFolder("cache-incomplete")
+        val files = PocketDiagnosticWav.files(cache)
+        files[1].parentFile!!.mkdirs()
+        files[1].writeBytes(ByteArray(64))
+        assertFalse(PocketDiagnosticWav.areShareable(files))
+    }
+
+    @Test
     fun rejectsDirectoryAtExpectedWavPath() {
         val cache = temporaryFolder.newFolder("cache")
         val directory = PocketDiagnosticWav.file(cache)
