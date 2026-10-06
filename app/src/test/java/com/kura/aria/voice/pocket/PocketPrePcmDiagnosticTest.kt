@@ -55,7 +55,7 @@ class PocketPrePcmDiagnosticTest {
         val stats = inspector.snapshot()
 
         assertEquals(6L, stats.sampleCount)
-        assertEquals(0.5f, stats.minimum)
+        assertEquals(-1.5f, stats.minimum)
         assertEquals(2f, stats.maximum)
         assertEquals(sqrt(6.5 / 3.0), stats.rms, 1e-9)
         assertEquals(1.0 / 3.0, stats.mean, 1e-9)
@@ -102,7 +102,7 @@ class PocketPrePcmDiagnosticTest {
         val samples = floatArrayOf(0f, 1f, -1f, 1.2f, -1.2f, 0.12345f, Float.NaN)
         val actual = PocketPcm.floatToPcm16(samples)
         val decoded = ByteBuffer.wrap(actual).order(ByteOrder.LITTLE_ENDIAN)
-        assertArrayEquals(shortArrayOf(0, 32767, -32767, 32767, -32767, 0), ShortArray(samples.size) { decoded.short })
+        assertArrayEquals(shortArrayOf(0, 32767, -32767, 32767, -32767, 4045, 0), ShortArray(samples.size) { decoded.short })
 
         val inspector = PocketQuantizationInspector()
         inspector.accept(samples, actual)
