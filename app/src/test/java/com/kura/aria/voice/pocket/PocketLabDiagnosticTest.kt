@@ -60,6 +60,19 @@ class PocketLabDiagnosticTest {
         assertEquals(-6, writeFailure.snapshot().firstWriteResult)
     }
 
+    @Test fun preservesTrackLifecycleAndConstructorCause() {
+        val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        diagnostic.previousTrack("pause=OK flush=OK stop=OK release=OK")
+        diagnostic.audioTrackRequested(96_000, 24_000, 4, 2)
+        diagnostic.audioTrackCreateFailed("IllegalArgumentException: track unavailable")
+
+        val snapshot = diagnostic.snapshot()
+        assertEquals("pause=OK flush=OK stop=OK release=OK", snapshot.previousTrackDetail)
+        assertEquals(PocketLabStage.CREATE_AUDIO_TRACK_FAILED, snapshot.stage)
+        assertEquals("IllegalArgumentException: track unavailable", snapshot.technicalDetail)
+        assertTrue(diagnostic.summary().contains("Min buffer: 96000"))
+    }
+
     @Test fun configurationLabelsDoNotChangeLabVariants() {
         val a = PocketIsolationVariant.A_CONTROL.runtimeConfig()
         val b = PocketIsolationVariant.B_KV_SEPARATE.runtimeConfig()

@@ -114,6 +114,14 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         onState("SINTETIZANDO")
         var firstAudioMs: Long? = null
         val generationStarted = SystemClock.elapsedRealtime()
+        // The laboratory is entered immediately after stopLocalVoice(). That stop
+        // intentionally leaves the old track in STOPPED state until the serialized
+        // engine dispatcher is back on this thread. Release it here, before asking
+        // Android for another track, so the lab cannot race an old AudioTrack
+        // ownership transition. Normal chat keeps its established path unchanged.
+        if (labDiagnostic != null) {
+            releasePreviousLabAudioTrack(labDiagnostic)
+        }
         val track = createAudioTrack(labDiagnostic)
         audioTrack = track
         val underrunsBefore = track.underrunCount
@@ -284,6 +292,26 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         native = null
         loadedPackId = null
         loadedRuntimeConfig = null
+    }
+
+    /** Runs on the Pocket dispatcher, after any prior synthesis has yielded. */
+    private fun releasePreviousLabAudioTrack(diagnostic: PocketLabDiagnostic) {
+        val previous = audioTrack
+        if (previous == null) {
+            pendingLabStopDiagnostic = null
+            return
+        }
+        var pause = "NOT_RUN"
+        var flush = "NOT_RUN"
+        var stop = "NOT_RUN"
+        var release = "FAIL"
+        runCatching { previous.pause(); pause = "OK" }
+        runCatching { previous.flush(); flush = "OK" }
+        runCatching { previous.stop(); stop = "OK" }
+        runCatching { previous.release(); release = "OK" }
+        if (audioTrack === previous) audioTrack = null
+        pendingLabStopDiagnostic = null
+        diagnostic.previousTrack("pause=$pause flush=$flush stop=$stop release=$release")
     }
 
     private fun createAudioTrack(labDiagnostic: PocketLabDiagnostic? = null): AudioTrack {
