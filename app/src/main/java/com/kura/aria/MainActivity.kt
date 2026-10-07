@@ -78,6 +78,7 @@ import com.kura.aria.voice.pocket.PocketVoiceException
 import com.kura.aria.voice.pocket.PocketDiagnosticWav
 import com.kura.aria.voice.pocket.PocketIsolationLabWav
 import com.kura.aria.voice.pocket.PocketIsolationVariant
+import com.kura.aria.voice.pocket.PocketTransportMode
 import com.kura.aria.voice.pocket.PocketLabDiagnostic
 import com.kura.aria.voice.pocket.PocketLabStage
 import com.kura.aria.brain.BrainPipeline
@@ -1513,6 +1514,11 @@ class MainActivity : AppCompatActivity() {
         val labA = Button(this).apply { text = "PROBAR A · CONTROL KV ACTUAL / LSD1" }
         val labB = Button(this).apply { text = "PROBAR B · KV SEPARADO / LSD1" }
         val labC = Button(this).apply { text = "PROBAR C · KV SEPARADO / LSD3" }
+        val transportLabel = TextView(this).apply { text = "Transporte AudioTrack (solo laboratorio)"; setPadding(0, dp(8), 0, 0) }
+        val transportSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                PocketTransportMode.entries.map { it.label })
+        }
         val shareLab = Button(this).apply { text = "Compartir WAV laboratorio Pocket" }
         val labMetrics = TextView(this).apply { setPadding(0, dp(8), 0, 0) }
         val metrics = TextView(this).apply { setPadding(0, dp(12), 0, 0) }
@@ -1550,6 +1556,8 @@ class MainActivity : AppCompatActivity() {
         column.addView(labA)
         column.addView(labB)
         column.addView(labC)
+        column.addView(transportLabel)
+        column.addView(transportSpinner)
         column.addView(shareLab)
         column.addView(labMetrics)
 
@@ -1610,7 +1618,8 @@ class MainActivity : AppCompatActivity() {
                     "\nT_total: ${value.totalMs ?: 0} ms" +
                     "\nKV: ${value.effectiveKvMode ?: "—"} · LSD: ${value.effectiveLsdSteps ?: "—"}" +
                     "\nCallbacks: ${value.callbackCount ?: 0} · segmentos: ${value.segmentCount ?: 0}" +
-                    " · Mimi frames: ${value.mimiFrames ?: 0}"
+                    " · Mimi frames: ${value.mimiFrames ?: 0}" +
+                    "\nTransporte: ${PocketTransportMode.entries.getOrElse(transportSpinner.selectedItemPosition) { PocketTransportMode.CURRENT_WRITES }.name}"
             } ?: "Estado laboratorio: $labState"
             lastPocketLabDiagnostic?.let { diagnostic ->
                 labMetrics.text = labMetrics.text.toString() + "\n\n" + diagnostic.summary()
@@ -1728,6 +1737,9 @@ class MainActivity : AppCompatActivity() {
         fun runIsolationVariant(variant: PocketIsolationVariant) {
             if (pocketVoiceJob?.isActive == true || pocketVoice.isolationLabRunning) return
             val diagnostic = PocketLabDiagnostic(variant)
+            val transportMode = PocketTransportMode.entries.getOrElse(transportSpinner.selectedItemPosition) {
+                PocketTransportMode.CURRENT_WRITES
+            }
             lastPocketLabDiagnostic = diagnostic
             diagnostic.onChanged = { runOnUiThread { pocketDialogRefresh?.invoke() } }
             diagnostic.mark(PocketLabStage.LAB_REQUEST, "variant=${variant.name}")
@@ -1736,7 +1748,7 @@ class MainActivity : AppCompatActivity() {
             runtimeState = "GENERANDO LAB ${variant.name}"
             pocketVoiceJob = uiScope.launch {
                 try {
-                    lastLabMetrics = pocketVoice.runIsolationLab(variant, diagnostic) { value ->
+                    lastLabMetrics = pocketVoice.runIsolationLab(variant, transportMode, diagnostic) { value ->
                         runOnUiThread { runtimeState = value; refresh() }
                     }
                     labState = "COMPLETADO"

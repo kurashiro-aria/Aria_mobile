@@ -42,6 +42,15 @@ internal enum class PocketIsolationVariant(
     }
 }
 
+/** AudioTrack write strategy used only by the temporary isolation lab. */
+internal enum class PocketTransportMode(
+    val label: String,
+    val maxWriteBytes: Int?
+) {
+    CURRENT_WRITES("A — CURRENT WRITES", null),
+    FRAGMENTED_8192("B — FRAGMENTED 8192 BYTES", 8_192)
+}
+
 internal object PocketIsolationLabSpec {
     const val TEXT =
         "Hola Kura. Soy Aria y esta es una prueba controlada de mi voz. " +

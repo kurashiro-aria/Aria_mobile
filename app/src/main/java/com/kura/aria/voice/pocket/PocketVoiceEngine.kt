@@ -91,6 +91,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         diagnosticTargets: PocketDiagnosticTargets? = null,
         diagnosticCapture: PocketWavCapture? = null,
         runtimeConfig: PocketRuntimeConfig = PocketRuntimeConfig.normal(pack),
+        transportMode: PocketTransportMode = PocketTransportMode.CURRENT_WRITES,
         labDiagnostic: PocketLabDiagnostic? = null
     ): PocketMetrics = withContext(dispatcher) {
         require(text.isNotBlank())
@@ -199,6 +200,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 onState("REPRODUCIENDO")
                 Log.i(TAG, "FIRST_AUDIO firstAudioMs=$firstAudioMs prebufferMs=${PocketAudioFormat.PREBUFFER_MS}")
             },
+            transportMode = transportMode,
             wavWriter = activeCapture?.stagedTargets?.pcm16File?.let(::PocketWavWriter),
             floatWavWriter = activeCapture?.stagedTargets?.float32File?.let(::PocketFloatWavWriter),
             onCallbackTrace = { index, samples, pcmBytes, preBefore, preAfter, startedBefore, startedAfter,

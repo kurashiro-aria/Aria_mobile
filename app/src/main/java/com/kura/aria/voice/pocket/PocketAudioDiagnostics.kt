@@ -336,6 +336,7 @@ internal class PocketPcm16Pipeline(
     private val prebufferBytes: Int = PocketAudioFormat.PREBUFFER_BYTES,
     private val writer: (ByteArray, Int, Int) -> Int,
     private val onPlaybackStart: () -> Unit,
+    private val transportMode: PocketTransportMode = PocketTransportMode.CURRENT_WRITES,
     private val wavWriter: PocketWavWriter? = null,
     private val floatWavWriter: PocketFloatWavWriter? = null,
     private val onCallbackTrace: ((callbackIndex: Int, sampleCount: Int, pcmBytes: Int,
@@ -438,12 +439,35 @@ internal class PocketPcm16Pipeline(
     }
 
     private fun write(bytes: ByteArray, sourceCallbackStart: Int, sourceCallbackEnd: Int) {
-        PocketPartialWrite.writeFully(bytes, writer) { offset, length, result ->
-            writeAttemptIndex++
-            onWriteTrace?.invoke(
-                sourceCallbackStart, sourceCallbackEnd, bytes.size, offset, length,
-                offset + length, result
-            )
+        val maxWriteBytes = transportMode.maxWriteBytes
+        if (maxWriteBytes == null) {
+            PocketPartialWrite.writeFully(bytes, writer) { offset, length, result ->
+                writeAttemptIndex++
+                onWriteTrace?.invoke(
+                    sourceCallbackStart, sourceCallbackEnd, bytes.size, offset, length,
+                    offset + length, result
+                )
+            }
+        } else {
+            // The same PCM array and byte order are used; only the requested
+            // AudioTrack range is bounded. Partial writes advance within the
+            // current fragment and never retry a non-positive result.
+            var offset = 0
+            while (offset < bytes.size) {
+                val length = minOf(maxWriteBytes, bytes.size - offset)
+                val end = offset + length
+                while (offset < end) {
+                    val requested = end - offset
+                    val result = writer(bytes, offset, requested)
+                    writeAttemptIndex++
+                    onWriteTrace?.invoke(
+                        sourceCallbackStart, sourceCallbackEnd, bytes.size, offset, requested,
+                        offset + requested, result
+                    )
+                    require(result > 0 && result <= requested) { "PCM write failed" }
+                    offset += result
+                }
+            }
         }
         writtenSamples += bytes.size / PocketAudioFormat.PCM16_BYTES_PER_SAMPLE
     }

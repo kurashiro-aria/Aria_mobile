@@ -121,6 +121,7 @@ internal data class PocketLabDiagnosticSnapshot(
     val callbackTrace: List<PocketLabCallbackSnapshot> = emptyList(),
     val writeRangeTrace: List<PocketLabWriteRangeSnapshot> = emptyList(),
     val nativeConfig: String? = null,
+    val transportMode: String? = null,
     val previousTrackDetail: String? = null,
     val pipelineAccepted: Boolean = false
 )
@@ -169,6 +170,10 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
 
     fun nativeConfig(kvMode: PocketKvMode, lsdSteps: Int, seedFixed: Boolean) {
         update { it.copy(nativeConfig = "KV=${kvMode.name} LSD=$lsdSteps seed=${if (seedFixed) "FIXED" else "TEMPORAL"}") }
+    }
+
+    fun transportMode(mode: PocketTransportMode) {
+        update { it.copy(transportMode = mode.name) }
     }
 
     fun callback(sampleCount: Int) {
@@ -377,6 +382,7 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                 }).append('\n')
             }
             value.nativeConfig?.let { append(it).append('\n') }
+            value.transportMode?.let { append("Transport: ").append(it).append('\n') }
             value.technicalDetail?.let { append(it).append('\n') }
         }.trimEnd()
     }

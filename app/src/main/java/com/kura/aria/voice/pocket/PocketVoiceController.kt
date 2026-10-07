@@ -76,6 +76,7 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
 
     suspend fun runIsolationLab(
         variant: PocketIsolationVariant,
+        transportMode: PocketTransportMode = PocketTransportMode.CURRENT_WRITES,
         diagnostic: PocketLabDiagnostic = PocketLabDiagnostic(variant),
         onState: (String) -> Unit = {}
     ): PocketMetrics {
@@ -85,6 +86,7 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
                 ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)
             val plan = PocketIsolationPlan.create(pack, voices, variant)
             val capture = PocketIsolationLabWav.beginCapture(appContext.cacheDir, variant)
+            diagnostic.transportMode(transportMode)
             diagnostic.mark(PocketLabStage.LAB_CAPTURE_READY)
             return engine.synthesize(
                 pack = pack,
@@ -94,6 +96,7 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
                 expression = ExpressionStyle.NATURAL,
                 onState = onState,
                 diagnosticCapture = capture,
+                transportMode = transportMode,
                 runtimeConfig = plan.runtimeConfig,
                 labDiagnostic = diagnostic
             )

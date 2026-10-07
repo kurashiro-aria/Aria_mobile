@@ -43,6 +43,13 @@ class PocketIsolationLabTest {
         assertEquals(0L, normal.randomSeed)
     }
 
+    @Test fun transportModesAreLabOnlyAndUseTheApprovedLimit() {
+        assertEquals(null, PocketTransportMode.CURRENT_WRITES.maxWriteBytes)
+        assertEquals(8_192, PocketTransportMode.FRAGMENTED_8192.maxWriteBytes)
+        assertEquals(4_096, PocketTransportMode.FRAGMENTED_8192.maxWriteBytes!! / 2)
+        assertEquals(PocketAudioFormat.SAMPLE_RATE, PocketIsolationLabSpec.SAMPLE_RATE)
+    }
+
     @Test fun everyPlanPinsSameTextVoiceModelTemperatureAndSampleRate() {
         val pack = pack()
         val plans = PocketIsolationVariant.entries.map { PocketIsolationPlan.create(pack, pack.voices, it) }

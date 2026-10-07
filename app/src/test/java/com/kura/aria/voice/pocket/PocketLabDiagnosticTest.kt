@@ -1,6 +1,7 @@
 package com.kura.aria.voice.pocket
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -213,5 +214,92 @@ class PocketLabDiagnosticTest {
         assertEquals(3, writeTrace[1].sourceCallbackStart)
         assertEquals(3, writeTrace[1].sourceCallbackEnd)
         assertEquals(12, played.size())
+    }
+
+    @Test fun fragmentedTransportSplits24000BytesAndPreservesPcmExactly() {
+        val values = FloatArray(12_000) { (it % 97) / 100f }
+        val source = PocketPcm.floatToPcm16(values)
+        val played = ByteArrayOutputStream()
+        val requests = mutableListOf<Int>()
+        val pipeline = PocketPcm16Pipeline(
+            prebufferBytes = source.size,
+            writer = { bytes, offset, length ->
+                requests += length
+                played.write(bytes, offset, length)
+                length
+            },
+            onPlaybackStart = {},
+            transportMode = PocketTransportMode.FRAGMENTED_8192
+        )
+
+        pipeline.accept(values)
+
+        assertEquals(listOf(8_192, 8_192, 7_616), requests)
+        assertArrayEquals(source, played.toByteArray())
+        assertEquals(source.size.toLong(), pipeline.writtenSamples * PocketAudioFormat.PCM16_BYTES_PER_SAMPLE)
+    }
+
+    @Test fun fragmentedTransportSplits48000BytesIntoBoundedWrites() {
+        val values = FloatArray(24_000) { if (it % 2 == 0) 0.25f else -0.25f }
+        val source = PocketPcm.floatToPcm16(values)
+        val played = ByteArrayOutputStream()
+        val requests = mutableListOf<Int>()
+        val pipeline = PocketPcm16Pipeline(
+            prebufferBytes = source.size,
+            writer = { bytes, offset, length ->
+                requests += length
+                played.write(bytes, offset, length)
+                length
+            },
+            onPlaybackStart = {},
+            transportMode = PocketTransportMode.FRAGMENTED_8192
+        )
+
+        pipeline.accept(values)
+
+        assertEquals(listOf(8_192, 8_192, 8_192, 8_192, 8_192, 7_040), requests)
+        assertArrayEquals(source, played.toByteArray())
+    }
+
+    @Test fun fragmentedTransportHandlesPartialWritesWithoutChangingBytes() {
+        val values = FloatArray(12_000) { if (it % 3 == 0) 0.5f else -0.5f }
+        val source = PocketPcm.floatToPcm16(values)
+        val played = ByteArrayOutputStream()
+        val requests = mutableListOf<Int>()
+        val pipeline = PocketPcm16Pipeline(
+            prebufferBytes = source.size,
+            writer = { bytes, offset, length ->
+                requests += length
+                val written = minOf(1_000, length)
+                played.write(bytes, offset, written)
+                written
+            },
+            onPlaybackStart = {},
+            transportMode = PocketTransportMode.FRAGMENTED_8192
+        )
+
+        pipeline.accept(values)
+
+        assertArrayEquals(source, played.toByteArray())
+        assertTrue(requests.all { it in 1..8_192 })
+        assertEquals(source.size, played.size())
+    }
+
+    @Test fun fragmentedTransportStopsOnNonPositiveWriteWithoutRetry() {
+        val attempts = mutableListOf<Int>()
+        val pipeline = PocketPcm16Pipeline(
+            prebufferBytes = 2,
+            writer = { _, _, length -> attempts += length; -32 },
+            onPlaybackStart = {},
+            transportMode = PocketTransportMode.FRAGMENTED_8192
+        )
+
+        try {
+            pipeline.accept(floatArrayOf(0.1f))
+            throw AssertionError("expected write failure")
+        } catch (_: IllegalArgumentException) {
+            // A non-positive AudioTrack result is terminal; no retry is issued.
+        }
+        assertEquals(listOf(2), attempts)
     }
 }
