@@ -21,6 +21,22 @@ internal enum class PocketLabStage {
     FIRST_AUDIO_TRACK_WRITE,
     FIRST_AUDIO_TRACK_WRITE_OK,
     FIRST_AUDIO_TRACK_WRITE_FAILED,
+    AUDIO_TRACK_WRITE_FAILED,
+    AUDIO_TRACK_PLAY_REQUEST,
+    AUDIO_TRACK_PLAY_OK,
+    AUDIO_TRACK_PLAY_FAILED,
+    PIPELINE_FINISH_REQUEST,
+    PIPELINE_FINISH_OK,
+    PIPELINE_FINISH_FAILED,
+    PLAYBACK_DRAIN_REQUEST,
+    PLAYBACK_DRAIN_OK,
+    PLAYBACK_DRAIN_TIMEOUT,
+    PLAYBACK_DRAIN_FAILED,
+    TRACK_STOP_REQUEST,
+    TRACK_STOP_OK,
+    TRACK_STOP_FAILED,
+    TRACK_RELEASE_OK,
+    TRACK_RELEASE_FAILED,
     CREATE_AUDIO_TRACK_REQUEST,
     CREATE_AUDIO_TRACK_OK,
     CREATE_AUDIO_TRACK_FAILED,
@@ -42,6 +58,14 @@ internal data class PocketLabDiagnosticSnapshot(
     val bufferSizeInFrames: Int? = null,
     val firstWriteRequestedBytes: Int? = null,
     val firstWriteResult: Int? = null,
+    val writeCount: Int = 0,
+    val totalBytesRequested: Long = 0L,
+    val totalBytesWritten: Long = 0L,
+    val failedWriteIndex: Int? = null,
+    val failedWriteRequestedBytes: Int? = null,
+    val failedWriteResult: Int? = null,
+    val failedWriteTrackState: Int? = null,
+    val failedWritePlayState: Int? = null,
     val nativeConfig: String? = null,
     val previousTrackDetail: String? = null,
     val pipelineAccepted: Boolean = false
@@ -57,9 +81,15 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
 
     fun mark(stage: PocketLabStage, detail: String? = null) {
         update {
+            val terminalError = it.state == "ERROR" || it.error != null
+            val preserveTerminalStage = terminalError || it.stage == PocketLabStage.SYNTHESIS_COMPLETE
             it.copy(
-                state = if (stage == PocketLabStage.SYNTHESIS_COMPLETE) "COMPLETADO" else it.state,
-                stage = stage,
+                state = if (stage == PocketLabStage.SYNTHESIS_COMPLETE && it.error == null) "COMPLETADO" else it.state,
+                stage = when {
+                    stage == PocketLabStage.SYNTHESIS_COMPLETE && it.error != null -> PocketLabStage.ERROR
+                    preserveTerminalStage -> it.stage
+                    else -> stage
+                },
                 technicalDetail = detail ?: it.technicalDetail
             )
         }
@@ -144,6 +174,39 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
         }
     }
 
+    fun writeAttempt(requestedBytes: Int, result: Int, trackState: Int?, playState: Int?) {
+        update {
+            val index = it.writeCount + 1
+            val failed = result <= 0 && it.failedWriteIndex == null
+            it.copy(
+                writeCount = index,
+                totalBytesRequested = it.totalBytesRequested + requestedBytes,
+                totalBytesWritten = it.totalBytesWritten + result.coerceAtLeast(0),
+                failedWriteIndex = if (failed) index else it.failedWriteIndex,
+                failedWriteRequestedBytes = if (failed) requestedBytes else it.failedWriteRequestedBytes,
+                failedWriteResult = if (failed) result else it.failedWriteResult,
+                failedWriteTrackState = if (failed) trackState else it.failedWriteTrackState,
+                failedWritePlayState = if (failed) playState else it.failedWritePlayState
+            )
+        }
+    }
+
+    fun audioPlayRequested() = mark(PocketLabStage.AUDIO_TRACK_PLAY_REQUEST)
+    fun audioPlayOk() = mark(PocketLabStage.AUDIO_TRACK_PLAY_OK)
+    fun audioPlayFailed(detail: String) = mark(PocketLabStage.AUDIO_TRACK_PLAY_FAILED, detail)
+    fun pipelineFinishRequested() = mark(PocketLabStage.PIPELINE_FINISH_REQUEST)
+    fun pipelineFinishOk() = mark(PocketLabStage.PIPELINE_FINISH_OK)
+    fun pipelineFinishFailed(detail: String) = mark(PocketLabStage.PIPELINE_FINISH_FAILED, detail)
+    fun playbackDrainRequested() = mark(PocketLabStage.PLAYBACK_DRAIN_REQUEST)
+    fun playbackDrainOk() = mark(PocketLabStage.PLAYBACK_DRAIN_OK)
+    fun playbackDrainTimeout(detail: String) = mark(PocketLabStage.PLAYBACK_DRAIN_TIMEOUT, detail)
+    fun playbackDrainFailed(detail: String) = mark(PocketLabStage.PLAYBACK_DRAIN_FAILED, detail)
+    fun trackStopRequested() = mark(PocketLabStage.TRACK_STOP_REQUEST)
+    fun trackStopOk() = mark(PocketLabStage.TRACK_STOP_OK)
+    fun trackStopFailed(detail: String) = mark(PocketLabStage.TRACK_STOP_FAILED, detail)
+    fun trackReleaseOk() = mark(PocketLabStage.TRACK_RELEASE_OK)
+    fun trackReleaseFailed(detail: String) = mark(PocketLabStage.TRACK_RELEASE_FAILED, detail)
+
     fun previousTrack(detail: String) = update { it.copy(previousTrackDetail = detail) }
 
     fun summary(): String {
@@ -160,6 +223,14 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                 .append(" · Play: ").append(value.playState ?: "—").append('\n')
             append("First write: ").append(value.firstWriteResult?.toString() ?: "—")
                 .append(" / ").append(value.firstWriteRequestedBytes?.toString() ?: "—").append('\n')
+            append("Writes: ").append(value.writeCount).append(" · requested=").append(value.totalBytesRequested)
+                .append(" · written=").append(value.totalBytesWritten).append('\n')
+            value.failedWriteIndex?.let {
+                append("Failed write #").append(it).append(": ").append(value.failedWriteResult)
+                    .append(" / ").append(value.failedWriteRequestedBytes)
+                    .append(" · state=").append(value.failedWriteTrackState)
+                    .append(" play=").append(value.failedWritePlayState).append('\n')
+            }
             value.nativeConfig?.let { append(it).append('\n') }
             value.technicalDetail?.let { append(it).append('\n') }
         }.trimEnd()

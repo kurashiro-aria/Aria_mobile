@@ -125,6 +125,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         val track = createAudioTrack(labDiagnostic)
         audioTrack = track
         val underrunsBefore = track.underrunCount
+        var writeIndex = 0
         val pipeline = PocketPcm16Pipeline(
             writer = { bytes, offset, length ->
                 val firstWrite = labDiagnostic?.snapshot()?.firstWriteResult == null
@@ -132,20 +133,42 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 val written = try {
                     track.write(bytes, offset, length, AudioTrack.WRITE_BLOCKING)
                 } catch (error: Throwable) {
+                    writeIndex++
+                    labDiagnostic?.writeAttempt(length, -1, track.state, track.playState)
                     if (firstWrite) {
                         labDiagnostic?.firstWrite(length, -1)
-                        labDiagnostic?.fail(PocketLabStage.FIRST_AUDIO_TRACK_WRITE_FAILED, null,
-                            "write threw ${error.javaClass.simpleName}")
                     }
+                    labDiagnostic?.fail(
+                        if (firstWrite) PocketLabStage.FIRST_AUDIO_TRACK_WRITE_FAILED
+                        else PocketLabStage.AUDIO_TRACK_WRITE_FAILED,
+                        PocketVoiceError.AUDIO_FAILED,
+                        "write#$writeIndex threw ${error.javaClass.simpleName}: ${error.message ?: "no message"}"
+                    )
                     throw error
                 }
+                writeIndex++
+                labDiagnostic?.writeAttempt(length, written, track.state, track.playState)
                 if (firstWrite) labDiagnostic?.firstWrite(length, written)
                 written.also {
-                    if (written <= 0) throw PocketVoiceException(PocketVoiceError.AUDIO_FAILED)
+                    if (written <= 0) {
+                        labDiagnostic?.fail(if (firstWrite) PocketLabStage.FIRST_AUDIO_TRACK_WRITE_FAILED
+                            else PocketLabStage.AUDIO_TRACK_WRITE_FAILED,
+                            PocketVoiceError.AUDIO_FAILED,
+                            "write#$writeIndex result=$written requested=$length " +
+                                "state=${track.state} play=${track.playState}")
+                        throw PocketVoiceException(PocketVoiceError.AUDIO_FAILED)
+                    }
                 }
             },
             onPlaybackStart = {
-                track.play()
+                labDiagnostic?.audioPlayRequested()
+                try {
+                    track.play()
+                    labDiagnostic?.audioPlayOk()
+                } catch (error: Throwable) {
+                    labDiagnostic?.audioPlayFailed("${error.javaClass.simpleName}: ${error.message ?: "no message"}")
+                    throw error
+                }
                 firstAudioMs = SystemClock.elapsedRealtime() - requestStarted
                 onState("REPRODUCIENDO")
                 Log.i(TAG, "FIRST_AUDIO firstAudioMs=$firstAudioMs prebufferMs=${PocketAudioFormat.PREBUFFER_MS}")
@@ -182,9 +205,25 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             if (!ok || pipeline.inspector.snapshot().sampleCount <= 0L)
                 throw PocketVoiceException(PocketVoiceError.SYNTHESIS_FAILED)
             val nativeMetrics = runtime.lastRunMetrics()
-            pipeline.finish()
+            labDiagnostic?.pipelineFinishRequested()
+            try {
+                pipeline.finish()
+                labDiagnostic?.pipelineFinishOk()
+            } catch (error: Throwable) {
+                labDiagnostic?.pipelineFinishFailed("${error.javaClass.simpleName}: ${error.message ?: "no message"}")
+                throw error
+            }
             val generationMs = SystemClock.elapsedRealtime() - generationStarted
-            awaitPlaybackComplete(track, pipeline.writtenSamples)
+            labDiagnostic?.playbackDrainRequested()
+            try {
+                val drained = awaitPlaybackComplete(track, pipeline.writtenSamples)
+                if (drained) labDiagnostic?.playbackDrainOk()
+                else labDiagnostic?.playbackDrainTimeout(
+                    "written=${pipeline.writtenSamples} played=${Integer.toUnsignedLong(track.playbackHeadPosition)}")
+            } catch (error: Throwable) {
+                labDiagnostic?.playbackDrainFailed("${error.javaClass.simpleName}: ${error.message ?: "no message"}")
+                throw error
+            }
             if (cancelled.get()) throw CancellationException("Pocket TTS detenido")
             val diagnosticPublished = activeCapture?.publish() == true
             activeCapture?.targets?.let { targets ->
@@ -250,9 +289,14 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             onState("ERROR: ${code.name}")
             throw if (error is PocketVoiceException) error else PocketVoiceException(code, error)
         } finally {
-            runCatching { track.stop() }
+            labDiagnostic?.trackStopRequested()
+            val stopResult = runCatching { track.stop() }
+            if (stopResult.isSuccess) labDiagnostic?.trackStopOk()
+            else labDiagnostic?.trackStopFailed(stopResult.exceptionOrNull()?.javaClass?.simpleName ?: "stop failed")
             runCatching { track.flush() }
-            runCatching { track.release() }
+            val releaseResult = runCatching { track.release() }
+            if (releaseResult.isSuccess) labDiagnostic?.trackReleaseOk()
+            else labDiagnostic?.trackReleaseFailed(releaseResult.exceptionOrNull()?.javaClass?.simpleName ?: "release failed")
             if (audioTrack === track) audioTrack = null
             pendingLabStopDiagnostic?.let { diagnostic ->
                 diagnostic.previousTrack("release=OK")
@@ -358,18 +402,19 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         }
     }
 
-    private fun awaitPlaybackComplete(track: AudioTrack, writtenSamples: Long) {
-        if (writtenSamples <= 0L || track.playState != AudioTrack.PLAYSTATE_PLAYING) return
+    private fun awaitPlaybackComplete(track: AudioTrack, writtenSamples: Long): Boolean {
+        if (writtenSamples <= 0L || track.playState != AudioTrack.PLAYSTATE_PLAYING) return true
         val played = Integer.toUnsignedLong(track.playbackHeadPosition)
         val remaining = (writtenSamples - played).coerceAtLeast(0L)
         val timeoutAt = SystemClock.elapsedRealtime() +
             (remaining * 1_000L / PocketAudioFormat.SAMPLE_RATE) + PLAYBACK_DRAIN_GRACE_MS
         while (!cancelled.get() && SystemClock.elapsedRealtime() < timeoutAt) {
-            if (Integer.toUnsignedLong(track.playbackHeadPosition) >= writtenSamples) return
+            if (Integer.toUnsignedLong(track.playbackHeadPosition) >= writtenSamples) return true
             SystemClock.sleep(10L)
         }
         if (!cancelled.get()) Log.w(TAG, "AUDIO_DRAIN_TIMEOUT writtenSamples=$writtenSamples " +
             "playedSamples=${Integer.toUnsignedLong(track.playbackHeadPosition)}")
+        return false
     }
 
     override fun close() {

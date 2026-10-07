@@ -86,4 +86,47 @@ class PocketLabDiagnosticTest {
         assertEquals(a.randomSeed, b.randomSeed)
         assertEquals(b.randomSeed, c.randomSeed)
     }
+
+    @Test fun recordsAllWritesAndFailedWriteContext() {
+        val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        diagnostic.writeAttempt(4_800, 4_800, 1, 1)
+        diagnostic.writeAttempt(9_600, 0, 1, 1)
+
+        val snapshot = diagnostic.snapshot()
+        assertEquals(2, snapshot.writeCount)
+        assertEquals(14_400L, snapshot.totalBytesRequested)
+        assertEquals(4_800L, snapshot.totalBytesWritten)
+        assertEquals(2, snapshot.failedWriteIndex)
+        assertEquals(9_600, snapshot.failedWriteRequestedBytes)
+        assertEquals(0, snapshot.failedWriteResult)
+        assertEquals(1, snapshot.failedWriteTrackState)
+        assertEquals(1, snapshot.failedWritePlayState)
+    }
+
+    @Test fun completionCannotHideAnExistingError() {
+        val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        diagnostic.fail(PocketLabStage.FIRST_AUDIO_TRACK_WRITE_FAILED, PocketVoiceError.AUDIO_FAILED, "write=-6")
+        diagnostic.mark(PocketLabStage.SYNTHESIS_COMPLETE)
+
+        val snapshot = diagnostic.snapshot()
+        assertEquals(PocketLabStage.ERROR, snapshot.stage)
+        assertEquals("ERROR", snapshot.state)
+        assertEquals(PocketVoiceError.AUDIO_FAILED, snapshot.error)
+    }
+
+    @Test fun recordsPostWritePlaybackStages() {
+        val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        diagnostic.audioPlayRequested()
+        diagnostic.audioPlayOk()
+        diagnostic.pipelineFinishRequested()
+        diagnostic.pipelineFinishOk()
+        diagnostic.playbackDrainRequested()
+        diagnostic.playbackDrainTimeout("written=48000 played=12000")
+        diagnostic.trackStopRequested()
+        diagnostic.trackStopOk()
+        diagnostic.trackReleaseOk()
+
+        assertEquals(PocketLabStage.TRACK_RELEASE_OK, diagnostic.snapshot().stage)
+        assertTrue(diagnostic.summary().contains("Writes: 0"))
+    }
 }
