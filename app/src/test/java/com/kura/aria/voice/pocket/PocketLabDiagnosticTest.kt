@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayOutputStream
 
 class PocketLabDiagnosticTest {
     @Test fun startsWithNullHardwareFields() {
@@ -157,5 +158,60 @@ class PocketLabDiagnosticTest {
 
         assertEquals(PocketLabStage.TRACK_RELEASE_OK, diagnostic.snapshot().stage)
         assertTrue(diagnostic.summary().contains("Writes: 0"))
+    }
+
+    @Test fun partialWritesExposeValidRangesAndPreserveEveryByte() {
+        val source = ByteArray(10) { it.toByte() }
+        val output = ByteArrayOutputStream()
+        val ranges = mutableListOf<Triple<Int, Int, Int>>()
+        val attempts = PocketPartialWrite.writeFully(source, { bytes, offset, length ->
+            output.write(bytes, offset, minOf(3, length))
+            minOf(3, length)
+        }) { offset, length, result ->
+            ranges += Triple(offset, length, result)
+        }
+
+        assertEquals(4, attempts)
+        assertEquals(source.toList(), output.toByteArray().toList())
+        assertTrue(ranges.all { (offset, length, result) ->
+            offset >= 0 && length >= 0 && offset + length <= source.size && result in 1..length
+        })
+    }
+
+    @Test fun pipelineMapsPrebufferAndPostBufferWritesToCallbacks() {
+        val callbackTrace = mutableListOf<PocketLabCallbackSnapshot>()
+        val writeTrace = mutableListOf<PocketLabWriteRangeSnapshot>()
+        val played = ByteArrayOutputStream()
+        val pipeline = PocketPcm16Pipeline(
+            prebufferBytes = 8,
+            writer = { bytes, offset, length -> played.write(bytes, offset, length); length },
+            onPlaybackStart = {},
+            onCallbackTrace = { index, samples, pcmBytes, before, after, startedBefore, startedAfter, first, last ->
+                callbackTrace += PocketLabCallbackSnapshot(
+                    index, samples, pcmBytes, before, after, startedBefore, startedAfter, first, last
+                )
+            },
+            onWriteTrace = { start, end, arraySize, offset, length, offsetEnd, result ->
+                writeTrace += PocketLabWriteRangeSnapshot(start, end, arraySize, offset, length, offsetEnd, result)
+            }
+        )
+
+        pipeline.accept(floatArrayOf(0.1f, 0.2f))
+        pipeline.accept(floatArrayOf(0.3f, 0.4f))
+        pipeline.accept(floatArrayOf(0.5f, 0.6f))
+
+        assertEquals(3, callbackTrace.size)
+        assertEquals(2, writeTrace.size)
+        assertEquals(1, writeTrace[0].sourceCallbackStart)
+        assertEquals(2, writeTrace[0].sourceCallbackEnd)
+        assertEquals(8, writeTrace[0].arraySize)
+        assertEquals(0, writeTrace[0].offset)
+        assertEquals(8, writeTrace[0].requestedLength)
+        assertEquals(8, writeTrace[0].offsetPlusLength)
+        assertTrue(callbackTrace[1].playbackStartedAfter)
+        assertEquals(8, callbackTrace[1].pcmBytes + callbackTrace[1].prebufferBefore)
+        assertEquals(3, writeTrace[1].sourceCallbackStart)
+        assertEquals(3, writeTrace[1].sourceCallbackEnd)
+        assertEquals(12, played.size())
     }
 }

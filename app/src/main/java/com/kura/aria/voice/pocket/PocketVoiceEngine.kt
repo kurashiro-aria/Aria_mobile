@@ -200,7 +200,23 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 Log.i(TAG, "FIRST_AUDIO firstAudioMs=$firstAudioMs prebufferMs=${PocketAudioFormat.PREBUFFER_MS}")
             },
             wavWriter = activeCapture?.stagedTargets?.pcm16File?.let(::PocketWavWriter),
-            floatWavWriter = activeCapture?.stagedTargets?.float32File?.let(::PocketFloatWavWriter)
+            floatWavWriter = activeCapture?.stagedTargets?.float32File?.let(::PocketFloatWavWriter),
+            onCallbackTrace = { index, samples, pcmBytes, preBefore, preAfter, startedBefore, startedAfter,
+                                firstWriteAttempt, lastWriteAttempt ->
+                labDiagnostic?.callbackTrace(
+                    PocketLabCallbackSnapshot(
+                        index, samples, pcmBytes, preBefore, preAfter,
+                        startedBefore, startedAfter, firstWriteAttempt, lastWriteAttempt
+                    )
+                )
+            },
+            onWriteTrace = { callbackStart, callbackEnd, arraySize, offset, length, end, result ->
+                labDiagnostic?.writeRangeTrace(
+                    PocketLabWriteRangeSnapshot(
+                        callbackStart, callbackEnd, arraySize, offset, length, end, result
+                    )
+                )
+            }
         )
         try {
             val runtime = native ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_CARGA)

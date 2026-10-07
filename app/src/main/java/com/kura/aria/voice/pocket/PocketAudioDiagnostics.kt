@@ -306,13 +306,25 @@ internal object PocketPcm {
 
 /** Writes every byte, including when AudioTrack accepts only a partial buffer. */
 internal object PocketPartialWrite {
-    fun writeFully(bytes: ByteArray, writer: (ByteArray, Int, Int) -> Int) {
+    fun writeFully(
+        bytes: ByteArray,
+        writer: (ByteArray, Int, Int) -> Int,
+        onAttempt: ((offset: Int, length: Int, result: Int) -> Unit)? = null
+    ): Int {
         var offset = 0
+        var attempts = 0
         while (offset < bytes.size) {
-            val written = writer(bytes, offset, bytes.size - offset)
-            require(written > 0 && written <= bytes.size - offset) { "PCM write failed" }
+            val length = bytes.size - offset
+            require(offset >= 0 && length >= 0 && offset <= bytes.size - length) {
+                "PCM write range outside source array"
+            }
+            val written = writer(bytes, offset, length)
+            attempts++
+            onAttempt?.invoke(offset, length, written)
+            require(written > 0 && written <= length) { "PCM write failed" }
             offset += written
         }
+        return attempts
     }
 }
 
@@ -325,7 +337,14 @@ internal class PocketPcm16Pipeline(
     private val writer: (ByteArray, Int, Int) -> Int,
     private val onPlaybackStart: () -> Unit,
     private val wavWriter: PocketWavWriter? = null,
-    private val floatWavWriter: PocketFloatWavWriter? = null
+    private val floatWavWriter: PocketFloatWavWriter? = null,
+    private val onCallbackTrace: ((callbackIndex: Int, sampleCount: Int, pcmBytes: Int,
+                                   prebufferBefore: Int, prebufferAfter: Int,
+                                   playbackStartedBefore: Boolean, playbackStartedAfter: Boolean,
+                                   firstWriteAttempt: Int?, lastWriteAttempt: Int?) -> Unit)? = null,
+    private val onWriteTrace: ((sourceCallbackStart: Int, sourceCallbackEnd: Int,
+                                arraySize: Int, offset: Int, requestedLength: Int,
+                                offsetPlusLength: Int, result: Int) -> Unit)? = null
 ) {
     private val pending = ByteArrayOutputStream(prebufferBytes)
     val inspector = PocketPcmInspector()
@@ -337,8 +356,16 @@ internal class PocketPcm16Pipeline(
         private set
     var writtenSamples = 0L
         private set
+    private var callbackIndex = 0
+    private var writeAttemptIndex = 0
+    private var pendingFirstCallback = 0
+    private var pendingLastCallback = 0
 
     fun accept(samples: FloatArray) {
+        val currentCallback = ++callbackIndex
+        val pcmBytes = samples.size * PocketAudioFormat.PCM16_BYTES_PER_SAMPLE
+        val prebufferBefore = pending.size()
+        val playbackStartedBefore = playbackStarted
         if (diagnosticsActive) {
             try {
                 floatWavWriter?.append(samples)
@@ -359,11 +386,22 @@ internal class PocketPcm16Pipeline(
             }
         }
         if (!playbackStarted) {
+            if (pendingFirstCallback == 0) pendingFirstCallback = currentCallback
+            pendingLastCallback = currentCallback
             pending.write(bytes)
             if (pending.size() >= prebufferBytes) startPlayback()
         } else {
-            write(bytes)
+            write(bytes, currentCallback, currentCallback)
         }
+        val firstWriteAttempt = if (writeAttemptIndex > 0 && !playbackStartedBefore) {
+            writeAttemptIndex
+        } else null
+        val lastWriteAttempt = if (writeAttemptIndex > 0 &&
+            (playbackStartedBefore || playbackStarted)) writeAttemptIndex else null
+        onCallbackTrace?.invoke(
+            currentCallback, samples.size, pcmBytes, prebufferBefore, pending.size(),
+            playbackStartedBefore, playbackStarted, firstWriteAttempt, lastWriteAttempt
+        )
     }
 
     fun finish() {
@@ -388,15 +426,25 @@ internal class PocketPcm16Pipeline(
 
     private fun startPlayback() {
         val buffered = pending.toByteArray()
+        val sourceStart = pendingFirstCallback
+        val sourceEnd = pendingLastCallback
         pending.reset()
+        pendingFirstCallback = 0
+        pendingLastCallback = 0
         // AudioTrack is filled before play(), never started empty.
-        write(buffered)
+        write(buffered, sourceStart, sourceEnd)
         onPlaybackStart()
         playbackStarted = true
     }
 
-    private fun write(bytes: ByteArray) {
-        PocketPartialWrite.writeFully(bytes, writer)
+    private fun write(bytes: ByteArray, sourceCallbackStart: Int, sourceCallbackEnd: Int) {
+        PocketPartialWrite.writeFully(bytes, writer) { offset, length, result ->
+            writeAttemptIndex++
+            onWriteTrace?.invoke(
+                sourceCallbackStart, sourceCallbackEnd, bytes.size, offset, length,
+                offset + length, result
+            )
+        }
         writtenSamples += bytes.size / PocketAudioFormat.PCM16_BYTES_PER_SAMPLE
     }
 }

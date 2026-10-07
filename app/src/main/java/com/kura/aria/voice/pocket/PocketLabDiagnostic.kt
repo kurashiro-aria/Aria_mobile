@@ -15,6 +15,28 @@ internal data class PocketLabWriteSnapshot(
     val timestampMs: Long
 )
 
+internal data class PocketLabCallbackSnapshot(
+    val index: Int,
+    val samples: Int,
+    val pcmBytes: Int,
+    val prebufferBefore: Int,
+    val prebufferAfter: Int,
+    val playbackStartedBefore: Boolean,
+    val playbackStartedAfter: Boolean,
+    val firstWriteAttempt: Int?,
+    val lastWriteAttempt: Int?
+)
+
+internal data class PocketLabWriteRangeSnapshot(
+    val sourceCallbackStart: Int,
+    val sourceCallbackEnd: Int,
+    val arraySize: Int,
+    val offset: Int,
+    val requestedLength: Int,
+    val offsetPlusLength: Int,
+    val result: Int
+)
+
 /** Stages exposed only by the temporary KV/LSD isolation laboratory. */
 internal enum class PocketLabStage {
     IDLE,
@@ -96,6 +118,8 @@ internal data class PocketLabDiagnosticSnapshot(
     val trackSessionId: Int? = null,
     val routedDevice: String? = null,
     val writeHistory: List<PocketLabWriteSnapshot> = emptyList(),
+    val callbackTrace: List<PocketLabCallbackSnapshot> = emptyList(),
+    val writeRangeTrace: List<PocketLabWriteRangeSnapshot> = emptyList(),
     val nativeConfig: String? = null,
     val previousTrackDetail: String? = null,
     val pipelineAccepted: Boolean = false
@@ -155,6 +179,14 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                 samples = it.samples + sampleCount
             )
         }
+    }
+
+    fun callbackTrace(trace: PocketLabCallbackSnapshot) {
+        update { it.copy(callbackTrace = (it.callbackTrace + trace).takeLast(MAX_CALLBACK_HISTORY)) }
+    }
+
+    fun writeRangeTrace(trace: PocketLabWriteRangeSnapshot) {
+        update { it.copy(writeRangeTrace = (it.writeRangeTrace + trace).takeLast(MAX_WRITE_RANGE_HISTORY)) }
     }
 
     fun pipelineAccepted(ok: Boolean, detail: String? = null) {
@@ -331,6 +363,19 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                     "#${it.index} ${it.requestedBytes}/${it.result} head=${it.playbackHeadPosition ?: "—"} underruns=${it.underrunCount ?: "—"}"
                 }).append('\n')
             }
+            if (value.callbackTrace.isNotEmpty()) {
+                append("Callback trace: ").append(value.callbackTrace.joinToString(" | ") {
+                    "c${it.index} s=${it.samples} b=${it.pcmBytes} pre=${it.prebufferBefore}->${it.prebufferAfter} " +
+                        "play=${it.playbackStartedBefore}->${it.playbackStartedAfter} " +
+                        "w=${it.firstWriteAttempt ?: it.lastWriteAttempt ?: "—"}"
+                }).append('\n')
+            }
+            if (value.writeRangeTrace.isNotEmpty()) {
+                append("Write ranges: ").append(value.writeRangeTrace.joinToString(" | ") {
+                    "c${it.sourceCallbackStart}-${it.sourceCallbackEnd} a=${it.arraySize} " +
+                        "o=${it.offset} l=${it.requestedLength} end=${it.offsetPlusLength} r=${it.result}"
+                }).append('\n')
+            }
             value.nativeConfig?.let { append(it).append('\n') }
             value.technicalDetail?.let { append(it).append('\n') }
         }.trimEnd()
@@ -346,6 +391,8 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
 
     private companion object {
         const val MAX_WRITE_HISTORY = 12
+        const val MAX_CALLBACK_HISTORY = 32
+        const val MAX_WRITE_RANGE_HISTORY = 32
     }
 }
 
