@@ -76,6 +76,7 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
 
     suspend fun runIsolationLab(
         variant: PocketIsolationVariant,
+        diagnostic: PocketLabDiagnostic = PocketLabDiagnostic(variant),
         onState: (String) -> Unit = {}
     ): PocketMetrics {
         check(isolationGate.tryEnter()) { "Ya hay una prueba Pocket en ejecución" }
@@ -84,6 +85,7 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
                 ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)
             val plan = PocketIsolationPlan.create(pack, voices, variant)
             val capture = PocketIsolationLabWav.beginCapture(appContext.cacheDir, variant)
+            diagnostic.mark(PocketLabStage.LAB_CAPTURE_READY)
             return engine.synthesize(
                 pack = pack,
                 voice = plan.voice,
@@ -92,7 +94,8 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
                 expression = ExpressionStyle.NATURAL,
                 onState = onState,
                 diagnosticCapture = capture,
-                runtimeConfig = plan.runtimeConfig
+                runtimeConfig = plan.runtimeConfig,
+                labDiagnostic = diagnostic
             )
         } finally {
             isolationGate.leave()
@@ -101,7 +104,7 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
 
     val isolationLabRunning: Boolean get() = isolationGate.isRunning
 
-    fun stop() = engine.stop()
+    fun stop(diagnostic: PocketLabDiagnostic? = null) = engine.stop(diagnostic)
     suspend fun release() = engine.release()
     override fun close() = engine.close()
 

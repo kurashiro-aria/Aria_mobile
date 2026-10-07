@@ -78,6 +78,8 @@ import com.kura.aria.voice.pocket.PocketVoiceException
 import com.kura.aria.voice.pocket.PocketDiagnosticWav
 import com.kura.aria.voice.pocket.PocketIsolationLabWav
 import com.kura.aria.voice.pocket.PocketIsolationVariant
+import com.kura.aria.voice.pocket.PocketLabDiagnostic
+import com.kura.aria.voice.pocket.PocketLabStage
 import com.kura.aria.brain.BrainPipeline
 import com.kura.aria.brain.BrainState
 import com.kura.aria.brain.CloudContextBuilder
@@ -139,6 +141,7 @@ class MainActivity : AppCompatActivity() {
     private var pocketInstallJob: Job? = null
     private var pocketDialogRefresh: (() -> Unit)? = null
     private var lastPocketMetrics: PocketMetrics? = null
+    private var lastPocketLabDiagnostic: PocketLabDiagnostic? = null
     private var speechInput: LocalSpeechInput? = null
     private var dictationBase = ""
     private var cloudVoiceClient: CloudVoiceClient? = null
@@ -1335,10 +1338,10 @@ class MainActivity : AppCompatActivity() {
         speechOutput?.speak(text, AndroidVoiceDirector.forEmotion(emotion, expression), emotion, expression)
     }
 
-    private fun stopLocalVoice() {
+    private fun stopLocalVoice(labDiagnostic: PocketLabDiagnostic? = null) {
         pocketVoiceJob?.cancel()
         pocketVoiceJob = null
-        if (::pocketVoice.isInitialized) pocketVoice.stop()
+        if (::pocketVoice.isInitialized) pocketVoice.stop(labDiagnostic)
         speechOutput?.stop()
     }
 
@@ -1609,6 +1612,9 @@ class MainActivity : AppCompatActivity() {
                     "\nCallbacks: ${value.callbackCount ?: 0} · segmentos: ${value.segmentCount ?: 0}" +
                     " · Mimi frames: ${value.mimiFrames ?: 0}"
             } ?: "Estado laboratorio: $labState"
+            lastPocketLabDiagnostic?.let { diagnostic ->
+                labMetrics.text = labMetrics.text.toString() + "\n\n" + diagnostic.summary()
+            }
             @Suppress("UNUSED_VARIABLE") val retainedSelection = currentLabel
         }
         pocketDialogRefresh = refresh
@@ -1721,12 +1727,16 @@ class MainActivity : AppCompatActivity() {
         }
         fun runIsolationVariant(variant: PocketIsolationVariant) {
             if (pocketVoiceJob?.isActive == true || pocketVoice.isolationLabRunning) return
-            stopLocalVoice()
+            val diagnostic = PocketLabDiagnostic(variant)
+            lastPocketLabDiagnostic = diagnostic
+            diagnostic.onChanged = { runOnUiThread { pocketDialogRefresh?.invoke() } }
+            diagnostic.mark(PocketLabStage.LAB_REQUEST, "variant=${variant.name}")
+            stopLocalVoice(diagnostic)
             labState = "GENERANDO"
             runtimeState = "GENERANDO LAB ${variant.name}"
             pocketVoiceJob = uiScope.launch {
                 try {
-                    lastLabMetrics = pocketVoice.runIsolationLab(variant) { value ->
+                    lastLabMetrics = pocketVoice.runIsolationLab(variant, diagnostic) { value ->
                         runOnUiThread { runtimeState = value; refresh() }
                     }
                     labState = "COMPLETADO"

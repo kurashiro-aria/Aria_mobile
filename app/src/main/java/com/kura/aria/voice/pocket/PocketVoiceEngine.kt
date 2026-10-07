@@ -27,6 +27,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
     @Volatile private var loadedPackId: String? = null
     @Volatile private var loadedRuntimeConfig: PocketRuntimeConfig? = null
     @Volatile private var audioTrack: AudioTrack? = null
+    @Volatile private var pendingLabStopDiagnostic: PocketLabDiagnostic? = null
     private val cancelled = AtomicBoolean(false)
     @Volatile var lastMetrics = PocketMetrics()
         private set
@@ -34,12 +35,19 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
     suspend fun load(
         pack: PocketPack,
         runtimeConfig: PocketRuntimeConfig = PocketRuntimeConfig.normal(pack),
-        onState: (String) -> Unit = {}
+        onState: (String) -> Unit = {},
+        labDiagnostic: PocketLabDiagnostic? = null
     ): Long = withContext(dispatcher) {
         if (native != null && loadedPackId == pack.id && loadedRuntimeConfig == runtimeConfig) return@withContext 0L
         onState("CARGANDO")
-        releaseNative()
+        labDiagnostic?.mark(PocketLabStage.RUNTIME_LOAD_REQUEST,
+            "KV=${runtimeConfig.kvMode.name} LSD=${runtimeConfig.lsdSteps} " +
+                "seed=${if (runtimeConfig.randomSeed == 0L) "TEMPORAL" else "FIXED"}")
+        if (native != null) labDiagnostic?.mark(PocketLabStage.OLD_RUNTIME_RELEASE)
+        releaseNative(labDiagnostic)
         val started = SystemClock.elapsedRealtime()
+        labDiagnostic?.nativeConfig(runtimeConfig.kvMode, runtimeConfig.lsdSteps, runtimeConfig.randomSeed != 0L)
+        labDiagnostic?.mark(PocketLabStage.NATIVE_CREATE_REQUEST)
         try {
             native = NativePocketTts(
                 pack.modelsDir.absolutePath,
@@ -53,6 +61,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 runtimeConfig.kvMode,
                 runtimeConfig.randomSeed
             )
+            labDiagnostic?.mark(PocketLabStage.NATIVE_CREATE_OK)
             loadedPackId = pack.id
             loadedRuntimeConfig = runtimeConfig
             val elapsed = SystemClock.elapsedRealtime() - started
@@ -60,7 +69,9 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             onState("LISTO")
             elapsed
         } catch (error: Throwable) {
-            releaseNative()
+            labDiagnostic?.fail(PocketLabStage.NATIVE_CREATE_FAILED, PocketVoiceError.MODELO_NO_CARGA,
+                error.javaClass.simpleName)
+            releaseNative(labDiagnostic)
             lastMetrics = lastMetrics.copy(state = "ERROR", error = PocketVoiceError.MODELO_NO_CARGA)
             throw if (error is PocketVoiceException) error
             else PocketVoiceException(PocketVoiceError.MODELO_NO_CARGA, error)
@@ -76,7 +87,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         onState: (String) -> Unit = {},
         diagnosticTargets: PocketDiagnosticTargets? = null,
         diagnosticCapture: PocketWavCapture? = null,
-        runtimeConfig: PocketRuntimeConfig = PocketRuntimeConfig.normal(pack)
+        runtimeConfig: PocketRuntimeConfig = PocketRuntimeConfig.normal(pack),
+        labDiagnostic: PocketLabDiagnostic? = null
     ): PocketMetrics = withContext(dispatcher) {
         require(text.isNotBlank())
         if (!PocketInstallValidator.hasRequiredFiles(pack))
@@ -90,10 +102,11 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 .onFailure { error -> Log.w(TAG, "Pocket diagnostic capture initialization failed: ${error.javaClass.simpleName}") }
                 .getOrNull()
         }
+        labDiagnostic?.mark(PocketLabStage.SYNTHESIS_REQUEST)
         cancelled.set(false)
         val requestStarted = SystemClock.elapsedRealtime()
         val ramBefore = Debug.getPss().toLong() / 1024L
-        val modelLoad = load(pack, runtimeConfig, onState)
+        val modelLoad = load(pack, runtimeConfig, onState, labDiagnostic)
         coroutineContext.ensureActive()
         val prosody = AriaPocketProsodyDirector.resolve(emotion, expression, pack.temperature)
         Log.i(TAG, "SYNTHESIS_REQUESTED emotion=${prosody.emotion} expression=${prosody.expressionStyle} " +
@@ -101,12 +114,25 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         onState("SINTETIZANDO")
         var firstAudioMs: Long? = null
         val generationStarted = SystemClock.elapsedRealtime()
-        val track = createAudioTrack()
+        val track = createAudioTrack(labDiagnostic)
         audioTrack = track
         val underrunsBefore = track.underrunCount
         val pipeline = PocketPcm16Pipeline(
             writer = { bytes, offset, length ->
-                track.write(bytes, offset, length, AudioTrack.WRITE_BLOCKING).also { written ->
+                val firstWrite = labDiagnostic?.snapshot()?.firstWriteResult == null
+                if (firstWrite) labDiagnostic?.mark(PocketLabStage.FIRST_AUDIO_TRACK_WRITE)
+                val written = try {
+                    track.write(bytes, offset, length, AudioTrack.WRITE_BLOCKING)
+                } catch (error: Throwable) {
+                    if (firstWrite) {
+                        labDiagnostic?.firstWrite(length, -1)
+                        labDiagnostic?.fail(PocketLabStage.FIRST_AUDIO_TRACK_WRITE_FAILED, null,
+                            "write threw ${error.javaClass.simpleName}")
+                    }
+                    throw error
+                }
+                if (firstWrite) labDiagnostic?.firstWrite(length, written)
+                written.also {
                     if (written <= 0) throw PocketVoiceException(PocketVoiceError.AUDIO_FAILED)
                 }
             },
@@ -125,10 +151,24 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             val ok = runtime.synthesize(text, voice.fileName, NativePocketTts.AudioSink { samples ->
                 if (cancelled.get() || Thread.currentThread().isInterrupted) return@AudioSink false
                 if (samples.isEmpty()) return@AudioSink true
-                runCatching { pipeline.accept(samples) }
-                    .onFailure { callbackError = it }
-                    .isSuccess && !cancelled.get()
-            })
+                labDiagnostic?.callback(samples.size)
+                runCatching {
+                    pipeline.accept(samples)
+                    labDiagnostic?.pipelineAccepted(true)
+                }.onFailure {
+                    callbackError = it
+                    labDiagnostic?.pipelineAccepted(false, it.javaClass.simpleName)
+                }.isSuccess && !cancelled.get()
+            }, NativePocketTts.NativeStageObserver { stage, value ->
+                when (stage) {
+                    PocketNativeStage.STREAM_START_REQUEST -> labDiagnostic?.mark(PocketLabStage.STREAM_START_REQUEST)
+                    PocketNativeStage.STREAM_START_OK -> labDiagnostic?.mark(PocketLabStage.STREAM_START_OK)
+                    PocketNativeStage.STREAM_START_FAILED -> labDiagnostic?.fail(PocketLabStage.STREAM_START_FAILED,
+                        PocketVoiceError.SYNTHESIS_FAILED)
+                    PocketNativeStage.STREAM_READ_FIRST -> labDiagnostic?.mark(PocketLabStage.STREAM_READ_FIRST,
+                        "result=$value")
+                }
+            }.takeIf { labDiagnostic != null })
             if (cancelled.get()) throw CancellationException("Pocket TTS detenido")
             callbackError?.let { throw it }
             if (!ok || pipeline.inspector.snapshot().sampleCount <= 0L)
@@ -176,6 +216,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 state = "COMPLETADO"
             )
             lastMetrics = metrics
+            labDiagnostic?.mark(PocketLabStage.SYNTHESIS_COMPLETE)
             onState("COMPLETADO")
             Log.i(TAG, "SYNTHESIS_COMPLETED firstAudioMs=${metrics.firstAudioMs} generationMs=$generationMs " +
                 "totalMs=$totalMs audioMs=${pcmStats.durationMs} rtf=${metrics.rtf} samples=${pcmStats.sampleCount} " +
@@ -196,6 +237,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             pipeline.abort()
             activeCapture?.abort()
             val code = (error as? PocketVoiceException)?.code ?: PocketVoiceError.SYNTHESIS_FAILED
+            labDiagnostic?.preserveError(error)
             lastMetrics = lastMetrics.copy(state = "ERROR", error = code)
             onState("ERROR: ${code.name}")
             throw if (error is PocketVoiceException) error else PocketVoiceException(code, error)
@@ -204,13 +246,30 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             runCatching { track.flush() }
             runCatching { track.release() }
             if (audioTrack === track) audioTrack = null
+            pendingLabStopDiagnostic?.let { diagnostic ->
+                diagnostic.previousTrack("release=OK")
+                pendingLabStopDiagnostic = null
+            }
         }
     }
 
-    fun stop() {
+    fun stop(labDiagnostic: PocketLabDiagnostic? = null) {
+        labDiagnostic?.mark(PocketLabStage.STOP_LOCAL_VOICE,
+            "audioTrack=${if (audioTrack == null) "NONE" else "PRESENT"}")
+        pendingLabStopDiagnostic = labDiagnostic
         cancelled.set(true)
         native?.stop()
-        audioTrack?.let { runCatching { it.pause(); it.flush(); it.stop() } }
+        audioTrack?.let { track ->
+            var pause = "FAIL"
+            var flush = "NOT_RUN"
+            var stop = "NOT_RUN"
+            runCatching {
+                track.pause(); pause = "OK"
+                track.flush(); flush = "OK"
+                track.stop(); stop = "OK"
+            }
+            labDiagnostic?.previousTrack("pause=$pause flush=$flush stop=$stop release=DEFERRED")
+        }
     }
 
     suspend fun release() = withContext(dispatcher) {
@@ -219,21 +278,30 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         lastMetrics = PocketMetrics(state = "INSTALADO")
     }
 
-    private fun releaseNative() {
+    private fun releaseNative(labDiagnostic: PocketLabDiagnostic? = null) {
+        if (native != null) labDiagnostic?.mark(PocketLabStage.OLD_RUNTIME_RELEASE)
         native?.close()
         native = null
         loadedPackId = null
         loadedRuntimeConfig = null
     }
 
-    private fun createAudioTrack(): AudioTrack {
+    private fun createAudioTrack(labDiagnostic: PocketLabDiagnostic? = null): AudioTrack {
+        labDiagnostic?.mark(PocketLabStage.CREATE_AUDIO_TRACK_REQUEST,
+            "sr=${PocketAudioFormat.SAMPLE_RATE} channels=${AudioFormat.CHANNEL_OUT_MONO} encoding=${AudioFormat.ENCODING_PCM_16BIT}")
         val min = AudioTrack.getMinBufferSize(
             PocketModelSpec.SAMPLE_RATE,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         )
-        if (min <= 0) throw PocketVoiceException(PocketVoiceError.AUDIO_FAILED)
-        return AudioTrack.Builder()
+        labDiagnostic?.audioTrackRequested(min, PocketAudioFormat.SAMPLE_RATE,
+            AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        if (min <= 0) {
+            labDiagnostic?.audioTrackCreateFailed("minBufferSize=$min")
+            throw PocketVoiceException(PocketVoiceError.AUDIO_FAILED)
+        }
+        return try {
+            AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ASSISTANT)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -249,7 +317,17 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 PocketAudioFormat.PCM16_BYTES_PER_SAMPLE * 2))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .setSessionId(AudioManager.AUDIO_SESSION_ID_GENERATE)
-            .build()
+                .build().also { track ->
+                    labDiagnostic?.audioTrackCreated(
+                        track.state,
+                        track.playState,
+                        runCatching { track.bufferSizeInFrames }.getOrNull()
+                    )
+                }
+        } catch (error: Throwable) {
+            labDiagnostic?.audioTrackCreateFailed(error.javaClass.simpleName)
+            throw error
+        }
     }
 
     private fun awaitPlaybackComplete(track: AudioTrack, writtenSamples: Long) {
