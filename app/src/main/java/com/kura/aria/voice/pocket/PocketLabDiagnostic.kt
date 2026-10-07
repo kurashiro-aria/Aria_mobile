@@ -1,5 +1,20 @@
 package com.kura.aria.voice.pocket
 
+internal data class PocketLabWriteSnapshot(
+    val index: Int,
+    val requestedBytes: Int,
+    val result: Int,
+    val trackId: Long?,
+    val trackState: Int?,
+    val playState: Int?,
+    val beforePlaybackHeadPosition: Long?,
+    val beforeUnderrunCount: Int?,
+    val playbackHeadPosition: Long?,
+    val underrunCount: Int?,
+    val cancelled: Boolean,
+    val timestampMs: Long
+)
+
 /** Stages exposed only by the temporary KV/LSD isolation laboratory. */
 internal enum class PocketLabStage {
     IDLE,
@@ -70,6 +85,17 @@ internal data class PocketLabDiagnosticSnapshot(
     val lastWriteTrackId: Long? = null,
     val lastWriteThread: String? = null,
     val lastWriteCancelled: Boolean? = null,
+    val lastWritePlaybackHeadPosition: Long? = null,
+    val lastWriteUnderrunCount: Int? = null,
+    val lastWriteBeforePlaybackHeadPosition: Long? = null,
+    val lastWriteBeforeUnderrunCount: Int? = null,
+    val failedWritePlaybackHeadPosition: Long? = null,
+    val failedWriteUnderrunCount: Int? = null,
+    val failedWriteBeforePlaybackHeadPosition: Long? = null,
+    val failedWriteBeforeUnderrunCount: Int? = null,
+    val trackSessionId: Int? = null,
+    val routedDevice: String? = null,
+    val writeHistory: List<PocketLabWriteSnapshot> = emptyList(),
     val nativeConfig: String? = null,
     val previousTrackDetail: String? = null,
     val pipelineAccepted: Boolean = false
@@ -164,7 +190,14 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
         }
     }
 
-    fun trackCreated(id: Long, state: Int, playState: Int, bufferFrames: Int?) {
+    fun trackCreated(
+        id: Long,
+        state: Int,
+        playState: Int,
+        bufferFrames: Int?,
+        sessionId: Int? = null,
+        routedDevice: String? = null
+    ) {
         update {
             it.copy(
                 stage = PocketLabStage.CREATE_AUDIO_TRACK_OK,
@@ -172,7 +205,9 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                 lastWriteTrackId = id,
                 trackState = state,
                 playState = playState,
-                bufferSizeInFrames = bufferFrames
+                bufferSizeInFrames = bufferFrames,
+                trackSessionId = sessionId,
+                routedDevice = routedDevice
             )
         }
     }
@@ -197,11 +232,21 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
         trackState: Int?,
         playState: Int?,
         trackId: Long? = null,
-        cancelled: Boolean = false
+        cancelled: Boolean = false,
+        beforePlaybackHeadPosition: Long? = null,
+        beforeUnderrunCount: Int? = null,
+        playbackHeadPosition: Long? = null,
+        underrunCount: Int? = null,
+        timestampMs: Long = System.currentTimeMillis()
     ) {
         update {
             val index = it.writeCount + 1
             val failed = result <= 0 && it.failedWriteIndex == null
+            val event = PocketLabWriteSnapshot(
+                index, requestedBytes, result, trackId, trackState, playState,
+                beforePlaybackHeadPosition, beforeUnderrunCount,
+                playbackHeadPosition, underrunCount, cancelled, timestampMs
+            )
             it.copy(
                 writeCount = index,
                 totalBytesRequested = it.totalBytesRequested + requestedBytes,
@@ -211,9 +256,18 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                 failedWriteResult = if (failed) result else it.failedWriteResult,
                 failedWriteTrackState = if (failed) trackState else it.failedWriteTrackState,
                 failedWritePlayState = if (failed) playState else it.failedWritePlayState,
+                failedWritePlaybackHeadPosition = if (failed) playbackHeadPosition else it.failedWritePlaybackHeadPosition,
+                failedWriteUnderrunCount = if (failed) underrunCount else it.failedWriteUnderrunCount,
+                failedWriteBeforePlaybackHeadPosition = if (failed) beforePlaybackHeadPosition else it.failedWriteBeforePlaybackHeadPosition,
+                failedWriteBeforeUnderrunCount = if (failed) beforeUnderrunCount else it.failedWriteBeforeUnderrunCount,
                 lastWriteTrackId = trackId ?: it.lastWriteTrackId,
                 lastWriteThread = Thread.currentThread().name,
-                lastWriteCancelled = cancelled
+                lastWriteCancelled = cancelled,
+                lastWritePlaybackHeadPosition = playbackHeadPosition,
+                lastWriteUnderrunCount = underrunCount,
+                lastWriteBeforePlaybackHeadPosition = beforePlaybackHeadPosition,
+                lastWriteBeforeUnderrunCount = beforeUnderrunCount,
+                writeHistory = (it.writeHistory + event).takeLast(MAX_WRITE_HISTORY)
             )
         }
     }
@@ -259,9 +313,24 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                     .append(" / ").append(value.failedWriteRequestedBytes)
                     .append(" · state=").append(value.failedWriteTrackState)
                     .append(" play=").append(value.failedWritePlayState).append('\n')
+                append("Failed head=").append(value.failedWritePlaybackHeadPosition ?: "—")
+                    .append(" underruns=").append(value.failedWriteUnderrunCount ?: "—").append('\n')
+                append("Failed before head=").append(value.failedWriteBeforePlaybackHeadPosition ?: "—")
+                    .append(" underruns=").append(value.failedWriteBeforeUnderrunCount ?: "—").append('\n')
             }
             value.lastWriteThread?.let { append("Write thread: ").append(it).append('\n') }
             value.lastWriteCancelled?.let { append("Cancelled at write: ").append(it).append('\n') }
+            value.lastWritePlaybackHeadPosition?.let { append("Last head: ").append(it).append('\n') }
+            value.lastWriteUnderrunCount?.let { append("Last underruns: ").append(it).append('\n') }
+            value.lastWriteBeforePlaybackHeadPosition?.let { append("Last before head: ").append(it).append('\n') }
+            value.lastWriteBeforeUnderrunCount?.let { append("Last before underruns: ").append(it).append('\n') }
+            value.trackSessionId?.let { append("Session: ").append(it).append('\n') }
+            value.routedDevice?.let { append("Route: ").append(it).append('\n') }
+            if (value.writeHistory.isNotEmpty()) {
+                append("Write trace: ").append(value.writeHistory.joinToString(" | ") {
+                    "#${it.index} ${it.requestedBytes}/${it.result} head=${it.playbackHeadPosition ?: "—"} underruns=${it.underrunCount ?: "—"}"
+                }).append('\n')
+            }
             value.nativeConfig?.let { append(it).append('\n') }
             value.technicalDetail?.let { append(it).append('\n') }
         }.trimEnd()
@@ -273,6 +342,10 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
             current
         }
         onChanged?.invoke(next)
+    }
+
+    private companion object {
+        const val MAX_WRITE_HISTORY = 12
     }
 }
 

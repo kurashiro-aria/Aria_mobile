@@ -110,14 +110,25 @@ class PocketLabDiagnosticTest {
     @Test fun preservesTrackIdentityAcrossFailedWrite() {
         val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
         diagnostic.trackCreated(12L, 1, 1, 48_000)
-        diagnostic.writeAttempt(48_000, 48_000, 1, 1, 12L, cancelled = false)
-        diagnostic.writeAttempt(24_000, -32, 1, 1, 12L, cancelled = false)
+        diagnostic.writeAttempt(48_000, 48_000, 1, 1, 12L, cancelled = false,
+            beforePlaybackHeadPosition = 0, beforeUnderrunCount = 0,
+            playbackHeadPosition = 24_000, underrunCount = 0, timestampMs = 100)
+        diagnostic.writeAttempt(24_000, -32, 1, 1, 12L, cancelled = false,
+            beforePlaybackHeadPosition = 27_600, beforeUnderrunCount = 1,
+            playbackHeadPosition = 27_600, underrunCount = 1, timestampMs = 200)
 
         val snapshot = diagnostic.snapshot()
         assertEquals(12L, snapshot.trackId)
         assertEquals(12L, snapshot.lastWriteTrackId)
         assertEquals(2, snapshot.failedWriteIndex)
         assertEquals(-32, snapshot.failedWriteResult)
+        assertEquals(27_600L, snapshot.failedWriteBeforePlaybackHeadPosition)
+        assertEquals(1, snapshot.failedWriteBeforeUnderrunCount)
+        assertEquals(27_600L, snapshot.failedWritePlaybackHeadPosition)
+        assertEquals(1, snapshot.failedWriteUnderrunCount)
+        assertEquals(2, snapshot.writeHistory.size)
+        assertEquals(100L, snapshot.writeHistory.first().timestampMs)
+        assertEquals(200L, snapshot.writeHistory.last().timestampMs)
         assertTrue(diagnostic.summary().contains("Track id: 12"))
     }
 

@@ -132,7 +132,9 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 labTrackId!!,
                 track.state,
                 track.playState,
-                runCatching { track.bufferSizeInFrames }.getOrNull()
+                runCatching { track.bufferSizeInFrames }.getOrNull(),
+                runCatching { track.audioSessionId }.getOrNull(),
+                trackRoute(track)
             )
         }
         activeLabTrackId = labTrackId
@@ -143,11 +145,16 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             writer = { bytes, offset, length ->
                 val firstWrite = labDiagnostic?.snapshot()?.firstWriteResult == null
                 if (firstWrite) labDiagnostic?.mark(PocketLabStage.FIRST_AUDIO_TRACK_WRITE)
+                val beforeHead = trackPlaybackHead(track)
+                val beforeUnderruns = trackUnderruns(track)
                 val written = try {
                     track.write(bytes, offset, length, AudioTrack.WRITE_BLOCKING)
                 } catch (error: Throwable) {
                     writeIndex++
-                    labDiagnostic?.writeAttempt(length, -1, track.state, track.playState, labTrackId, cancelled.get())
+                    labDiagnostic?.writeAttempt(
+                        length, -1, track.state, track.playState, labTrackId, cancelled.get(),
+                        beforeHead, beforeUnderruns, trackPlaybackHead(track), trackUnderruns(track)
+                    )
                     if (firstWrite) {
                         labDiagnostic?.firstWrite(length, -1)
                     }
@@ -161,7 +168,10 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                     throw error
                 }
                 writeIndex++
-                labDiagnostic?.writeAttempt(length, written, track.state, track.playState, labTrackId, cancelled.get())
+                labDiagnostic?.writeAttempt(
+                    length, written, track.state, track.playState, labTrackId, cancelled.get(),
+                    beforeHead, beforeUnderruns, trackPlaybackHead(track), trackUnderruns(track)
+                )
                 if (firstWrite) labDiagnostic?.firstWrite(length, written)
                 written.also {
                     if (written <= 0) {
@@ -169,7 +179,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                             else PocketLabStage.AUDIO_TRACK_WRITE_FAILED,
                             PocketVoiceError.AUDIO_FAILED,
                             "write#$writeIndex result=$written (${writeResultName(written)}) requested=$length " +
-                                "track=${labTrackId ?: "—"} state=${track.state} play=${track.playState} " +
+                            "track=${labTrackId ?: "—"} state=${track.state} play=${track.playState} " +
+                                "head=${trackPlaybackHead(track) ?: "—"} underruns=${trackUnderruns(track) ?: "—"} " +
                                 "thread=${Thread.currentThread().name} cancelled=${cancelled.get()}")
                         throw PocketVoiceException(PocketVoiceError.AUDIO_FAILED)
                     }
@@ -423,6 +434,16 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             throw error
         }
     }
+
+    private fun trackPlaybackHead(track: AudioTrack): Long? =
+        runCatching { Integer.toUnsignedLong(track.playbackHeadPosition) }.getOrNull()
+
+    private fun trackUnderruns(track: AudioTrack): Int? =
+        runCatching { track.underrunCount }.getOrNull()
+
+    private fun trackRoute(track: AudioTrack): String? = runCatching {
+        track.routedDevice?.let { "type=${it.type} address=${it.address}" }
+    }.getOrNull()
 
     private fun awaitPlaybackComplete(track: AudioTrack, writtenSamples: Long): Boolean {
         if (writtenSamples <= 0L || track.playState != AudioTrack.PLAYSTATE_PLAYING) return true
