@@ -76,6 +76,8 @@ import com.kura.aria.voice.pocket.PocketModelSpec
 import com.kura.aria.voice.pocket.PocketVoiceController
 import com.kura.aria.voice.pocket.PocketVoiceException
 import com.kura.aria.voice.pocket.PocketDiagnosticWav
+import com.kura.aria.voice.pocket.PocketIsolationLabWav
+import com.kura.aria.voice.pocket.PocketIsolationVariant
 import com.kura.aria.brain.BrainPipeline
 import com.kura.aria.brain.BrainState
 import com.kura.aria.brain.CloudContextBuilder
@@ -1471,6 +1473,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun showVoiceDialog() {
         var runtimeState: String? = null
+        var labState = "LISTO"
+        var lastLabMetrics: PocketMetrics? = null
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(10), dp(20), dp(12))
@@ -1503,6 +1507,11 @@ class MainActivity : AppCompatActivity() {
         val delete = Button(this).apply { text = "ELIMINAR DATOS POCKET" }
         val audioDiagnostic = Button(this).apply { text = "GENERAR PRUEBA DE AUDIO" }
         val shareAudioDiagnostic = Button(this).apply { text = "Compartir diagnóstico Pocket" }
+        val labA = Button(this).apply { text = "PROBAR A · CONTROL KV ACTUAL / LSD1" }
+        val labB = Button(this).apply { text = "PROBAR B · KV SEPARADO / LSD1" }
+        val labC = Button(this).apply { text = "PROBAR C · KV SEPARADO / LSD3" }
+        val shareLab = Button(this).apply { text = "Compartir WAV laboratorio Pocket" }
+        val labMetrics = TextView(this).apply { setPadding(0, dp(8), 0, 0) }
         val metrics = TextView(this).apply { setPadding(0, dp(12), 0, 0) }
 
         column.addView(intro)
@@ -1527,6 +1536,19 @@ class MainActivity : AppCompatActivity() {
         column.addView(audioDiagnostic)
         column.addView(shareAudioDiagnostic)
         column.addView(metrics)
+        column.addView(TextView(this).apply {
+            text = "Laboratorio temporal KV / LSD"; setTextColor(Color.parseColor(PURPLE));
+            setPadding(0, dp(14), 0, 0)
+        })
+        column.addView(TextView(this).apply {
+            text = "Mismo texto, ARIA-D-B2, modelo, temperature 0.7 y 24 kHz. " +
+                "Las pruebas usan una semilla fija común y no cambian el chat normal."
+        })
+        column.addView(labA)
+        column.addView(labB)
+        column.addView(labC)
+        column.addView(shareLab)
+        column.addView(labMetrics)
 
         val refresh = refresh@{
             if (isFinishing || isDestroyed) return@refresh
@@ -1570,9 +1592,23 @@ class MainActivity : AppCompatActivity() {
             voiceSpinner.isEnabled = voices.isNotEmpty()
             test.isEnabled = installed && voices.isNotEmpty()
             audioDiagnostic.isEnabled = installed && voices.isNotEmpty()
+            val labIdle = pocketVoiceJob?.isActive != true && !pocketVoice.isolationLabRunning
+            listOf(labA, labB, labC).forEach { it.isEnabled = installed && labIdle }
+            shareLab.isEnabled = PocketIsolationLabWav.committedFiles(cacheDir).isNotEmpty() && labIdle
             importVoice.isEnabled = installed
             delete.isEnabled = installed
             metrics.text = pocketMetricsText(lastPocketMetrics ?: pocketVoice.metrics)
+            labMetrics.text = lastLabMetrics?.let { value ->
+                "Estado: $labState\nDuración: ${value.audioDurationMs ?: 0} ms" +
+                    "\nT_model_ready: ${value.modelLoadMs ?: 0} ms" +
+                    "\nT_conditioning: ${value.conditioningMs ?: 0} ms" +
+                    "\nT_first_audio: ${value.firstAudioMs ?: 0} ms" +
+                    "\nT_generation: ${value.generationMs ?: 0} ms" +
+                    "\nT_total: ${value.totalMs ?: 0} ms" +
+                    "\nKV: ${value.effectiveKvMode ?: "—"} · LSD: ${value.effectiveLsdSteps ?: "—"}" +
+                    "\nCallbacks: ${value.callbackCount ?: 0} · segmentos: ${value.segmentCount ?: 0}" +
+                    " · Mimi frames: ${value.mimiFrames ?: 0}"
+            } ?: "Estado laboratorio: $labState"
             @Suppress("UNUSED_VARIABLE") val retainedSelection = currentLabel
         }
         pocketDialogRefresh = refresh
@@ -1681,6 +1717,53 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent.createChooser(sendIntent, "Compartir diagnóstico Pocket"))
             } catch (error: Throwable) {
                 toast(error.message ?: "No pude compartir el diagnóstico Pocket")
+            }
+        }
+        fun runIsolationVariant(variant: PocketIsolationVariant) {
+            if (pocketVoiceJob?.isActive == true || pocketVoice.isolationLabRunning) return
+            stopLocalVoice()
+            labState = "GENERANDO"
+            runtimeState = "GENERANDO LAB ${variant.name}"
+            pocketVoiceJob = uiScope.launch {
+                try {
+                    lastLabMetrics = pocketVoice.runIsolationLab(variant) { value ->
+                        runOnUiThread { runtimeState = value; refresh() }
+                    }
+                    labState = "COMPLETADO"
+                    toast("${variant.label} completada")
+                } catch (cancelled: CancellationException) { labState = "LISTO"; throw cancelled }
+                catch (error: Throwable) {
+                    labState = "ERROR"
+                    toast(error.message ?: "Prueba de laboratorio fallida")
+                }
+                finally { refresh() }
+            }
+            refresh()
+        }
+        labA.setOnClickListener { runIsolationVariant(PocketIsolationVariant.A_CONTROL) }
+        labB.setOnClickListener { runIsolationVariant(PocketIsolationVariant.B_KV_SEPARATE) }
+        labC.setOnClickListener { runIsolationVariant(PocketIsolationVariant.C_KV_SEPARATE_LSD3) }
+        shareLab.setOnClickListener {
+            val files = PocketIsolationLabWav.committedFiles(cacheDir)
+            if (files.isEmpty()) {
+                toast("Primero completa al menos una prueba A/B/C.")
+                return@setOnClickListener
+            }
+            try {
+                val uris = PocketIsolationLabWav.shareUris(files) {
+                    FileProvider.getUriForFile(this, "$packageName.fileprovider", it)
+                }
+                val sendIntent = Intent(PocketIsolationLabWav.SHARE_ACTION).apply {
+                    type = PocketIsolationLabWav.SHARE_MIME_TYPE
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+                    clipData = ClipData.newUri(contentResolver, files.first().name, uris.first()).apply {
+                        uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+                    }
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(sendIntent, "Compartir WAV laboratorio Pocket"))
+            } catch (error: Throwable) {
+                toast(error.message ?: "No pude compartir el laboratorio Pocket")
             }
         }
         stop.setOnClickListener { stopLocalVoice(); runtimeState = "DETENIDO"; refresh() }

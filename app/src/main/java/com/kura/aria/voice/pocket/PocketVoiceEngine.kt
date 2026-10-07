@@ -25,13 +25,18 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
     }.asCoroutineDispatcher()
     @Volatile private var native: NativePocketTts? = null
     @Volatile private var loadedPackId: String? = null
+    @Volatile private var loadedRuntimeConfig: PocketRuntimeConfig? = null
     @Volatile private var audioTrack: AudioTrack? = null
     private val cancelled = AtomicBoolean(false)
     @Volatile var lastMetrics = PocketMetrics()
         private set
 
-    suspend fun load(pack: PocketPack, onState: (String) -> Unit = {}): Long = withContext(dispatcher) {
-        if (native != null && loadedPackId == pack.id) return@withContext 0L
+    suspend fun load(
+        pack: PocketPack,
+        runtimeConfig: PocketRuntimeConfig = PocketRuntimeConfig.normal(pack),
+        onState: (String) -> Unit = {}
+    ): Long = withContext(dispatcher) {
+        if (native != null && loadedPackId == pack.id && loadedRuntimeConfig == runtimeConfig) return@withContext 0L
         onState("CARGANDO")
         releaseNative()
         val started = SystemClock.elapsedRealtime()
@@ -41,12 +46,15 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 pack.voicesDir.absolutePath,
                 pack.precision,
                 pack.temperature,
-                pack.lsdSteps,
+                runtimeConfig.lsdSteps,
                 pack.threads.coerceIn(1, 8),
                 250,
-                50
+                50,
+                runtimeConfig.kvMode,
+                runtimeConfig.randomSeed
             )
             loadedPackId = pack.id
+            loadedRuntimeConfig = runtimeConfig
             val elapsed = SystemClock.elapsedRealtime() - started
             lastMetrics = lastMetrics.copy(modelLoadMs = elapsed, state = "LISTO")
             onState("LISTO")
@@ -66,7 +74,9 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         emotion: AriaEmotion,
         expression: ExpressionStyle,
         onState: (String) -> Unit = {},
-        diagnosticTargets: PocketDiagnosticTargets? = null
+        diagnosticTargets: PocketDiagnosticTargets? = null,
+        diagnosticCapture: PocketWavCapture? = null,
+        runtimeConfig: PocketRuntimeConfig = PocketRuntimeConfig.normal(pack)
     ): PocketMetrics = withContext(dispatcher) {
         require(text.isNotBlank())
         if (!PocketInstallValidator.hasRequiredFiles(pack))
@@ -74,7 +84,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         if (!PocketInstallValidator.isVoiceAvailable(pack.voicesDir, voice))
             throw PocketVoiceException(PocketVoiceError.VOZ_NO_DISPONIBLE)
 
-        val diagnosticCapture = diagnosticTargets?.let { targets ->
+        require(diagnosticTargets == null || diagnosticCapture == null)
+        val activeCapture = diagnosticCapture ?: diagnosticTargets?.let { targets ->
             runCatching { PocketDiagnosticWav.beginCapture(targets) }
                 .onFailure { error -> Log.w(TAG, "Pocket diagnostic capture initialization failed: ${error.javaClass.simpleName}") }
                 .getOrNull()
@@ -82,7 +93,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         cancelled.set(false)
         val requestStarted = SystemClock.elapsedRealtime()
         val ramBefore = Debug.getPss().toLong() / 1024L
-        val modelLoad = load(pack, onState)
+        val modelLoad = load(pack, runtimeConfig, onState)
         coroutineContext.ensureActive()
         val prosody = AriaPocketProsodyDirector.resolve(emotion, expression, pack.temperature)
         Log.i(TAG, "SYNTHESIS_REQUESTED emotion=${prosody.emotion} expression=${prosody.expressionStyle} " +
@@ -105,8 +116,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 onState("REPRODUCIENDO")
                 Log.i(TAG, "FIRST_AUDIO firstAudioMs=$firstAudioMs prebufferMs=${PocketAudioFormat.PREBUFFER_MS}")
             },
-            wavWriter = diagnosticCapture?.stagedTargets?.pcm16File?.let(::PocketWavWriter),
-            floatWavWriter = diagnosticCapture?.stagedTargets?.float32File?.let(::PocketFloatWavWriter)
+            wavWriter = activeCapture?.stagedTargets?.pcm16File?.let(::PocketWavWriter),
+            floatWavWriter = activeCapture?.stagedTargets?.float32File?.let(::PocketFloatWavWriter)
         )
         try {
             val runtime = native ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_CARGA)
@@ -122,12 +133,13 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             callbackError?.let { throw it }
             if (!ok || pipeline.inspector.snapshot().sampleCount <= 0L)
                 throw PocketVoiceException(PocketVoiceError.SYNTHESIS_FAILED)
+            val nativeMetrics = runtime.lastRunMetrics()
             pipeline.finish()
             val generationMs = SystemClock.elapsedRealtime() - generationStarted
             awaitPlaybackComplete(track, pipeline.writtenSamples)
             if (cancelled.get()) throw CancellationException("Pocket TTS detenido")
-            val diagnosticPublished = diagnosticCapture?.publish() == true
-            diagnosticTargets?.let { targets ->
+            val diagnosticPublished = activeCapture?.publish() == true
+            activeCapture?.targets?.let { targets ->
                 val floatFile = targets.float32File
                 val pcmFile = targets.pcm16File
                 Log.i(TAG, "Pocket diagnostic generation: float32 exists=${floatFile.isFile} " +
@@ -138,7 +150,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             val pcmStats = pipeline.inspector.snapshot()
             val underruns = (track.underrunCount - underrunsBefore).coerceAtLeast(0)
             val metrics = PocketMetrics(
-                modelLoadMs = if (modelLoad > 0) modelLoad else lastMetrics.modelLoadMs,
+                modelLoadMs = modelLoad,
                 voiceProfileMs = null,
                 firstAudioMs = firstAudioMs,
                 generationMs = generationMs,
@@ -152,8 +164,14 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 pcm16Stats = pipeline.pcm16Inspector?.snapshot(),
                 conversionStats = pipeline.quantizationInspector?.snapshot(),
                 audioUnderruns = underruns,
-                diagnosticWav = diagnosticTargets?.pcm16File?.takeIf { diagnosticPublished }?.absolutePath,
-                diagnosticFloatWav = diagnosticTargets?.float32File?.takeIf { diagnosticPublished }?.absolutePath,
+                diagnosticWav = activeCapture?.targets?.pcm16File?.takeIf { diagnosticPublished }?.absolutePath,
+                diagnosticFloatWav = activeCapture?.targets?.float32File?.takeIf { diagnosticPublished }?.absolutePath,
+                conditioningMs = nativeMetrics.conditioningMs,
+                callbackCount = nativeMetrics.callbackCount,
+                segmentCount = nativeMetrics.segmentCount,
+                mimiFrames = nativeMetrics.mimiFrames,
+                effectiveLsdSteps = runtimeConfig.lsdSteps,
+                effectiveKvMode = runtimeConfig.kvMode,
                 voice = voice.name,
                 state = "COMPLETADO"
             )
@@ -163,17 +181,20 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 "totalMs=$totalMs audioMs=${pcmStats.durationMs} rtf=${metrics.rtf} samples=${pcmStats.sampleCount} " +
                 "min=${pcmStats.minimum} max=${pcmStats.maximum} peak=${pcmStats.peakAbsolute} rms=${pcmStats.rms} " +
                 "dc=${pcmStats.dcOffset} nan=${pcmStats.nanCount} inf=${pcmStats.infiniteCount} " +
-                "clipped=${pcmStats.clippedSamples} underruns=$underruns")
+                "clipped=${pcmStats.clippedSamples} underruns=$underruns " +
+                "conditioningMs=${nativeMetrics.conditioningMs} callbacks=${nativeMetrics.callbackCount} " +
+                "segments=${nativeMetrics.segmentCount} mimiFrames=${nativeMetrics.mimiFrames} " +
+                "kvMode=${runtimeConfig.kvMode} lsdSteps=${runtimeConfig.lsdSteps}")
             metrics
         } catch (cancelledError: CancellationException) {
             pipeline.abort()
-            diagnosticCapture?.abort()
+            activeCapture?.abort()
             lastMetrics = lastMetrics.copy(state = "DETENIDO")
             onState("DETENIDO")
             throw cancelledError
         } catch (error: Throwable) {
             pipeline.abort()
-            diagnosticCapture?.abort()
+            activeCapture?.abort()
             val code = (error as? PocketVoiceException)?.code ?: PocketVoiceError.SYNTHESIS_FAILED
             lastMetrics = lastMetrics.copy(state = "ERROR", error = code)
             onState("ERROR: ${code.name}")
@@ -202,6 +223,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         native?.close()
         native = null
         loadedPackId = null
+        loadedRuntimeConfig = null
     }
 
     private fun createAudioTrack(): AudioTrack {
@@ -249,6 +271,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         runCatching { native?.close() }
         native = null
         loadedPackId = null
+        loadedRuntimeConfig = null
         dispatcher.close()
     }
 

@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="pocket_diagnostic" path="pocket-diagnostics/" />
+    <cache-path name="pocket_isolation_lab" path="pocket-kv-lsd-lab/" />
 </paths>

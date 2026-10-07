@@ -12,6 +12,13 @@ internal data class PocketDiagnosticTargets(
     fun files(): List<File> = listOf(float32File, pcm16File)
 }
 
+internal interface PocketWavCapture {
+    val targets: PocketDiagnosticTargets
+    val stagedTargets: PocketDiagnosticTargets
+    fun publish(): Boolean
+    fun abort()
+}
+
 /** Resolves, stages, and shares diagnostic WAVs without changing their bytes. */
 internal object PocketDiagnosticWav {
     const val PCM_FILE_NAME = "pocket_audio_quality.wav"
@@ -85,13 +92,13 @@ internal object PocketDiagnosticWav {
  * the commit marker is written last. Cancellation/failure invalidates the whole pair.
  */
 internal class PocketDiagnosticCapture private constructor(
-    private val targets: PocketDiagnosticTargets,
-    val stagedTargets: PocketDiagnosticTargets,
+    override val targets: PocketDiagnosticTargets,
+    override val stagedTargets: PocketDiagnosticTargets,
     private val marker: File,
     private val markerPartial: File,
     private val generationId: String
-) {
-    fun publish(): Boolean {
+) : PocketWavCapture {
+    override fun publish(): Boolean {
         return try {
             check(PocketDiagnosticWav.isShareable(stagedTargets.float32File))
             check(PocketDiagnosticWav.isShareable(stagedTargets.pcm16File))
@@ -110,7 +117,7 @@ internal class PocketDiagnosticCapture private constructor(
         }
     }
 
-    fun abort() {
+    override fun abort() {
         marker.delete()
         markerPartial.delete()
         targets.float32File.delete()

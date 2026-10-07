@@ -60,6 +60,26 @@ internal data class PocketProsody(
     val temperature: Float
 )
 
+internal enum class PocketKvMode(val nativeValue: Int) {
+    CURRENT_SINGLE_BUFFER(0),
+    SEPARATE_INPUT_OUTPUT(1)
+}
+
+/** Process-local runtime settings. Lab settings are never persisted. */
+internal data class PocketRuntimeConfig(
+    val kvMode: PocketKvMode,
+    val lsdSteps: Int,
+    val randomSeed: Long = 0L
+) {
+    companion object {
+        fun normal(pack: PocketPack) = PocketRuntimeConfig(
+            PocketKvMode.CURRENT_SINGLE_BUFFER,
+            pack.lsdSteps,
+            0L
+        )
+    }
+}
+
 /**
  * Pocket exposes sampling temperature, not documented per-utterance pitch,
  * speed or emotion controls. We preserve ARIA's resolved performance context
@@ -87,6 +107,12 @@ internal data class PocketMetrics(
     val audioUnderruns: Int? = null,
     val diagnosticWav: String? = null,
     val diagnosticFloatWav: String? = null,
+    val conditioningMs: Long? = null,
+    val callbackCount: Int? = null,
+    val segmentCount: Int? = null,
+    val mimiFrames: Int? = null,
+    val effectiveLsdSteps: Int? = null,
+    val effectiveKvMode: PocketKvMode? = null,
     val model: String = PocketModelSpec.DISPLAY_NAME,
     val voice: String? = null,
     val state: String = "NO INSTALADO",

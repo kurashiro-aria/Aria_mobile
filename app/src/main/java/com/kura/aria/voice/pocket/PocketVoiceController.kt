@@ -10,6 +10,7 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
     val models = PocketModelManager(appContext)
     val preferences = PocketVoicePreferences(appContext)
     private val engine = PocketVoiceEngine(appContext)
+    private val isolationGate = PocketIsolationGate()
 
     val installed: Boolean get() = models.installedPack() != null
     val voices: List<PocketVoice> get() = models.voices().also { available ->
@@ -35,7 +36,7 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
     suspend fun load(onState: (String) -> Unit = {}): Long {
         val pack = models.installedPack()
             ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)
-        return engine.load(pack, onState)
+        return engine.load(pack, onState = onState)
     }
 
     suspend fun speak(
@@ -72,6 +73,33 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
             diagnosticTargets = PocketDiagnosticWav.forVoiceTest(appContext.cacheDir)
         )
     }
+
+    suspend fun runIsolationLab(
+        variant: PocketIsolationVariant,
+        onState: (String) -> Unit = {}
+    ): PocketMetrics {
+        check(isolationGate.tryEnter()) { "Ya hay una prueba Pocket en ejecución" }
+        try {
+            val pack = models.installedPack()
+                ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)
+            val plan = PocketIsolationPlan.create(pack, voices, variant)
+            val capture = PocketIsolationLabWav.beginCapture(appContext.cacheDir, variant)
+            return engine.synthesize(
+                pack = pack,
+                voice = plan.voice,
+                text = plan.text,
+                emotion = AriaEmotion.NEUTRAL,
+                expression = ExpressionStyle.NATURAL,
+                onState = onState,
+                diagnosticCapture = capture,
+                runtimeConfig = plan.runtimeConfig
+            )
+        } finally {
+            isolationGate.leave()
+        }
+    }
+
+    val isolationLabRunning: Boolean get() = isolationGate.isRunning
 
     fun stop() = engine.stop()
     suspend fun release() = engine.release()

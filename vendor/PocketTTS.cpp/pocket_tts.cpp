@@ -172,6 +172,8 @@ struct Config {
     int max_text_tokens = 50;
     bool verbose = false;
     bool voice_cache = true;
+    bool separate_fp16_state = false;
+    uint64_t random_seed = 0;  // 0 keeps the production time-based seed.
 };
 
 struct AudioData {
@@ -686,6 +688,10 @@ struct StateBufferIO {
     std::vector<std::string> names;
     std::vector<bool> is_dynamic;
     int current_buf = 0;
+    bool separate_fp16 = false;
+
+    explicit StateBufferIO(bool separate = false) : separate_fp16(separate) {}
+    int fp16_buf(int logical_buffer) const { return separate_fp16 ? logical_buffer : 0; }
     
     void init(OrtSession& s) {
         const auto& in_names = s.input_names();
@@ -718,9 +724,10 @@ struct StateBufferIO {
                     b8[b].push_back(std::vector<uint8_t>(alloc, 0));
                     f32[b].push_back({}); f16[b].push_back({}); i64[b].push_back({});
                 } else if (in_types[i] == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
-                    // Single-buffered: only buffer 0 is allocated.
-                    // Both input and output bind to buffer 0, enabling in-place scatter.
-                    f16[b].push_back(b == 0 ? std::vector<uint16_t>(alloc, 0) : std::vector<uint16_t>());
+                    // Production e801 uses one aliased buffer. The isolation lab can
+                    // allocate physically distinct input/output buffers.
+                    f16[b].push_back((separate_fp16 || b == 0)
+                        ? std::vector<uint16_t>(alloc, 0) : std::vector<uint16_t>());
                     f32[b].push_back({}); i64[b].push_back({}); b8[b].push_back({});
                 } else {
                     f32[b].push_back(std::vector<float>(alloc, 0.0f));
@@ -735,6 +742,16 @@ struct StateBufferIO {
     int in_buf() const { return current_buf; }
     int out_buf() const { return 1 - current_buf; }
     void swap() { current_buf = 1 - current_buf; }
+
+    void assert_fp16_storage_is_separate() const {
+        if (!separate_fp16) return;
+        for (size_t i = 0; i < types.size(); ++i) {
+            if (types[i] != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) continue;
+            if (!f16[0][i].empty() && !f16[1][i].empty() &&
+                f16[0][i].data() == f16[1][i].data())
+                throw std::runtime_error("Separate FP16 input/output buffers alias");
+        }
+    }
     
     // Reset all state buffers to zero without freeing/reallocating.
     // Ideal for fixed-size state models (e.g. Mimi decoder) where the
@@ -744,12 +761,13 @@ struct StateBufferIO {
         size_t n = names.size();
         for (size_t i = 0; i < n; ++i) {
             for (int b = 0; b < 2; ++b) {
+                int hb = fp16_buf(b);
                 if (is_dynamic[i]) {
-                    f32[b][i].clear(); f16[0][i].clear();
+                    f32[b][i].clear(); f16[hb][i].clear();
                     i64[b][i].clear(); b8[b][i].clear();
                 } else {
                     std::fill(f32[b][i].begin(), f32[b][i].end(), 0.0f);
-                    std::fill(f16[0][i].begin(), f16[0][i].end(), uint16_t(0));
+                    std::fill(f16[hb][i].begin(), f16[hb][i].end(), uint16_t(0));
                     std::fill(i64[b][i].begin(), i64[b][i].end(), int64_t(0));
                     std::fill(b8[b][i].begin(), b8[b][i].end(), uint8_t(0));
                 }
@@ -761,7 +779,7 @@ struct StateBufferIO {
         auto t = types[state_idx];
         // FP16 KV caches use single-buffered mode (always buffer 0) to enable
         // in-place scatter — ORT skips the bulk copy when src == dst.
-        int b = (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) ? 0 : in_buf();
+        int b = (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) ? fp16_buf(in_buf()) : in_buf();
         auto& sh = shapes[state_idx];
         if (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
             return Ort::Value::CreateTensor<int64_t>(mem, i64[b][state_idx].data(), i64[b][state_idx].size(), 
@@ -770,8 +788,8 @@ struct StateBufferIO {
             return Ort::Value::CreateTensor<bool>(mem, reinterpret_cast<bool*>(b8[b][state_idx].data()), 
                                                    b8[b][state_idx].size(), sh.data(), sh.size());
         } else if (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
-            return Ort::Value::CreateTensor<Ort::Float16_t>(mem, reinterpret_cast<Ort::Float16_t*>(f16[0][state_idx].data()),
-                                                             f16[0][state_idx].size(), sh.data(), sh.size());
+            return Ort::Value::CreateTensor<Ort::Float16_t>(mem, reinterpret_cast<Ort::Float16_t*>(f16[b][state_idx].data()),
+                                                             f16[b][state_idx].size(), sh.data(), sh.size());
         } else {
             return Ort::Value::CreateTensor<float>(mem, f32[b][state_idx].data(), f32[b][state_idx].size(),
                                                     sh.data(), sh.size());
@@ -780,7 +798,7 @@ struct StateBufferIO {
     
     Ort::Value create_output_value(size_t state_idx, Ort::MemoryInfo& mem) {
         auto t = types[state_idx];
-        int b = (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) ? 0 : out_buf();
+        int b = (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) ? fp16_buf(out_buf()) : out_buf();
         auto& sh = shapes[state_idx];
         if (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
             return Ort::Value::CreateTensor<int64_t>(mem, i64[b][state_idx].data(), i64[b][state_idx].size(),
@@ -789,8 +807,8 @@ struct StateBufferIO {
             return Ort::Value::CreateTensor<bool>(mem, reinterpret_cast<bool*>(b8[b][state_idx].data()),
                                                    b8[b][state_idx].size(), sh.data(), sh.size());
         } else if (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
-            return Ort::Value::CreateTensor<Ort::Float16_t>(mem, reinterpret_cast<Ort::Float16_t*>(f16[0][state_idx].data()),
-                                                             f16[0][state_idx].size(), sh.data(), sh.size());
+            return Ort::Value::CreateTensor<Ort::Float16_t>(mem, reinterpret_cast<Ort::Float16_t*>(f16[b][state_idx].data()),
+                                                             f16[b][state_idx].size(), sh.data(), sh.size());
         } else {
             return Ort::Value::CreateTensor<float>(mem, f32[b][state_idx].data(), f32[b][state_idx].size(),
                                                     sh.data(), sh.size());
@@ -799,7 +817,7 @@ struct StateBufferIO {
     
     void copy_from_output(size_t state_idx, Ort::Value& val) {
         auto t = types[state_idx];
-        int b = (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) ? 0 : out_buf();
+        int b = (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) ? fp16_buf(out_buf()) : out_buf();
         auto info = val.GetTensorTypeAndShapeInfo();
         shapes[state_idx] = info.GetShape();
         size_t out_size = info.GetElementCount();
@@ -812,7 +830,7 @@ struct StateBufferIO {
             b8[b][state_idx].assign(src, src + out_size);
         } else if (t == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
             auto* src = reinterpret_cast<const uint16_t*>(val.GetTensorData<Ort::Float16_t>());
-            f16[0][state_idx].assign(src, src + out_size);
+            f16[b][state_idx].assign(src, src + out_size);
         } else {
             auto* src = val.GetTensorData<float>();
             f32[b][state_idx].assign(src, src + out_size);
@@ -876,6 +894,7 @@ struct StateBufferIO {
     Snapshot take_snapshot() const {
         Snapshot snap;
         int b = in_buf();
+        int hb = fp16_buf(b);
         size_t n = names.size();
         snap.shapes.resize(n);
         snap.current_buf = current_buf;
@@ -887,7 +906,7 @@ struct StateBufferIO {
         
         for (size_t i = 0; i < n; ++i) {
             bool is_f32 = types[i] == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT && f32[b][i].size() >= 10000;
-            bool is_f16 = types[i] == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 && f16[0][i].size() >= 10000;
+            bool is_f16 = types[i] == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 && f16[hb][i].size() >= 10000;
             if (!is_f32 && !is_f16) continue;
             
             int seq_dim = -1;
@@ -919,7 +938,7 @@ struct StateBufferIO {
             } else {
                 snap.shapes[i] = shapes[i];
                 total_f32 += f32[b][i].size();
-                total_f16 += f16[0][i].size();
+                total_f16 += f16[hb][i].size();
             }
             total_i64 += i64[b][i].size();
             total_b8 += b8[b][i].size();
@@ -952,7 +971,7 @@ struct StateBufferIO {
                 int64_t new_stride = N * inner;
                 
                 if (types[i] == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
-                    const uint16_t* src = f16[0][i].data();
+                    const uint16_t* src = f16[hb][i].data();
                     uint16_t* dst = snap.f16_data.data() + ho;
                     for (int64_t o = 0; o < outer; ++o)
                         memcpy(dst + o * new_stride, src + o * old_stride, new_stride * sizeof(uint16_t));
@@ -966,7 +985,7 @@ struct StateBufferIO {
                 }
             } else {
                 if (!f32[b][i].empty()) { memcpy(snap.f32_data.data() + fo, f32[b][i].data(), f32[b][i].size() * sizeof(float)); fo += f32[b][i].size(); }
-                if (!f16[0][i].empty()) { memcpy(snap.f16_data.data() + ho, f16[0][i].data(), f16[0][i].size() * sizeof(uint16_t)); ho += f16[0][i].size(); }
+                if (!f16[hb][i].empty()) { memcpy(snap.f16_data.data() + ho, f16[hb][i].data(), f16[hb][i].size() * sizeof(uint16_t)); ho += f16[hb][i].size(); }
             }
             
             if (!i64[b][i].empty()) { memcpy(snap.i64_data.data() + io, i64[b][i].data(), i64[b][i].size() * sizeof(int64_t)); io += i64[b][i].size(); }
@@ -983,6 +1002,7 @@ struct StateBufferIO {
     void restore_snapshot(const Snapshot& snap) {
         current_buf = snap.current_buf;
         int b = in_buf();
+        int hb = fp16_buf(b);
         size_t n = names.size();
         
         for (size_t i = 0; i < n; ++i) {
@@ -1005,7 +1025,7 @@ struct StateBufferIO {
                 }
                 
                 if (has_f16) {
-                    f16[0][i].resize(full_size);
+                    f16[hb][i].resize(full_size);
                     if (sd >= 0) {
                         int64_t N = snap.shapes[i][sd];
                         int64_t outer = 1;
@@ -1015,7 +1035,7 @@ struct StateBufferIO {
                         int64_t full_stride = init_shapes[i][sd] * inner;
                         int64_t slice_stride = N * inner;
                         const uint16_t* src = snap.f16_data.data() + f16_off;
-                        uint16_t* dst = f16[0][i].data();
+                        uint16_t* dst = f16[hb][i].data();
                         for (int64_t o = 0; o < outer; ++o)
                             memcpy(dst + o * full_stride, src + o * slice_stride, slice_stride * sizeof(uint16_t));
                     }
@@ -1037,7 +1057,7 @@ struct StateBufferIO {
                 }
             } else {
                 f32[b][i].assign(snap.f32_data.begin() + f32_off, snap.f32_data.begin() + f32_end);
-                f16[0][i].assign(snap.f16_data.begin() + f16_off, snap.f16_data.begin() + f16_end);
+                f16[hb][i].assign(snap.f16_data.begin() + f16_off, snap.f16_data.begin() + f16_end);
             }
             
             i64[b][i].assign(snap.i64_data.begin() + i64_off, snap.i64_data.begin() + i64_end);
@@ -1109,6 +1129,7 @@ struct StateBufferIO {
         read(&cb, 4); read(&ns, 4);
         current_buf = cb;
         int b = in_buf();
+        int hb = fp16_buf(b);
         
         for (int32_t i = 0; i < ns; ++i) {
             int32_t ndims, type;
@@ -1132,7 +1153,7 @@ struct StateBufferIO {
                 if (sliced) {
                     size_t full_size = 1;
                     for (auto d : init_shapes[i]) full_size *= (d > 0 ? d : 1);
-                    f16[0][i].resize(full_size);
+                    f16[hb][i].resize(full_size);
                     int sd = -1;
                     for (size_t d = 0; d < init_shapes[i].size(); ++d) {
                         if (loaded_shape[d] != init_shapes[i][d]) { sd = (int)d; break; }
@@ -1146,7 +1167,7 @@ struct StateBufferIO {
                         int64_t full_stride = init_shapes[i][sd] * inner;
                         int64_t slice_stride = N * inner;
                         const uint16_t* src = reinterpret_cast<const uint16_t*>(p);
-                        uint16_t* dst = f16[0][i].data();
+                        uint16_t* dst = f16[hb][i].data();
                         for (int64_t o = 0; o < outer; ++o)
                             memcpy(dst + o * full_stride, src + o * slice_stride, slice_stride * sizeof(uint16_t));
                     }
@@ -1154,7 +1175,7 @@ struct StateBufferIO {
                 } else {
                     size_t count = data_bytes / 2;
                     auto* src = reinterpret_cast<const uint16_t*>(p);
-                    f16[0][i].assign(src, src + count);
+                    f16[hb][i].assign(src, src + count);
                     p += data_bytes;
                 }
             } else {
@@ -1210,12 +1231,13 @@ class StatefulRunner {
     Ort::MemoryInfo mem_;
     StateBufferIO state_;
     std::unique_ptr<Ort::IoBinding> binding_;
+    bool separate_fp16_ = false;
     
     // FP16 writeback fixup: detects when ORT ignores pre-bound output buffer
     // and copies just the modified cache positions from ORT's temp to ours.
     struct FP16Fixup {
         size_t output_idx;     // position in GetOutputValues()
-        size_t state_idx;      // index in state_.f16[0]
+        size_t state_idx;
         size_t step_state_idx; // state index of the associated step counter
         int64_t per_pos;       // elements per seq position (H * D)
         int64_t capacity;      // cache seq dim
@@ -1223,8 +1245,9 @@ class StatefulRunner {
     std::vector<FP16Fixup> fp16_fixups_;
     
 public:
-    StatefulRunner(OrtSession& sess) 
-        : sess_(sess), mem_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) {
+    StatefulRunner(OrtSession& sess, bool separate_fp16 = false)
+        : sess_(sess), mem_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
+          state_(separate_fp16), separate_fp16_(separate_fp16) {
         state_.init(sess);
         binding_ = std::make_unique<Ort::IoBinding>(sess_.session());
         
@@ -1280,7 +1303,7 @@ public:
     // Required for models with dynamic states (e.g. main transformer KV cache)
     // where shapes change between runs.
     void reinit() {
-        state_ = StateBufferIO();
+        state_ = StateBufferIO(separate_fp16_);
         state_.init(sess_);
     }
     
@@ -1291,6 +1314,7 @@ public:
     }
     
     std::vector<Ort::Value> run(const std::vector<Ort::Value>& non_state_inputs) {
+        state_.assert_fp16_storage_is_separate();
         binding_->ClearBoundInputs();
         binding_->ClearBoundOutputs();
         
@@ -1329,19 +1353,31 @@ public:
             state_.copy_from_output(st_idx, outputs[out_idx]);
         }
         
-        // FP16 fixup: if ORT ignored our pre-bound buffer for ScatterElements,
-        // copy just the newly written positions from ORT's output to our buffer.
-        // When ORT honored our buffer (src == dst), this loop is a no-op.
+        // Production e801 keeps its targeted single-buffer ScatterElements fixup.
+        // Lab separate mode binds a distinct output buffer and copies the complete
+        // returned state only if ORT ignored that binding. swap() then makes that
+        // physical output buffer the next iteration's input.
         for (const auto& f : fp16_fixups_) {
             auto* ort_ptr = reinterpret_cast<const uint16_t*>(
                 outputs[f.output_idx].GetTensorData<Ort::Float16_t>());
-            auto* our_ptr = state_.f16[0][f.state_idx].data();
+            const int target_buffer = state_.fp16_buf(state_.out_buf());
+            auto& target = state_.f16[target_buffer][f.state_idx];
+            auto* our_ptr = target.data();
             if (ort_ptr != our_ptr) {
+                const size_t output_count = outputs[f.output_idx].GetTensorTypeAndShapeInfo().GetElementCount();
+                if (separate_fp16_) {
+                    if (output_count != target.size())
+                        throw std::runtime_error("Separate FP16 state output size mismatch");
+                    std::memcpy(our_ptr, ort_ptr, output_count * sizeof(uint16_t));
+                    continue;
+                }
                 // ORT used internal buffer. Copy the written positions.
                 // old_step is still in in_buf (pre-swap), new_step in out_buf.
                 int64_t old_step = state_.i64[state_.in_buf()][f.step_state_idx][0];
                 int64_t new_step = state_.i64[state_.out_buf()][f.step_state_idx][0];
                 int64_t L = new_step - old_step;
+                if (L < 0 || L > f.capacity)
+                    throw std::runtime_error("FP16 KV step range is invalid");
                 int64_t start = ((old_step % f.capacity) + f.capacity) % f.capacity;
                 if (start + L <= f.capacity) {
                     std::memcpy(our_ptr + start * f.per_pos,
@@ -1396,9 +1432,15 @@ public:
 class PocketTTS {
 public:
     static constexpr int SR = 24000;
+    struct StreamMetrics {
+        int64_t conditioning_ms = 0;
+        int64_t segments = 0;
+        int64_t mimi_frames = 0;
+    };
     
     explicit PocketTTS(const Config& cfg = {}) : cfg_(cfg) {
-        rng::seed(uint64_t(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
+        rng::seed(cfg_.random_seed != 0 ? cfg_.random_seed :
+            uint64_t(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
         tok_ = std::make_unique<Tokenizer>(cfg_.tokenizer_path);
         
         // Thread budget: --threads sets the total. During pipelined streaming,
@@ -1464,8 +1506,8 @@ public:
         flow_ = std::make_unique<OrtSession>(env, cfg_.models_dir + "/flow_lm_flow" + sfx + ".onnx", opts_ar, "flow_lm_flow" + sfx);
         dec_ = std::make_unique<OrtSession>(env, cfg_.models_dir + "/mimi_decoder" + sfx + ".onnx", opts_dec, "mimi_decoder" + sfx);
         
-        main_runner_ = std::make_unique<StatefulRunner>(*main_);
-        dec_runner_ = std::make_unique<StatefulRunner>(*dec_);
+        main_runner_ = std::make_unique<StatefulRunner>(*main_, cfg_.separate_fp16_state);
+        dec_runner_ = std::make_unique<StatefulRunner>(*dec_, cfg_.separate_fp16_state);
         
         dt_ = 1.0f / cfg_.lsd_steps;
         st_values_.reserve(cfg_.lsd_steps);
@@ -1619,6 +1661,7 @@ public:
     void stream(const std::string& text, const std::string& voice, StreamCallback cb, int max_frames = 500);
     void stream(const std::string& text, const Tensor& voice, StreamCallback cb, int max_frames = 500);
     const Config& config() const { return cfg_; }
+    StreamMetrics last_stream_metrics() const { return last_stream_metrics_; }
     
     double warmup() {
         auto start = std::chrono::high_resolution_clock::now();
@@ -1640,6 +1683,7 @@ private:
     std::unique_ptr<StatefulRunner> dec_runner_;  // reused across stream() calls
     std::vector<std::pair<float, float>> st_values_;
     float dt_;
+    StreamMetrics last_stream_metrics_;
     std::unordered_map<std::string, Tensor> vcache_;
     
     // ── Voice Resolution ────────────────────────────────────────────────────
@@ -2057,6 +2101,7 @@ void PocketTTS::stream(const std::string& text, const std::string& voice, Stream
 }
 
 void PocketTTS::stream(const std::string& text, const Tensor& voice, StreamCallback cb, int max_frames) {
+    last_stream_metrics_ = {};
     const auto chunks = make_text_chunks(text);
     const size_t pause_samples = static_cast<size_t>(
         std::max(0, cfg_.sentence_pause_ms) * SR / 1000);
@@ -2079,7 +2124,11 @@ void PocketTTS::stream(const std::string& text, const Tensor& voice, StreamCallb
                       << " (requested " << max_frames << ", token estimate "
                       << token_limited_frames << ")\n";
         }
+        const auto conditioning_started = std::chrono::steady_clock::now();
         auto gen = make_gen(voice, text_tokens, effective_max_frames, eos_extra);
+        last_stream_metrics_.conditioning_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - conditioning_started).count();
+        last_stream_metrics_.segments++;
         dec_runner_->reset_state();  // zero existing buffers, no reallocation
         
         // Pipelined: generator thread produces latent frames into a queue,
@@ -2135,6 +2184,7 @@ void PocketTTS::stream(const std::string& text, const Tensor& voice, StreamCallb
             if (batch.empty() && gen_done) break;
             
             if (!batch.empty()) {
+                last_stream_metrics_.mimi_frames += static_cast<int64_t>(batch.size());
                 auto lat = Tensor::concat(batch, 1);
                 std::vector<Ort::Value> inputs;
                 inputs.push_back(Ort::Value::CreateTensor<float>(dec_runner_->mem(), lat.ptr(), lat.numel(),
@@ -2638,7 +2688,8 @@ extern "C" {
 void* ptt_create(const char* models_dir, const char* voices_dir,
                  const char* tokenizer_path, const char* precision,
                  float temperature, int lsd_steps, int num_threads,
-                 int sentence_pause_ms, int max_text_tokens) {
+                 int sentence_pause_ms, int max_text_tokens,
+                 int kv_mode, uint64_t random_seed) {
     try {
         pocket_tts::Config cfg;
         if (models_dir) cfg.models_dir = models_dir;
@@ -2650,6 +2701,8 @@ void* ptt_create(const char* models_dir, const char* voices_dir,
         cfg.num_threads = num_threads;
         cfg.sentence_pause_ms = std::clamp(sentence_pause_ms, 0, 2000);
         cfg.max_text_tokens = std::clamp(max_text_tokens, 10, 200);
+        cfg.separate_fp16_state = kv_mode == 1;
+        cfg.random_seed = random_seed;
         return new pocket_tts::PocketTTS(cfg);
     } catch (const std::exception& e) {
         std::cerr << "[pocket-tts] init error: " << e.what() << "\n";
@@ -2684,6 +2737,8 @@ struct ptt_stream_ctx {
     std::deque<std::pair<float*, size_t>> chunks;
     bool done = false;
     bool aborted = false;
+    int64_t callback_count = 0;
+    pocket_tts::PocketTTS::StreamMetrics metrics;
 };
 
 void* ptt_stream_start(void* handle, const char* text, const char* voice) {
@@ -2701,6 +2756,7 @@ void* ptt_stream_start(void* handle, const char* text, const char* voice) {
                     std::lock_guard<std::mutex> lock(ctx->mtx);
                     if (ctx->aborted) { free(copy); return false; }
                     ctx->chunks.push_back({copy, n});
+                    ctx->callback_count++;
                 }
                 ctx->cv.notify_one();
                 return true;
@@ -2708,8 +2764,10 @@ void* ptt_stream_start(void* handle, const char* text, const char* voice) {
         } catch (const std::exception& e) {
             std::cerr << "[pocket-tts] stream error: " << e.what() << "\n";
         }
+        const auto metrics = tts->last_stream_metrics();
         {
             std::lock_guard<std::mutex> lock(ctx->mtx);
+            ctx->metrics = metrics;
             ctx->done = true;
         }
         ctx->cv.notify_one();
@@ -2733,6 +2791,19 @@ int ptt_stream_read(void* stream_ctx, float** out_samples, int* out_len) {
         return 1;
     }
     return ctx->aborted ? -2 : 0;
+}
+
+int ptt_stream_get_metrics(void* stream_ctx, int64_t* conditioning_ms,
+                           int64_t* callback_count, int64_t* segments, int64_t* mimi_frames) {
+    if (!stream_ctx || !conditioning_ms || !callback_count || !segments || !mimi_frames) return 0;
+    auto* ctx = static_cast<ptt_stream_ctx*>(stream_ctx);
+    std::lock_guard<std::mutex> lock(ctx->mtx);
+    if (!ctx->done || ctx->aborted) return 0;
+    *conditioning_ms = ctx->metrics.conditioning_ms;
+    *callback_count = ctx->callback_count;
+    *segments = ctx->metrics.segments;
+    *mimi_frames = ctx->metrics.mimi_frames;
+    return 1;
 }
 
 // Request cancellation without freeing the context. The owner must subsequently
