@@ -62,12 +62,12 @@ class PocketLabDiagnosticTest {
 
     @Test fun preservesTrackLifecycleAndConstructorCause() {
         val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
-        diagnostic.previousTrack("pause=OK flush=OK stop=OK release=OK")
+        diagnostic.previousTrack("track=7 thread=test pause=OK flush=OK stop=OK release=OK")
         diagnostic.audioTrackRequested(96_000, 24_000, 4, 2)
         diagnostic.audioTrackCreateFailed("IllegalArgumentException: track unavailable")
 
         val snapshot = diagnostic.snapshot()
-        assertEquals("pause=OK flush=OK stop=OK release=OK", snapshot.previousTrackDetail)
+        assertTrue(snapshot.previousTrackDetail?.contains("pause=OK flush=OK stop=OK release=OK") == true)
         assertEquals(PocketLabStage.CREATE_AUDIO_TRACK_FAILED, snapshot.stage)
         assertEquals("IllegalArgumentException: track unavailable", snapshot.technicalDetail)
         assertTrue(diagnostic.summary().contains("Min buffer: 96000"))
@@ -89,8 +89,9 @@ class PocketLabDiagnosticTest {
 
     @Test fun recordsAllWritesAndFailedWriteContext() {
         val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
-        diagnostic.writeAttempt(4_800, 4_800, 1, 1)
-        diagnostic.writeAttempt(9_600, 0, 1, 1)
+        diagnostic.trackCreated(7L, 1, 1, 48_000)
+        diagnostic.writeAttempt(4_800, 4_800, 1, 1, 7L, cancelled = false)
+        diagnostic.writeAttempt(9_600, 0, 1, 1, 7L, cancelled = false)
 
         val snapshot = diagnostic.snapshot()
         assertEquals(2, snapshot.writeCount)
@@ -101,6 +102,23 @@ class PocketLabDiagnosticTest {
         assertEquals(0, snapshot.failedWriteResult)
         assertEquals(1, snapshot.failedWriteTrackState)
         assertEquals(1, snapshot.failedWritePlayState)
+        assertEquals(7L, snapshot.trackId)
+        assertEquals(7L, snapshot.lastWriteTrackId)
+        assertEquals(false, snapshot.lastWriteCancelled)
+    }
+
+    @Test fun preservesTrackIdentityAcrossFailedWrite() {
+        val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        diagnostic.trackCreated(12L, 1, 1, 48_000)
+        diagnostic.writeAttempt(48_000, 48_000, 1, 1, 12L, cancelled = false)
+        diagnostic.writeAttempt(24_000, -32, 1, 1, 12L, cancelled = false)
+
+        val snapshot = diagnostic.snapshot()
+        assertEquals(12L, snapshot.trackId)
+        assertEquals(12L, snapshot.lastWriteTrackId)
+        assertEquals(2, snapshot.failedWriteIndex)
+        assertEquals(-32, snapshot.failedWriteResult)
+        assertTrue(diagnostic.summary().contains("Track id: 12"))
     }
 
     @Test fun completionCannotHideAnExistingError() {

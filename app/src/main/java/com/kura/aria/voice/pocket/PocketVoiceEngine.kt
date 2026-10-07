@@ -17,6 +17,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
 internal class PocketVoiceEngine(context: Context) : AutoCloseable {
@@ -27,8 +28,10 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
     @Volatile private var loadedPackId: String? = null
     @Volatile private var loadedRuntimeConfig: PocketRuntimeConfig? = null
     @Volatile private var audioTrack: AudioTrack? = null
+    @Volatile private var activeLabTrackId: Long? = null
     @Volatile private var pendingLabStopDiagnostic: PocketLabDiagnostic? = null
     private val cancelled = AtomicBoolean(false)
+    private val nextLabTrackId = AtomicLong(1L)
     @Volatile var lastMetrics = PocketMetrics()
         private set
 
@@ -123,6 +126,16 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             releasePreviousLabAudioTrack(labDiagnostic)
         }
         val track = createAudioTrack(labDiagnostic)
+        val labTrackId = if (labDiagnostic != null) nextLabTrackId.getAndIncrement() else null
+        if (labDiagnostic != null) {
+            labDiagnostic.trackCreated(
+                labTrackId!!,
+                track.state,
+                track.playState,
+                runCatching { track.bufferSizeInFrames }.getOrNull()
+            )
+        }
+        activeLabTrackId = labTrackId
         audioTrack = track
         val underrunsBefore = track.underrunCount
         var writeIndex = 0
@@ -134,7 +147,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                     track.write(bytes, offset, length, AudioTrack.WRITE_BLOCKING)
                 } catch (error: Throwable) {
                     writeIndex++
-                    labDiagnostic?.writeAttempt(length, -1, track.state, track.playState)
+                    labDiagnostic?.writeAttempt(length, -1, track.state, track.playState, labTrackId, cancelled.get())
                     if (firstWrite) {
                         labDiagnostic?.firstWrite(length, -1)
                     }
@@ -142,20 +155,22 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                         if (firstWrite) PocketLabStage.FIRST_AUDIO_TRACK_WRITE_FAILED
                         else PocketLabStage.AUDIO_TRACK_WRITE_FAILED,
                         PocketVoiceError.AUDIO_FAILED,
-                        "write#$writeIndex threw ${error.javaClass.simpleName}: ${error.message ?: "no message"}"
+                        "write#$writeIndex threw ${error.javaClass.simpleName}: ${error.message ?: "no message"} " +
+                            "track=${labTrackId ?: "—"} thread=${Thread.currentThread().name} cancelled=${cancelled.get()}"
                     )
                     throw error
                 }
                 writeIndex++
-                labDiagnostic?.writeAttempt(length, written, track.state, track.playState)
+                labDiagnostic?.writeAttempt(length, written, track.state, track.playState, labTrackId, cancelled.get())
                 if (firstWrite) labDiagnostic?.firstWrite(length, written)
                 written.also {
                     if (written <= 0) {
                         labDiagnostic?.fail(if (firstWrite) PocketLabStage.FIRST_AUDIO_TRACK_WRITE_FAILED
                             else PocketLabStage.AUDIO_TRACK_WRITE_FAILED,
                             PocketVoiceError.AUDIO_FAILED,
-                            "write#$writeIndex result=$written requested=$length " +
-                                "state=${track.state} play=${track.playState}")
+                            "write#$writeIndex result=$written (${writeResultName(written)}) requested=$length " +
+                                "track=${labTrackId ?: "—"} state=${track.state} play=${track.playState} " +
+                                "thread=${Thread.currentThread().name} cancelled=${cancelled.get()}")
                         throw PocketVoiceException(PocketVoiceError.AUDIO_FAILED)
                     }
                 }
@@ -298,6 +313,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             if (releaseResult.isSuccess) labDiagnostic?.trackReleaseOk()
             else labDiagnostic?.trackReleaseFailed(releaseResult.exceptionOrNull()?.javaClass?.simpleName ?: "release failed")
             if (audioTrack === track) audioTrack = null
+            if (activeLabTrackId == labTrackId) activeLabTrackId = null
             pendingLabStopDiagnostic?.let { diagnostic ->
                 diagnostic.previousTrack("release=OK")
                 pendingLabStopDiagnostic = null
@@ -320,7 +336,10 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 track.flush(); flush = "OK"
                 track.stop(); stop = "OK"
             }
-            labDiagnostic?.previousTrack("pause=$pause flush=$flush stop=$stop release=DEFERRED")
+            labDiagnostic?.previousTrack(
+                "track=${activeLabTrackId ?: "—"} thread=${Thread.currentThread().name} " +
+                    "pause=$pause flush=$flush stop=$stop release=DEFERRED cancelled=${cancelled.get()}"
+            )
         }
     }
 
@@ -355,7 +374,10 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         runCatching { previous.release(); release = "OK" }
         if (audioTrack === previous) audioTrack = null
         pendingLabStopDiagnostic = null
-        diagnostic.previousTrack("pause=$pause flush=$flush stop=$stop release=$release")
+        diagnostic.previousTrack(
+            "track=${activeLabTrackId ?: "—"} thread=${Thread.currentThread().name} " +
+                "pause=$pause flush=$flush stop=$stop release=$release"
+        )
     }
 
     private fun createAudioTrack(labDiagnostic: PocketLabDiagnostic? = null): AudioTrack {
@@ -429,5 +451,15 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
     companion object {
         private const val TAG = "ARIA.PocketVoice"
         private const val PLAYBACK_DRAIN_GRACE_MS = 2_000L
+
+        private fun writeResultName(result: Int): String = when (result) {
+            -32 -> "DEAD_OBJECT_NATIVE"
+            AudioTrack.ERROR_DEAD_OBJECT -> "ERROR_DEAD_OBJECT"
+            AudioTrack.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION"
+            AudioTrack.ERROR_BAD_VALUE -> "ERROR_BAD_VALUE"
+            AudioTrack.ERROR -> "ERROR"
+            0 -> "NO_PROGRESS"
+            else -> "UNKNOWN"
+        }
     }
 }

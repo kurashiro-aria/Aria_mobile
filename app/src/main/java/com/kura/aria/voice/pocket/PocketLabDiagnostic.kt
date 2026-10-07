@@ -66,6 +66,10 @@ internal data class PocketLabDiagnosticSnapshot(
     val failedWriteResult: Int? = null,
     val failedWriteTrackState: Int? = null,
     val failedWritePlayState: Int? = null,
+    val trackId: Long? = null,
+    val lastWriteTrackId: Long? = null,
+    val lastWriteThread: String? = null,
+    val lastWriteCancelled: Boolean? = null,
     val nativeConfig: String? = null,
     val previousTrackDetail: String? = null,
     val pipelineAccepted: Boolean = false
@@ -160,6 +164,19 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
         }
     }
 
+    fun trackCreated(id: Long, state: Int, playState: Int, bufferFrames: Int?) {
+        update {
+            it.copy(
+                stage = PocketLabStage.CREATE_AUDIO_TRACK_OK,
+                trackId = id,
+                lastWriteTrackId = id,
+                trackState = state,
+                playState = playState,
+                bufferSizeInFrames = bufferFrames
+            )
+        }
+    }
+
     fun audioTrackCreateFailed(detail: String) = fail(PocketLabStage.CREATE_AUDIO_TRACK_FAILED, PocketVoiceError.AUDIO_FAILED, detail)
 
     fun firstWrite(requestedBytes: Int, result: Int) {
@@ -174,7 +191,14 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
         }
     }
 
-    fun writeAttempt(requestedBytes: Int, result: Int, trackState: Int?, playState: Int?) {
+    fun writeAttempt(
+        requestedBytes: Int,
+        result: Int,
+        trackState: Int?,
+        playState: Int?,
+        trackId: Long? = null,
+        cancelled: Boolean = false
+    ) {
         update {
             val index = it.writeCount + 1
             val failed = result <= 0 && it.failedWriteIndex == null
@@ -186,7 +210,10 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                 failedWriteRequestedBytes = if (failed) requestedBytes else it.failedWriteRequestedBytes,
                 failedWriteResult = if (failed) result else it.failedWriteResult,
                 failedWriteTrackState = if (failed) trackState else it.failedWriteTrackState,
-                failedWritePlayState = if (failed) playState else it.failedWritePlayState
+                failedWritePlayState = if (failed) playState else it.failedWritePlayState,
+                lastWriteTrackId = trackId ?: it.lastWriteTrackId,
+                lastWriteThread = Thread.currentThread().name,
+                lastWriteCancelled = cancelled
             )
         }
     }
@@ -221,6 +248,8 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
             append("Min buffer: ").append(value.minBufferSize ?: "—").append('\n')
             append("Track state: ").append(value.trackState ?: "—")
                 .append(" · Play: ").append(value.playState ?: "—").append('\n')
+            append("Track id: ").append(value.trackId ?: "—")
+                .append(" · Last write id: ").append(value.lastWriteTrackId ?: "—").append('\n')
             append("First write: ").append(value.firstWriteResult?.toString() ?: "—")
                 .append(" / ").append(value.firstWriteRequestedBytes?.toString() ?: "—").append('\n')
             append("Writes: ").append(value.writeCount).append(" · requested=").append(value.totalBytesRequested)
@@ -231,6 +260,8 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                     .append(" · state=").append(value.failedWriteTrackState)
                     .append(" play=").append(value.failedWritePlayState).append('\n')
             }
+            value.lastWriteThread?.let { append("Write thread: ").append(it).append('\n') }
+            value.lastWriteCancelled?.let { append("Cancelled at write: ").append(it).append('\n') }
             value.nativeConfig?.let { append(it).append('\n') }
             value.technicalDetail?.let { append(it).append('\n') }
         }.trimEnd()
