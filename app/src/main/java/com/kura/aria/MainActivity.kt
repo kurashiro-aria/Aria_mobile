@@ -75,6 +75,8 @@ import com.kura.aria.voice.pocket.PocketMetrics
 import com.kura.aria.voice.pocket.PocketModelSpec
 import com.kura.aria.voice.pocket.PocketVoiceController
 import com.kura.aria.voice.pocket.PocketVoiceException
+import com.kura.aria.voice.pocket.PocketVoice
+import com.kura.aria.voice.pocket.PocketLabUiRefreshCoalescer
 import com.kura.aria.voice.pocket.PocketDiagnosticWav
 import com.kura.aria.voice.pocket.PocketIsolationLabWav
 import com.kura.aria.voice.pocket.PocketIsolationVariant
@@ -141,6 +143,8 @@ class MainActivity : AppCompatActivity() {
     private var pocketVoiceJob: Job? = null
     private var pocketInstallJob: Job? = null
     private var pocketDialogRefresh: (() -> Unit)? = null
+    private var pocketLabUiRefreshCoalescer: PocketLabUiRefreshCoalescer? = null
+    private var pocketDialogStaticCache: PocketDialogStaticCache? = null
     private var lastPocketMetrics: PocketMetrics? = null
     private var lastPocketLabDiagnostic: PocketLabDiagnostic? = null
     private var speechInput: LocalSpeechInput? = null
@@ -169,6 +173,7 @@ class MainActivity : AppCompatActivity() {
         uiScope.launch {
             try {
                 val voice = withContext(Dispatchers.IO) { pocketVoice.importVoice(uri) }
+                invalidatePocketDialogStaticCache()
                 toast("Voz importada: ${voice.name}")
                 pocketDialogRefresh?.invoke()
             } catch (error: Throwable) {
@@ -182,6 +187,12 @@ class MainActivity : AppCompatActivity() {
             get() = if (firstTokenMs == null || totalMs <= firstTokenMs || chunks < 2) null
                 else (chunks - 1) * 1000.0 / (totalMs - firstTokenMs)
     }
+
+    private data class PocketDialogStaticCache(
+        val installed: Boolean,
+        val voices: List<PocketVoice>,
+        val installedBytes: Long
+    )
 
     companion object {
         private const val PICK_GGUF = 1001
@@ -1475,7 +1486,12 @@ class MainActivity : AppCompatActivity() {
         return cloudVoiceMutex.withLock { client.synthesize(request) }
     }
 
+    private fun invalidatePocketDialogStaticCache() {
+        pocketDialogStaticCache = null
+    }
+
     private fun showVoiceDialog() {
+        pocketDialogStaticCache = null
         var runtimeState: String? = null
         var labState = "LISTO"
         var lastLabMetrics: PocketMetrics? = null
@@ -1564,8 +1580,13 @@ class MainActivity : AppCompatActivity() {
         val refresh = refresh@{
             if (isFinishing || isDestroyed) return@refresh
             val state = pocketVoice.models.status
-            val installed = pocketVoice.installed
-            val voices = pocketVoice.voices
+            val static = pocketDialogStaticCache ?: PocketDialogStaticCache(
+                installed = pocketVoice.installed,
+                voices = pocketVoice.voices,
+                installedBytes = pocketVoice.models.installedBytes()
+            ).also { pocketDialogStaticCache = it }
+            val installed = static.installed
+            val voices = static.voices
             val selectedId = pocketVoice.preferences.selectedVoiceId
             val labels = voices.map {
                 when {
@@ -1592,7 +1613,7 @@ class MainActivity : AppCompatActivity() {
                 append("\nModelo: ").append(PocketModelSpec.DISPLAY_NAME)
                 append("\nDescarga: 197.9 MiB · SHA-256 verificado")
                 append("\nStreaming PCM real: SÍ · 24 kHz mono")
-                if (installed) append("\nAlmacenamiento: %.1f MiB".format(pocketVoice.models.installedBytes() / 1048576.0))
+                if (installed) append("\nAlmacenamiento: %.1f MiB".format(static.installedBytes / 1048576.0))
             }
             progress.visibility = if (state.phase in setOf(PocketInstallPhase.DOWNLOADING, PocketInstallPhase.VERIFYING)) View.VISIBLE else View.GONE
             progress.progress = state.progress
@@ -1627,6 +1648,10 @@ class MainActivity : AppCompatActivity() {
             @Suppress("UNUSED_VARIABLE") val retainedSelection = currentLabel
         }
         pocketDialogRefresh = refresh
+        pocketLabUiRefreshCoalescer = PocketLabUiRefreshCoalescer(
+            postToUi = { action -> runOnUiThread(action) },
+            render = { pocketDialogRefresh?.invoke() }
+        )
 
         engineSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
@@ -1654,6 +1679,7 @@ class MainActivity : AppCompatActivity() {
                     withContext(Dispatchers.IO) {
                         pocketVoice.models.install { runOnUiThread { refresh() } }
                     }
+                    invalidatePocketDialogStaticCache()
                     toast("Pocket TTS instalado y verificado")
                 } catch (cancelled: CancellationException) { toast("Descarga cancelada") }
                 catch (error: Throwable) { toast(error.message ?: "Descarga fallida") }
@@ -1741,7 +1767,7 @@ class MainActivity : AppCompatActivity() {
                 PocketTransportMode.CURRENT_WRITES
             }
             lastPocketLabDiagnostic = diagnostic
-            diagnostic.onChanged = { runOnUiThread { pocketDialogRefresh?.invoke() } }
+            diagnostic.onChanged = { pocketLabUiRefreshCoalescer?.request() }
             diagnostic.mark(PocketLabStage.LAB_REQUEST, "variant=${variant.name}")
             stopLocalVoice(diagnostic)
             labState = "GENERANDO"
@@ -1802,7 +1828,10 @@ class MainActivity : AppCompatActivity() {
                     stopLocalVoice()
                     uiScope.launch(Dispatchers.IO) {
                         runCatching { pocketVoice.release(); pocketVoice.models.deleteInstalled() }
-                            .onSuccess { runOnUiThread { runtimeState = null; refresh(); toast("Datos Pocket eliminados") } }
+                            .onSuccess {
+                                invalidatePocketDialogStaticCache()
+                                runOnUiThread { runtimeState = null; refresh(); toast("Datos Pocket eliminados") }
+                            }
                             .onFailure { runOnUiThread { toast(it.message ?: "No pude eliminar Pocket") } }
                     }
                 }.show()
@@ -1813,6 +1842,7 @@ class MainActivity : AppCompatActivity() {
             .setView(scrollContent).setNegativeButton("Cerrar", null).create()
         dialog.setOnDismissListener {
             pocketDialogRefresh = null
+            pocketLabUiRefreshCoalescer = null
             // Stop an audition, but keep the loaded model reusable by normal chat.
             if (pocketVoiceJob?.isActive == true) stopLocalVoice()
         }
