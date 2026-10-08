@@ -124,6 +124,15 @@ internal data class PocketLabDiagnosticSnapshot(
     val failedWriteBeforeUnderrunCount: Int? = null,
     val trackSessionId: Int? = null,
     val routedDevice: String? = null,
+    val audioTrackVolume: Float? = null,
+    val streamMusicVolume: Int? = null,
+    val audioMode: Int? = null,
+    val audioSampleRate: Int? = null,
+    val audioChannelMask: Int? = null,
+    val audioEncoding: Int? = null,
+    val playbackHeadPosition: Long? = null,
+    val playbackHeadIterations: Long = 0L,
+    val playbackDrainElapsedMs: Long? = null,
     val writeHistory: List<PocketLabWriteSnapshot> = emptyList(),
     val callbackTrace: List<PocketLabCallbackSnapshot> = emptyList(),
     val writeRangeTrace: List<PocketLabWriteRangeSnapshot> = emptyList(),
@@ -262,6 +271,36 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
         }
     }
 
+    fun audioEnvironment(
+        trackVolume: Float?,
+        musicVolume: Int?,
+        mode: Int?,
+        sampleRate: Int,
+        channelMask: Int,
+        encoding: Int
+    ) {
+        update {
+            it.copy(
+                audioTrackVolume = trackVolume,
+                streamMusicVolume = musicVolume,
+                audioMode = mode,
+                audioSampleRate = sampleRate,
+                audioChannelMask = channelMask,
+                audioEncoding = encoding
+            )
+        }
+    }
+
+    fun playbackHead(position: Long, iteration: Long, elapsedMs: Long, notify: Boolean = false) {
+        update(notify = notify) {
+            it.copy(
+                playbackHeadPosition = position,
+                playbackHeadIterations = iteration,
+                playbackDrainElapsedMs = elapsedMs
+            )
+        }
+    }
+
     fun audioTrackCreateFailed(detail: String) = fail(PocketLabStage.CREATE_AUDIO_TRACK_FAILED, PocketVoiceError.AUDIO_FAILED, detail)
 
     fun firstWrite(requestedBytes: Int, result: Int) {
@@ -376,6 +415,18 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
             value.lastWriteBeforeUnderrunCount?.let { append("Last before underruns: ").append(it).append('\n') }
             value.trackSessionId?.let { append("Session: ").append(it).append('\n') }
             value.routedDevice?.let { append("Route: ").append(it).append('\n') }
+            value.audioTrackVolume?.let { append("Track volume: ").append(it).append('\n') }
+            value.streamMusicVolume?.let { append("STREAM_MUSIC volume: ").append(it).append('\n') }
+            value.audioMode?.let { append("Audio mode: ").append(it).append('\n') }
+            if (value.audioSampleRate != null) {
+                append("Audio format: ").append(value.audioSampleRate).append(" Hz mask=")
+                    .append(value.audioChannelMask).append(" encoding=").append(value.audioEncoding).append('\n')
+            }
+            value.playbackHeadPosition?.let {
+                append("Playback head: ").append(it).append(" · iterations=")
+                    .append(value.playbackHeadIterations).append(" · drain ms=")
+                    .append(value.playbackDrainElapsedMs ?: "—").append('\n')
+            }
             if (value.writeHistory.isNotEmpty()) {
                 append("Write trace: ").append(value.writeHistory.joinToString(" | ") {
                     "#${it.index} ${it.requestedBytes}/${it.result} head=${it.playbackHeadPosition ?: "—"} underruns=${it.underrunCount ?: "—"}"

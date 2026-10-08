@@ -186,6 +186,41 @@ class PocketLabDiagnosticTest {
         assertTrue(diagnostic.summary().contains("AUDIO_FAILED_ORIGIN"))
     }
 
+    @Test fun recordsPlaybackEnvironmentWithoutChangingTransport() {
+        val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        diagnostic.trackCreated(3L, 1, 3, 48_000, sessionId = 42, routedDevice = "type=2")
+        diagnostic.audioEnvironment(
+            trackVolume = 1f,
+            musicVolume = 7,
+            mode = 0,
+            sampleRate = 24_000,
+            channelMask = 4,
+            encoding = 2
+        )
+        val snapshot = diagnostic.snapshot()
+        assertEquals(1f, snapshot.audioTrackVolume!!, 0f)
+        assertEquals(7, snapshot.streamMusicVolume)
+        assertEquals(0, snapshot.audioMode)
+        assertEquals(24_000, snapshot.audioSampleRate)
+        assertEquals(4, snapshot.audioChannelMask)
+        assertEquals(2, snapshot.audioEncoding)
+        assertTrue(diagnostic.summary().contains("STREAM_MUSIC volume: 7"))
+        assertTrue(diagnostic.summary().contains("Audio format: 24000 Hz"))
+    }
+
+    @Test fun recordsPlaybackHeadProgressSeparatelyFromPcmCompletion() {
+        val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        diagnostic.trace("PCM_WRITE_COMPLETE", "writtenSamples=24000")
+        diagnostic.playbackHead(12_000L, iteration = 4L, elapsedMs = 40L, notify = false)
+        diagnostic.trace("DRAIN_END", "played=24000")
+        val snapshot = diagnostic.snapshot()
+        assertEquals(12_000L, snapshot.playbackHeadPosition)
+        assertEquals(4L, snapshot.playbackHeadIterations)
+        assertEquals(40L, snapshot.playbackDrainElapsedMs)
+        assertTrue(snapshot.trace.any { it.name == "PCM_WRITE_COMPLETE" })
+        assertTrue(snapshot.trace.any { it.name == "DRAIN_END" })
+    }
+
     @Test fun partialWritesExposeValidRangesAndPreserveEveryByte() {
         val source = ByteArray(10) { it.toByte() }
         val output = ByteArrayOutputStream()
