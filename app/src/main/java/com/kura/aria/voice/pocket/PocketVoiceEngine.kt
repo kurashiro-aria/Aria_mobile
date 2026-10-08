@@ -20,6 +20,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
+internal object PocketPlaybackDrain {
+    /** True only when there is no pending audio or the playback head reached it. */
+    fun isComplete(writtenSamples: Long, playbackHead: Long): Boolean =
+        writtenSamples <= 0L || playbackHead >= writtenSamples
+}
+
 internal class PocketVoiceEngine(context: Context) : AutoCloseable {
     private val audioManager: AudioManager? =
         context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -307,6 +313,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                     val detail = "written=${pipeline.writtenSamples} played=${Integer.toUnsignedLong(track.playbackHeadPosition)}"
                     labDiagnostic?.playbackDrainTimeout(detail)
                     labDiagnostic?.trace("DRAIN_TIMEOUT", detail)
+                    labDiagnostic?.trace("AUDIO_FAILED_ORIGIN", "operation=playbackDrain detail=$detail")
+                    throw PocketVoiceException(PocketVoiceError.AUDIO_FAILED)
                 }
             } catch (error: Throwable) {
                 labDiagnostic?.playbackDrainFailed("${error.javaClass.simpleName}: ${error.message ?: "no message"}")
@@ -411,7 +419,12 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         pendingLabStopDiagnostic = labDiagnostic
         cancelled.set(true)
         native?.stop()
-        audioTrack?.let { track ->
+        // AudioTrack belongs to the Pocket dispatcher. Scheduling lifecycle
+        // operations there prevents the UI thread from racing a blocking write
+        // or releasing the track while aria-pocket-tts is using it.
+        val track = audioTrack ?: return
+        dispatcher.executor.execute {
+            if (audioTrack !== track) return@execute
             var pause = "FAIL"
             var flush = "NOT_RUN"
             var stop = "NOT_RUN"
@@ -428,7 +441,15 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
     }
 
     suspend fun release() = withContext(dispatcher) {
-        stop()
+        cancelled.set(true)
+        native?.stop()
+        audioTrack?.let { track ->
+            runCatching { track.pause() }
+            runCatching { track.flush() }
+            runCatching { track.stop() }
+            runCatching { track.release() }
+            if (audioTrack === track) audioTrack = null
+        }
         releaseNative()
         lastMetrics = PocketMetrics(state = "INSTALADO")
     }
@@ -531,8 +552,13 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
     ): Boolean {
         val initialHead = trackPlaybackHead(track)
         labDiagnostic?.trace("DRAIN_STATE", "state=${track.state} play=${track.playState} head=${initialHead ?: "—"}")
-        if (writtenSamples <= 0L || track.playState != AudioTrack.PLAYSTATE_PLAYING) return true
+        if (writtenSamples <= 0L) return true
         val played = Integer.toUnsignedLong(track.playbackHeadPosition)
+        if (PocketPlaybackDrain.isComplete(writtenSamples, played)) return true
+        // A stopped/paused track with pending frames is not drained. Treating
+        // this as success lets finally{} flush/release audible audio that was
+        // never consumed by AudioTrack.
+        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) return false
         val remaining = (writtenSamples - played).coerceAtLeast(0L)
         val timeoutAt = SystemClock.elapsedRealtime() +
             (remaining * 1_000L / PocketAudioFormat.SAMPLE_RATE) + PLAYBACK_DRAIN_GRACE_MS

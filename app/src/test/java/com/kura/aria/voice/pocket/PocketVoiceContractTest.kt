@@ -85,6 +85,17 @@ class PocketVoiceContractTest {
         assertTrue(PocketFallbackPolicy.useAndroidFallback(LocalVoiceEngine.ANDROID_FALLBACK, true, false, false))
     }
 
+    @Test fun playbackDrainDoesNotTreatStoppedTrackWithPendingFramesAsComplete() {
+        assertFalse(PocketPlaybackDrain.isComplete(24_000L, 12_000L))
+        assertFalse(PocketPlaybackDrain.isComplete(24_000L, 0L))
+    }
+
+    @Test fun playbackDrainCompletesOnlyAtTargetOrWithNoSamples() {
+        assertTrue(PocketPlaybackDrain.isComplete(24_000L, 24_000L))
+        assertTrue(PocketPlaybackDrain.isComplete(24_000L, 24_100L))
+        assertTrue(PocketPlaybackDrain.isComplete(0L, 0L))
+    }
+
     @Test fun emotionAndExpressionAreRoutedWithoutInventingPitchOrSpeed() {
         val direction = AriaPocketProsodyDirector.resolve(
             AriaEmotion.HAPPY, ExpressionStyle.PLAYFUL, 0.65f)
