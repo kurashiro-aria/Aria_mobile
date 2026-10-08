@@ -102,6 +102,7 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
             )
         } finally {
             isolationGate.leave()
+            diagnostic.trace("CONTROLLER_RETURN")
         }
     }
 

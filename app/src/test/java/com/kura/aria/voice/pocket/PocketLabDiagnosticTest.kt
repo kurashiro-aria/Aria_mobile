@@ -161,6 +161,31 @@ class PocketLabDiagnosticTest {
         assertTrue(diagnostic.summary().contains("Writes: 0"))
     }
 
+    @Test fun distinguishesPcmWriteCompletionFromPlaybackDrain() {
+        val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        diagnostic.trace("PCM_WRITE_COMPLETE", "writtenSamples=24000")
+        diagnostic.trace("DRAIN_BEGIN")
+        diagnostic.trace("DRAIN_TIMEOUT", "played=12000")
+        diagnostic.mark(PocketLabStage.SYNTHESIS_COMPLETE)
+        diagnostic.trace("SYNTHESIS_COMPLETE")
+
+        val events = diagnostic.snapshot().trace.map { it.name }
+        assertTrue(events.indexOf("PCM_WRITE_COMPLETE") < events.indexOf("DRAIN_TIMEOUT"))
+        assertTrue(events.contains("SYNTHESIS_COMPLETE"))
+        assertEquals(PocketLabStage.SYNTHESIS_COMPLETE, diagnostic.snapshot().stage)
+    }
+
+    @Test fun recordsAudioFailureOriginWithTimestampAndThread() {
+        val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        diagnostic.trace("AUDIO_FAILED_ORIGIN", "operation=AudioTrack.write result=-32")
+
+        val event = diagnostic.snapshot().trace.single()
+        assertEquals("AUDIO_FAILED_ORIGIN", event.name)
+        assertTrue(event.timestampMs > 0L)
+        assertTrue(event.thread.isNotBlank())
+        assertTrue(diagnostic.summary().contains("AUDIO_FAILED_ORIGIN"))
+    }
+
     @Test fun partialWritesExposeValidRangesAndPreserveEveryByte() {
         val source = ByteArray(10) { it.toByte() }
         val output = ByteArrayOutputStream()

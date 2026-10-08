@@ -37,6 +37,13 @@ internal data class PocketLabWriteRangeSnapshot(
     val result: Int
 )
 
+internal data class PocketLabTraceEvent(
+    val name: String,
+    val detail: String?,
+    val timestampMs: Long,
+    val thread: String
+)
+
 /** Stages exposed only by the temporary KV/LSD isolation laboratory. */
 internal enum class PocketLabStage {
     IDLE,
@@ -120,6 +127,7 @@ internal data class PocketLabDiagnosticSnapshot(
     val writeHistory: List<PocketLabWriteSnapshot> = emptyList(),
     val callbackTrace: List<PocketLabCallbackSnapshot> = emptyList(),
     val writeRangeTrace: List<PocketLabWriteRangeSnapshot> = emptyList(),
+    val trace: List<PocketLabTraceEvent> = emptyList(),
     val nativeConfig: String? = null,
     val transportMode: String? = null,
     val previousTrackDetail: String? = null,
@@ -174,6 +182,11 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
 
     fun transportMode(mode: PocketTransportMode) {
         update { it.copy(transportMode = mode.name) }
+    }
+
+    fun trace(name: String, detail: String? = null, notify: Boolean = true) {
+        val event = PocketLabTraceEvent(name, detail, System.currentTimeMillis(), Thread.currentThread().name)
+        update(transform = { it.copy(trace = (it.trace + event).takeLast(MAX_TRACE_HISTORY)) }, notify = notify)
     }
 
     fun callback(sampleCount: Int) {
@@ -383,22 +396,31 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
             }
             value.nativeConfig?.let { append(it).append('\n') }
             value.transportMode?.let { append("Transport: ").append(it).append('\n') }
+            if (value.trace.isNotEmpty()) {
+                append("Trace: ").append(value.trace.takeLast(12).joinToString(" | ") {
+                    "${it.name}@${it.timestampMs}/${it.thread}" + (it.detail?.let { detail -> "($detail)" } ?: "")
+                }).append('\n')
+            }
             value.technicalDetail?.let { append(it).append('\n') }
         }.trimEnd()
     }
 
-    private fun update(transform: (PocketLabDiagnosticSnapshot) -> PocketLabDiagnosticSnapshot) {
+    private fun update(
+        notify: Boolean = true,
+        transform: (PocketLabDiagnosticSnapshot) -> PocketLabDiagnosticSnapshot
+    ) {
         val next = synchronized(this) {
             current = transform(current)
             current
         }
-        onChanged?.invoke(next)
+        if (notify) onChanged?.invoke(next)
     }
 
     private companion object {
         const val MAX_WRITE_HISTORY = 12
         const val MAX_CALLBACK_HISTORY = 32
         const val MAX_WRITE_RANGE_HISTORY = 32
+        const val MAX_TRACE_HISTORY = 96
     }
 }
 

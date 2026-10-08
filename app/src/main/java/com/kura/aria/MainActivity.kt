@@ -1649,8 +1649,22 @@ class MainActivity : AppCompatActivity() {
         }
         pocketDialogRefresh = refresh
         pocketLabUiRefreshCoalescer = PocketLabUiRefreshCoalescer(
-            postToUi = { action -> runOnUiThread(action) },
-            render = { pocketDialogRefresh?.invoke() }
+            postToUi = { action, delayMs ->
+                if (delayMs <= 0L) runOnUiThread(action)
+                else window.decorView.postDelayed(action, delayMs)
+            },
+            render = {
+                val diagnostic = lastPocketLabDiagnostic
+                diagnostic?.trace("UI_RENDER_BEGIN", notify = false)
+                try { pocketDialogRefresh?.invoke() }
+                finally {
+                    diagnostic?.trace("UI_RENDER_END", notify = false)
+                    val state = diagnostic?.snapshot()?.state
+                    if (state == "COMPLETADO" || state == "ERROR") {
+                        diagnostic?.trace("UI_COMPLETE", notify = false)
+                    }
+                }
+            }
         )
 
         engineSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -1767,7 +1781,12 @@ class MainActivity : AppCompatActivity() {
                 PocketTransportMode.CURRENT_WRITES
             }
             lastPocketLabDiagnostic = diagnostic
-            diagnostic.onChanged = { pocketLabUiRefreshCoalescer?.request() }
+            diagnostic.onChanged = { snapshot ->
+                val finalEvent = snapshot.state == "ERROR" ||
+                    snapshot.stage == PocketLabStage.SYNTHESIS_COMPLETE ||
+                    snapshot.stage == PocketLabStage.TRACK_RELEASE_OK
+                pocketLabUiRefreshCoalescer?.request(finalEvent = finalEvent)
+            }
             diagnostic.mark(PocketLabStage.LAB_REQUEST, "variant=${variant.name}")
             stopLocalVoice(diagnostic)
             labState = "GENERANDO"
@@ -1775,7 +1794,11 @@ class MainActivity : AppCompatActivity() {
             pocketVoiceJob = uiScope.launch {
                 try {
                     lastLabMetrics = pocketVoice.runIsolationLab(variant, transportMode, diagnostic) { value ->
-                        runOnUiThread { runtimeState = value; refresh() }
+                        diagnostic.trace("UI_STATE_CALLBACK", "value=$value")
+                        runtimeState = value
+                        pocketLabUiRefreshCoalescer?.request(
+                            finalEvent = value == "COMPLETADO" || value.startsWith("ERROR")
+                        )
                     }
                     labState = "COMPLETADO"
                     toast("${variant.label} completada")
@@ -1784,7 +1807,9 @@ class MainActivity : AppCompatActivity() {
                     labState = "ERROR"
                     toast(error.message ?: "Prueba de laboratorio fallida")
                 }
-                finally { refresh() }
+                finally {
+                    pocketLabUiRefreshCoalescer?.request(finalEvent = true)
+                }
             }
             refresh()
         }
@@ -1841,6 +1866,8 @@ class MainActivity : AppCompatActivity() {
         val dialog = AlertDialog.Builder(this).setTitle("Voz local de ARIA · Pocket")
             .setView(scrollContent).setNegativeButton("Cerrar", null).create()
         dialog.setOnDismissListener {
+            lastPocketLabDiagnostic?.onChanged = null
+            pocketLabUiRefreshCoalescer?.close()
             pocketDialogRefresh = null
             pocketLabUiRefreshCoalescer = null
             // Stop an audition, but keep the loaded model reusable by normal chat.
