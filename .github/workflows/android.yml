@@ -29,6 +29,14 @@ jobs:
       - name: Checkout ARIA
         uses: actions/checkout@v4
 
+      - name: Test Pocket native stream lifetime concurrency
+        run: |
+          g++ -std=c++17 -O2 -pthread \
+            -I app/src/main/cpp \
+            app/src/test/cpp/PocketStreamLifetimeTest.cpp \
+            -o "$RUNNER_TEMP/pocket-stream-lifetime-test"
+          "$RUNNER_TEMP/pocket-stream-lifetime-test"
+
       - name: Fetch pinned llama.cpp
         if: github.ref_name == 'aria-alpha-0.2-local-ai' || github.ref_name == 'voice-b2-experiment' || github.ref_name == 'aria-cloud-brain-prototype'
         run: |
@@ -59,6 +67,12 @@ jobs:
 
       - name: Install native Android toolchain
         run: ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Check Pocket JNI source syntax
+        run: |
+          ${ANDROID_SDK_ROOT}/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ \
+            --target=aarch64-linux-android33 -std=c++17 -fsyntax-only \
+            -I app/src/main/cpp app/src/main/cpp/pockettts_jni.cpp
 
       - name: Prepare pinned Pocket TTS native runtime
         run: bash scripts/prepare_pocket_native_deps.sh

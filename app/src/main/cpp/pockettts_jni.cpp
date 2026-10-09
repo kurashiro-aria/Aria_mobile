@@ -1,6 +1,10 @@
 #include <jni.h>
+#include "PocketEngineRegistry.h"
+#include "PocketStreamLifetime.h"
 #include <atomic>
+#include <array>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -17,12 +21,19 @@ void ptt_free_audio(float*);
 
 struct Engine {
     void* tts = nullptr;
-    std::atomic<void*> stream{nullptr};
+    PocketStreamLifetime stream;
     std::mutex synth_mutex;
-    int64_t last_metrics[4] = {0, 0, 0, 0};
+    std::array<int64_t, 4> last_metrics{0, 0, 0, 0};
+    std::atomic<bool> closing{false};
 };
 
-static Engine* engine_from(jlong value) { return reinterpret_cast<Engine*>(value); }
+static PocketEngineRegistry<Engine> engines;
+
+static std::shared_ptr<Engine> engine_from(jlong handle) { return engines.get(handle); }
+
+static void cancel_native_stream(void* stream) {
+    ptt_stream_cancel(stream);
+}
 
 static void notify_stage(JNIEnv* env, jobject observer, int stage, int value) {
     if (!observer) return;
@@ -42,7 +53,7 @@ Java_com_kura_aria_voice_pocket_NativePocketTts_nativeCreate(
     const char* model_path = env->GetStringUTFChars(models, nullptr);
     const char* voice_path = env->GetStringUTFChars(voices, nullptr);
     const char* precision_value = env->GetStringUTFChars(precision, nullptr);
-    auto* engine = new Engine();
+    auto engine = std::make_shared<Engine>();
     // The upstream C API defaults to a relative "models/tokenizer.model".
     // Android stores assets in the app-private model directory, so pass the
     // absolute tokenizer path explicitly.
@@ -53,17 +64,18 @@ Java_com_kura_aria_voice_pocket_NativePocketTts_nativeCreate(
     env->ReleaseStringUTFChars(models, model_path);
     env->ReleaseStringUTFChars(voices, voice_path);
     env->ReleaseStringUTFChars(precision, precision_value);
-    if (!engine->tts) { delete engine; return 0; }
-    return reinterpret_cast<jlong>(engine);
+    if (!engine->tts) return 0;
+    return static_cast<jlong>(engines.insert(std::move(engine)));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_kura_aria_voice_pocket_NativePocketTts_nativeSynthesize(
         JNIEnv* env, jobject, jlong value, jstring text, jstring voice, jobject sink, jobject observer) {
-    auto* engine = engine_from(value);
-    if (!engine || !engine->tts) return JNI_FALSE;
+    auto engine = engine_from(value);
+    if (!engine) return JNI_FALSE;
     std::lock_guard<std::mutex> guard(engine->synth_mutex);
-    for (auto& metric : engine->last_metrics) metric = 0;
+    if (engine->closing.load() || !engine->tts) return JNI_FALSE;
+    engine->last_metrics.fill(0);
     const char* utf8 = env->GetStringUTFChars(text, nullptr);
     const char* voice_utf8 = env->GetStringUTFChars(voice, nullptr);
     notify_stage(env, observer, 1, 0);
@@ -75,7 +87,14 @@ Java_com_kura_aria_voice_pocket_NativePocketTts_nativeSynthesize(
         return JNI_FALSE;
     }
     notify_stage(env, observer, 2, 0);
-    engine->stream.store(stream);
+    if (!engine->stream.publish(stream)) {
+        ptt_stream_end(stream);
+        return JNI_FALSE;
+    }
+    // Destruction may mark the Engine closing between the pre-synthesis check
+    // and publication. In that ordering its first cancel sees an empty slot;
+    // this second check guarantees the newly published stream is cancelled.
+    if (engine->closing.load()) engine->stream.cancel(cancel_native_stream);
     jclass sink_class = env->GetObjectClass(sink);
     jmethodID on_audio = env->GetMethodID(sink_class, "onAudio", "([F)Z");
     bool success = on_audio != nullptr;
@@ -102,16 +121,18 @@ Java_com_kura_aria_voice_pocket_NativePocketTts_nativeSynthesize(
         ptt_stream_get_metrics(stream, &engine->last_metrics[0], &engine->last_metrics[1],
                                &engine->last_metrics[2], &engine->last_metrics[3]);
     }
-    engine->stream.store(nullptr);
-    ptt_stream_end(stream);
+    // take() clears the published pointer under the same lock used by stop().
+    // Exactly this synthesis call owns the returned pointer and ends it once.
+    if (void* owned_stream = engine->stream.take(stream)) ptt_stream_end(owned_stream);
     return success ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_com_kura_aria_voice_pocket_NativePocketTts_nativeLastRunMetrics(
         JNIEnv* env, jobject, jlong value) {
-    auto* engine = engine_from(value);
+    auto engine = engine_from(value);
     if (!engine) return nullptr;
+    std::lock_guard<std::mutex> lock(engine->synth_mutex);
     jlongArray result = env->NewLongArray(4);
     if (!result) return nullptr;
     jlong values[4] = {
@@ -126,16 +147,20 @@ Java_com_kura_aria_voice_pocket_NativePocketTts_nativeLastRunMetrics(
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_kura_aria_voice_pocket_NativePocketTts_nativeStop(JNIEnv*, jobject, jlong value) {
-    auto* engine = engine_from(value);
-    if (engine) if (void* stream = engine->stream.load()) ptt_stream_cancel(stream);
+    auto engine = engine_from(value);
+    if (engine) engine->stream.cancel(cancel_native_stream);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_kura_aria_voice_pocket_NativePocketTts_nativeDestroy(JNIEnv*, jobject, jlong value) {
-    auto* engine = engine_from(value);
+    std::shared_ptr<Engine> engine = engines.remove(value);
     if (!engine) return;
-    if (void* stream = engine->stream.load()) ptt_stream_cancel(stream);
+    // Cancel before waiting for synthesis: ptt_stream_read may be blocked until
+    // awakened. The shared_ptr keeps Engine alive for all JNI calls already in
+    // flight; calls arriving after erase cannot acquire it.
+    engine->closing.store(true);
+    engine->stream.cancel(cancel_native_stream);
     std::lock_guard<std::mutex> guard(engine->synth_mutex);
     ptt_destroy(engine->tts);
-    delete engine;
+    engine->tts = nullptr;
 }
