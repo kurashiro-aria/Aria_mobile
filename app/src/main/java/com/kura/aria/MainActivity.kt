@@ -1627,7 +1627,9 @@ class MainActivity : AppCompatActivity() {
             audioDiagnostic.isEnabled = installed && voices.isNotEmpty()
             val labIdle = pocketVoiceJob?.isActive != true && !pocketVoice.isolationLabRunning
             listOf(labA, labB, labC).forEach { it.isEnabled = installed && labIdle }
-            shareLab.isEnabled = PocketIsolationLabWav.committedFiles(cacheDir).isNotEmpty() && labIdle
+            shareLab.isEnabled = PocketIsolationLabWav.committedFiles(
+                cacheDir, lastPocketLabDiagnostic?.runId
+            ).isNotEmpty() && labIdle
             importVoice.isEnabled = installed
             delete.isEnabled = installed
             metrics.text = pocketMetricsText(lastPocketMetrics ?: pocketVoice.metrics)
@@ -1824,7 +1826,8 @@ class MainActivity : AppCompatActivity() {
         labB.setOnClickListener { runIsolationVariant(PocketIsolationVariant.B_KV_SEPARATE) }
         labC.setOnClickListener { runIsolationVariant(PocketIsolationVariant.C_KV_SEPARATE_LSD3) }
         shareLab.setOnClickListener {
-            val files = PocketIsolationLabWav.committedFiles(cacheDir)
+            val runDiagnostic = lastPocketLabDiagnostic
+            val files = PocketIsolationLabWav.committedFiles(cacheDir, runDiagnostic?.runId)
             if (files.isEmpty()) {
                 toast("Primero completa al menos una prueba A/B/C.")
                 return@setOnClickListener
@@ -1836,6 +1839,7 @@ class MainActivity : AppCompatActivity() {
                 val sendIntent = Intent(PocketIsolationLabWav.SHARE_ACTION).apply {
                     type = PocketIsolationLabWav.SHARE_MIME_TYPE
                     putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+                    runDiagnostic?.let { putExtra(Intent.EXTRA_TEXT, it.summary()) }
                     clipData = ClipData.newUri(contentResolver, files.first().name, uris.first()).apply {
                         uris.drop(1).forEach { addItem(ClipData.Item(it)) }
                     }

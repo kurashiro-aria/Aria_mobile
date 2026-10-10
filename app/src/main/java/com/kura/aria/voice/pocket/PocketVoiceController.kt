@@ -85,7 +85,7 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
             val pack = models.installedPack()
                 ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_INSTALADO)
             val plan = PocketIsolationPlan.create(pack, voices, variant)
-            val capture = PocketIsolationLabWav.beginCapture(appContext.cacheDir, variant)
+            val capture = PocketIsolationLabWav.beginCapture(appContext.cacheDir, variant, diagnostic.runId)
             diagnostic.transportMode(transportMode)
             diagnostic.mark(PocketLabStage.LAB_CAPTURE_READY)
             return engine.synthesize(

@@ -171,7 +171,9 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 mode = runCatching { audioManager?.mode }.getOrNull(),
                 sampleRate = PocketAudioFormat.SAMPLE_RATE,
                 channelMask = AudioFormat.CHANNEL_OUT_MONO,
-                encoding = AudioFormat.ENCODING_PCM_16BIT
+                encoding = AudioFormat.ENCODING_PCM_16BIT,
+                usage = "USAGE_ASSISTANT",
+                contentType = "CONTENT_TYPE_SPEECH"
             )
             labDiagnostic.trace(
                 "AUDIO_TRACK_CREATED",
@@ -322,15 +324,21 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 labDiagnostic?.pipelineFinishFailed("${error.javaClass.simpleName}: ${error.message ?: "no message"}")
                 throw error
             }
+            labDiagnostic?.captureCounts(
+                pipeline.floatInspector?.snapshot()?.sampleCount ?: 0L,
+                pipeline.pcm16Inspector?.snapshot()?.sampleCount ?: 0L
+            )
             val generationMs = SystemClock.elapsedRealtime() - generationStarted
             labDiagnostic?.playbackDrainRequested()
             labDiagnostic?.trace("DRAIN_BEGIN", "writtenSamples=${pipeline.writtenSamples}")
             try {
                 val drained = awaitPlaybackComplete(track, pipeline.writtenSamples, labDiagnostic)
                 if (drained) {
+                    labDiagnostic?.drainResult("DRAINED")
                     labDiagnostic?.playbackDrainOk()
                     labDiagnostic?.trace("DRAIN_END", "played=${Integer.toUnsignedLong(track.playbackHeadPosition)}")
                 } else {
+                    labDiagnostic?.drainResult(if (cancelled.get()) "CANCELLED" else "TIMEOUT")
                     val detail = "written=${pipeline.writtenSamples} played=${Integer.toUnsignedLong(track.playbackHeadPosition)}"
                     labDiagnostic?.playbackDrainTimeout(detail)
                     labDiagnostic?.trace("DRAIN_TIMEOUT", detail)
@@ -343,6 +351,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             }
             if (cancelled.get()) throw CancellationException("Pocket TTS detenido")
             val diagnosticPublished = activeCapture?.publish() == true
+            labDiagnostic?.captureResult(if (diagnosticPublished) "COMPLETE" else if (activeCapture != null) "NOT_PUBLISHED" else "NOT_REQUESTED")
             activeCapture?.targets?.let { targets ->
                 val floatFile = targets.float32File
                 val pcmFile = targets.pcm16File
@@ -394,8 +403,18 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 "kvMode=${runtimeConfig.kvMode} lsdSteps=${runtimeConfig.lsdSteps}")
             metrics
         } catch (cancelledError: CancellationException) {
+            val captureFinalized = pipeline.finishDiagnostics()
+            val pcmStats = pipeline.inspector.snapshot()
+            val partialPublished = activeCapture != null && pcmStats.sampleCount > 0L &&
+                captureFinalized && activeCapture.publish(partial = true)
             pipeline.abort()
-            activeCapture?.abort()
+            if (!partialPublished) activeCapture?.abort()
+            labDiagnostic?.captureCounts(
+                pipeline.floatInspector?.snapshot()?.sampleCount ?: 0L,
+                pipeline.pcm16Inspector?.snapshot()?.sampleCount ?: 0L
+            )
+            labDiagnostic?.captureResult(if (partialPublished) "PARTIAL" else "NO_VALID_CAPTURE")
+            labDiagnostic?.drainResult("CANCELLED")
             lastMetrics = lastMetrics.copy(state = "DETENIDO")
             onState("DETENIDO")
             throw cancelledError
@@ -410,6 +429,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             null
         } finally {
             labDiagnostic?.trackStopRequested()
+            labDiagnostic?.playbackFinal(trackPlaybackHead(track),
+                (trackUnderruns(track)?.minus(underrunsBefore))?.coerceAtLeast(0))
             labDiagnostic?.trace("TRACK_STOP_BEGIN")
             val stopResult = runCatching { track.stop() }
             if (stopResult.isSuccess) labDiagnostic?.trackStopOk()
@@ -441,6 +462,12 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             if (!diagnosticPublished) activeCapture?.abort()
             val floatStats = pipeline.floatInspector?.snapshot()
             val pcm16Stats = pipeline.pcm16Inspector?.snapshot()
+            labDiagnostic?.captureCounts(floatStats?.sampleCount ?: 0L, pcm16Stats?.sampleCount ?: 0L)
+            labDiagnostic?.captureResult(when {
+                diagnosticPublished -> "PARTIAL"
+                activeCapture == null -> "NOT_REQUESTED"
+                else -> "NO_VALID_CAPTURE"
+            })
             val diagnosticMetrics = lastMetrics.copy(
                 audioDurationMs = pcmStats.durationMs,
                 pcmStats = pcmStats,

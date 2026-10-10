@@ -1,5 +1,7 @@
 package com.kura.aria.voice.pocket
 
+import java.util.UUID
+
 internal data class PocketLabWriteSnapshot(
     val index: Int,
     val requestedBytes: Int,
@@ -90,6 +92,7 @@ internal enum class PocketLabStage {
 
 internal data class PocketLabDiagnosticSnapshot(
     val variant: PocketIsolationVariant,
+    val runId: String = "",
     val state: String = "LISTO",
     val stage: PocketLabStage = PocketLabStage.IDLE,
     val error: PocketVoiceError? = null,
@@ -130,6 +133,13 @@ internal data class PocketLabDiagnosticSnapshot(
     val audioSampleRate: Int? = null,
     val audioChannelMask: Int? = null,
     val audioEncoding: Int? = null,
+    val audioUsage: String? = null,
+    val audioContentType: String? = null,
+    val floatCapturedSamples: Long? = null,
+    val pcm16CapturedSamples: Long? = null,
+    val finalUnderruns: Int? = null,
+    val drainResult: String = "NOT_REACHED",
+    val captureResult: String = "NOT_STARTED",
     val playbackHeadPosition: Long? = null,
     val playbackHeadIterations: Long = 0L,
     val playbackDrainElapsedMs: Long? = null,
@@ -144,10 +154,13 @@ internal data class PocketLabDiagnosticSnapshot(
 )
 
 /** Thread-safe, small diagnostic state shared by one laboratory run and its UI. */
-internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
+internal class PocketLabDiagnostic(
+    val variant: PocketIsolationVariant,
+    val runId: String = UUID.randomUUID().toString()
+) {
     @Volatile var onChanged: ((PocketLabDiagnosticSnapshot) -> Unit)? = null
 
-    private var current = PocketLabDiagnosticSnapshot(variant)
+    private var current = PocketLabDiagnosticSnapshot(variant = variant, runId = runId)
 
     fun snapshot(): PocketLabDiagnosticSnapshot = synchronized(this) { current }
 
@@ -277,7 +290,9 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
         mode: Int?,
         sampleRate: Int,
         channelMask: Int,
-        encoding: Int
+        encoding: Int,
+        usage: String? = null,
+        contentType: String? = null
     ) {
         update {
             it.copy(
@@ -286,9 +301,21 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                 audioMode = mode,
                 audioSampleRate = sampleRate,
                 audioChannelMask = channelMask,
-                audioEncoding = encoding
+                audioEncoding = encoding,
+                audioUsage = usage,
+                audioContentType = contentType
             )
         }
+    }
+
+    fun captureCounts(floatSamples: Long, pcm16Samples: Long) {
+        update { it.copy(floatCapturedSamples = floatSamples, pcm16CapturedSamples = pcm16Samples) }
+    }
+
+    fun captureResult(result: String) { update { it.copy(captureResult = result) } }
+    fun drainResult(result: String) { update { it.copy(drainResult = result) } }
+    fun playbackFinal(head: Long?, underruns: Int?) {
+        update { it.copy(playbackHeadPosition = head, finalUnderruns = underruns) }
     }
 
     fun playbackHead(position: Long, iteration: Long, elapsedMs: Long, notify: Boolean = false) {
@@ -383,11 +410,15 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
         val value = snapshot()
         return buildString {
             append("DIAGNÓSTICO LAB\n")
+            append("runId: ").append(value.runId).append('\n')
             append("Variante: ").append(value.variant.name.substringBefore('_')).append('\n')
             append("Estado: ").append(value.state).append('\n')
             append("Etapa: ").append(value.stage.name).append('\n')
             append("Error: ").append(value.error?.name ?: "—").append('\n')
             append("Callbacks: ").append(value.callbacks).append(" · Samples: ").append(value.samples).append('\n')
+            append("Captura: ").append(value.captureResult).append(" · FLOAT32=")
+                .append(value.floatCapturedSamples ?: "—").append(" · PCM16=")
+                .append(value.pcm16CapturedSamples ?: "—").append('\n')
             append("Min buffer: ").append(value.minBufferSize ?: "—").append('\n')
             append("Track state: ").append(value.trackState ?: "—")
                 .append(" · Play: ").append(value.playState ?: "—").append('\n')
@@ -396,7 +427,8 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
             append("First write: ").append(value.firstWriteResult?.toString() ?: "—")
                 .append(" / ").append(value.firstWriteRequestedBytes?.toString() ?: "—").append('\n')
             append("Writes: ").append(value.writeCount).append(" · requested=").append(value.totalBytesRequested)
-                .append(" · written=").append(value.totalBytesWritten).append('\n')
+                .append(" · writtenBytes=").append(value.totalBytesWritten)
+                .append(" · writtenSamples=").append(value.totalBytesWritten / 2L).append('\n')
             value.failedWriteIndex?.let {
                 append("Failed write #").append(it).append(": ").append(value.failedWriteResult)
                     .append(" / ").append(value.failedWriteRequestedBytes)
@@ -417,6 +449,8 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
             value.routedDevice?.let { append("Route: ").append(it).append('\n') }
             value.audioTrackVolume?.let { append("Track volume: ").append(it).append('\n') }
             value.streamMusicVolume?.let { append("STREAM_MUSIC volume: ").append(it).append('\n') }
+            append("Audio attributes: usage=").append(value.audioUsage ?: "—")
+                .append(" · contentType=").append(value.audioContentType ?: "—").append('\n')
             value.audioMode?.let { append("Audio mode: ").append(it).append('\n') }
             if (value.audioSampleRate != null) {
                 append("Audio format: ").append(value.audioSampleRate).append(" Hz mask=")
@@ -426,6 +460,17 @@ internal class PocketLabDiagnostic(val variant: PocketIsolationVariant) {
                 append("Playback head: ").append(it).append(" · iterations=")
                     .append(value.playbackHeadIterations).append(" · drain ms=")
                     .append(value.playbackDrainElapsedMs ?: "—").append('\n')
+            }
+            append("Final underruns: ").append(value.finalUnderruns ?: "—")
+                .append(" · drain=").append(value.drainResult).append('\n')
+            if (value.floatCapturedSamples != null && value.pcm16CapturedSamples != null) {
+                append("Count checks (no causal attribution): callbacks/FLOAT32=")
+                    .append(if (value.samples == value.floatCapturedSamples) "MATCH" else "MISMATCH")
+                    .append(" · FLOAT32/PCM16=")
+                    .append(if (value.floatCapturedSamples == value.pcm16CapturedSamples) "MATCH" else "MISMATCH")
+                    .append(" · PCM16/AudioTrack=")
+                    .append(if (value.pcm16CapturedSamples == value.totalBytesWritten / 2L) "MATCH" else "MISMATCH")
+                    .append('\n')
             }
             if (value.writeHistory.isNotEmpty()) {
                 append("Write trace: ").append(value.writeHistory.joinToString(" | ") {

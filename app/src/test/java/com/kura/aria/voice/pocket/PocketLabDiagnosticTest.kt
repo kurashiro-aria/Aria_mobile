@@ -2,12 +2,45 @@ package com.kura.aria.voice.pocket
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 
 class PocketLabDiagnosticTest {
+
+    @Test fun runIdIsUniqueAndSuccessfulCountsAreCorrelated() {
+        val first = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        val second = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        assertNotEquals(first.runId, second.runId)
+        first.callback(3)
+        first.captureCounts(floatSamples = 3, pcm16Samples = 3)
+        first.writeAttempt(6, 6, 1, 3, cancelled = false)
+        first.playbackFinal(head = 3, underruns = 0)
+        first.drainResult("DRAINED")
+        first.captureResult("COMPLETE")
+
+        val summary = first.summary()
+        assertTrue(summary.contains("runId: ${first.runId}"))
+        assertTrue(summary.contains("callbacks/FLOAT32=MATCH"))
+        assertTrue(summary.contains("FLOAT32/PCM16=MATCH"))
+        assertTrue(summary.contains("PCM16/AudioTrack=MATCH"))
+        assertTrue(summary.contains("drain=DRAINED"))
+    }
+
+    @Test fun countDiscrepanciesAreReportedWithoutCauseAttribution() {
+        val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
+        diagnostic.callback(4)
+        diagnostic.captureCounts(floatSamples = 3, pcm16Samples = 2)
+        diagnostic.writeAttempt(4, 4, 1, 3, cancelled = false)
+
+        val summary = diagnostic.summary()
+        assertTrue(summary.contains("callbacks/FLOAT32=MISMATCH"))
+        assertTrue(summary.contains("FLOAT32/PCM16=MISMATCH"))
+        assertTrue(summary.contains("PCM16/AudioTrack=MISMATCH"))
+        assertTrue(summary.contains("no causal attribution"))
+    }
     @Test fun startsWithNullHardwareFields() {
         val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
         val snapshot = diagnostic.snapshot()

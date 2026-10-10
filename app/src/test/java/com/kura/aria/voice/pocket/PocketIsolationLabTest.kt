@@ -72,56 +72,101 @@ class PocketIsolationLabTest {
 
     @Test fun wavNamesAreExactAndVariantSpecific() {
         val cache = temporaryFolder.newFolder("names")
+        val runId = "run-123"
         val names = PocketIsolationVariant.entries.flatMap {
-            PocketIsolationLabWav.targets(cache, it).files().map(File::getName)
+            PocketIsolationLabWav.targets(cache, it, runId).files().map(File::getName)
         }
         assertEquals(listOf(
-            "pocket_lab_A_control_f32.wav", "pocket_lab_A_control_pcm16.wav",
-            "pocket_lab_B_kv_separate_f32.wav", "pocket_lab_B_kv_separate_pcm16.wav",
-            "pocket_lab_C_kv_separate_lsd3_f32.wav", "pocket_lab_C_kv_separate_lsd3_pcm16.wav"
+            "pocket_lab_A_control_run-123_f32.wav", "pocket_lab_A_control_run-123_pcm16.wav",
+            "pocket_lab_B_kv_separate_run-123_f32.wav", "pocket_lab_B_kv_separate_run-123_pcm16.wav",
+            "pocket_lab_C_kv_separate_lsd3_run-123_f32.wav", "pocket_lab_C_kv_separate_lsd3_run-123_pcm16.wav"
         ), names)
         assertEquals(names.size, names.distinct().size)
     }
 
     @Test fun successfulPairsPublishAtomicallyAndShareOnlyExistingCommittedFiles() {
         val cache = temporaryFolder.newFolder("publish")
-        val a = PocketIsolationLabWav.beginCapture(cache, PocketIsolationVariant.A_CONTROL)
+        val runId = "success-run"
+        val a = PocketIsolationLabWav.beginCapture(cache, PocketIsolationVariant.A_CONTROL, runId)
         writePair(a, floatArrayOf(-0.4f, 0.2f))
         assertTrue(a.publish())
         val files = PocketIsolationLabWav.committedFiles(cache)
         val before = files.map(File::readBytes)
         val uris = PocketIsolationLabWav.shareUris(files) { "content://lab/${it.name}" }
         assertEquals(2, files.size)
+        assertEquals(2, PocketIsolationLabWav.committedFiles(cache, runId).size)
+        assertTrue(files.all { it.name.contains(runId) })
         assertEquals(2, uris.size)
         assertEquals(2, uris.distinct().size)
         assertTrue(files.zip(before).all { (file, bytes) -> file.readBytes().contentEquals(bytes) })
         assertEquals("android.intent.action.SEND_MULTIPLE", PocketIsolationLabWav.SHARE_ACTION)
     }
 
-    @Test fun newRunInvalidatesOnlyItsOldVariantAndFailurePublishesNothing() {
+    @Test fun newFailedRunDoesNotReplaceOrMislabelPriorEvidence() {
         val cache = temporaryFolder.newFolder("failure")
-        val first = PocketIsolationLabWav.beginCapture(cache, PocketIsolationVariant.B_KV_SEPARATE)
+        val first = PocketIsolationLabWav.beginCapture(cache, PocketIsolationVariant.B_KV_SEPARATE, "old-run")
         writePair(first, floatArrayOf(0.1f, 0.3f))
         assertTrue(first.publish())
         assertEquals(2, PocketIsolationLabWav.committedFiles(cache).size)
 
-        val failed = PocketIsolationLabWav.beginCapture(cache, PocketIsolationVariant.B_KV_SEPARATE)
+        val failed = PocketIsolationLabWav.beginCapture(cache, PocketIsolationVariant.B_KV_SEPARATE, "failed-run")
         PocketFloatWavWriter(failed.stagedTargets.float32File).apply {
             append(floatArrayOf(0.5f)); finish()
         }
         assertFalse(failed.publish())
-        assertTrue(PocketIsolationLabWav.committedFiles(cache).isEmpty())
+        assertEquals(2, PocketIsolationLabWav.committedFiles(cache, "old-run").size)
+        assertTrue(PocketIsolationLabWav.committedFiles(cache, "failed-run").isEmpty())
         assertFalse(failed.targets.files().any(File::exists))
     }
 
     @Test fun cancellationRemovesPendingAndFinalPair() {
         val cache = temporaryFolder.newFolder("cancel")
-        val capture = PocketIsolationLabWav.beginCapture(cache, PocketIsolationVariant.C_KV_SEPARATE_LSD3)
+        val capture = PocketIsolationLabWav.beginCapture(cache, PocketIsolationVariant.C_KV_SEPARATE_LSD3, "cancel-run")
         writePair(capture, floatArrayOf(-0.2f, 0.6f))
         capture.abort()
         assertTrue(PocketIsolationLabWav.committedFiles(cache).isEmpty())
         assertFalse(capture.targets.files().any(File::exists))
         assertFalse(capture.stagedTargets.files().any(File::exists))
+    }
+
+    @Test fun partialValidPairIsPreservedAndCorrelatedToItsRun() {
+        val cache = temporaryFolder.newFolder("partial-run")
+        val runId = "partial-456"
+        val capture = PocketIsolationLabWav.beginCapture(cache, PocketIsolationVariant.A_CONTROL, runId)
+        writePair(capture, floatArrayOf(0.2f, -0.1f, 0.4f))
+        assertTrue(capture.publish(partial = true))
+        val committed = PocketIsolationLabWav.committedFiles(cache, runId)
+        assertEquals(2, committed.size)
+        assertTrue(committed.all { it.name.contains(runId) })
+        assertEquals(0, PocketIsolationLabWav.committedFiles(cache, "another-run").size)
+        assertTrue(PocketIsolationLabWav.isCommitted(capture.targets, PocketIsolationVariant.A_CONTROL))
+    }
+
+    @Test fun successfulPipelineCountsMatchWavsAndAudioTrackWrites() {
+        val cache = temporaryFolder.newFolder("equal-counts")
+        val runId = "equal-run"
+        val capture = PocketIsolationLabWav.beginCapture(cache, PocketIsolationVariant.A_CONTROL, runId)
+        val floatWriter = PocketFloatWavWriter(capture.stagedTargets.float32File)
+        val pcmWriter = PocketWavWriter(capture.stagedTargets.pcm16File)
+        var writtenBytes = 0L
+        val pipeline = PocketPcm16Pipeline(
+            prebufferBytes = 2,
+            writer = { _, _, length -> writtenBytes += length; length },
+            onPlaybackStart = {},
+            wavWriter = pcmWriter,
+            floatWavWriter = floatWriter
+        )
+
+        pipeline.accept(floatArrayOf(0.1f, -0.2f, 0.3f, -0.4f))
+        pipeline.finish()
+
+        assertEquals(4L, pipeline.inspector.snapshot().sampleCount)
+        assertEquals(4L, pipeline.floatInspector?.snapshot()?.sampleCount)
+        assertEquals(4L, pipeline.pcm16Inspector?.snapshot()?.sampleCount)
+        assertEquals(4L, pipeline.writtenSamples)
+        assertEquals(8L, writtenBytes)
+        assertTrue(capture.publish())
+        assertEquals(2, PocketIsolationLabWav.committedFiles(cache, runId).size)
     }
 
     @Test fun nativeSeparateModeUsesDistinctStorageAndExplicitOutputToInputSwap() {

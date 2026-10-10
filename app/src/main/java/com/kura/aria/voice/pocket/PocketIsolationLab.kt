@@ -2,7 +2,6 @@ package com.kura.aria.voice.pocket
 
 import java.io.File
 import java.io.FileOutputStream
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal enum class PocketIsolationVariant(
@@ -97,58 +96,75 @@ internal class PocketIsolationGate {
 
 internal object PocketIsolationLabWav {
     const val SHARE_ACTION = "android.intent.action.SEND_MULTIPLE"
-    const val SHARE_MIME_TYPE = "audio/wav"
+    const val SHARE_MIME_TYPE = "*/*"
     private const val DIRECTORY = "pocket-kv-lsd-lab"
     private const val HEADER_BYTES = 44L
 
-    fun targets(cacheDir: File, variant: PocketIsolationVariant): PocketDiagnosticTargets {
+    fun targets(cacheDir: File, variant: PocketIsolationVariant, runId: String): PocketDiagnosticTargets {
         val directory = File(cacheDir, DIRECTORY)
+        require(runId.matches(Regex("[A-Za-z0-9-]{1,80}"))) { "runId inválido" }
+        val prefix = variant.floatFileName.removeSuffix("_f32.wav")
         return PocketDiagnosticTargets(
-            File(directory, variant.floatFileName),
-            File(directory, variant.pcmFileName)
+            File(directory, "${prefix}_${runId}_f32.wav"),
+            File(directory, "${prefix}_${runId}_pcm16.wav")
         )
     }
 
-    fun beginCapture(cacheDir: File, variant: PocketIsolationVariant): PocketIsolationLabCapture =
-        PocketIsolationLabCapture.begin(targets(cacheDir, variant), variant)
+    fun beginCapture(cacheDir: File, variant: PocketIsolationVariant, runId: String): PocketIsolationLabCapture =
+        PocketIsolationLabCapture.begin(targets(cacheDir, variant, runId), variant, runId)
 
-    fun committedFiles(cacheDir: File): List<File> = PocketIsolationVariant.entries.flatMap { variant ->
-        val targets = targets(cacheDir, variant)
-        if (isCommitted(targets, variant)) targets.files() else emptyList()
+    fun committedFiles(cacheDir: File, runId: String? = null): List<File> {
+        val directory = File(cacheDir, DIRECTORY)
+        return directory.listFiles()?.filter { it.name.startsWith(".pocket_lab_") && it.name.endsWith(".ready") }
+            .orEmpty().flatMap { marker ->
+                val values = runCatching { marker.readLines(Charsets.US_ASCII) }.getOrNull().orEmpty()
+                if (values.size != 7 || values[0] != "v3" || runId != null && values[1] != runId)
+                    return@flatMap emptyList()
+                val floatFile = File(directory, values[3])
+                val pcmFile = File(directory, values[4])
+                val pair = PocketDiagnosticTargets(floatFile, pcmFile)
+                if (isCommitted(pair, marker, values)) pair.files() else emptyList()
+            }.sortedBy { it.name }
     }
 
     fun isCommitted(targets: PocketDiagnosticTargets, variant: PocketIsolationVariant): Boolean {
-        if (targets.float32File.name != variant.floatFileName || targets.pcm16File.name != variant.pcmFileName) return false
+        if (!targets.float32File.name.startsWith(variant.floatFileName.removeSuffix("_f32.wav") + "_") ||
+            !targets.pcm16File.name.startsWith(variant.pcmFileName.removeSuffix("_pcm16.wav") + "_")) return false
         if (!isFloatWav(targets.float32File) || !isPcm16Wav(targets.pcm16File)) return false
-        val marker = marker(targets, variant)
+        val marker = marker(targets)
         val values = runCatching { marker.readLines(Charsets.US_ASCII) }.getOrNull() ?: return false
-        return marker.isFile && when {
-            values.size == 4 && values[0] == "v1" -> values[1].isNotBlank() &&
-                values[2].toLongOrNull() == targets.float32File.length() &&
-                values[3].toLongOrNull() == targets.pcm16File.length()
-            values.size == 5 && values[0] == "v2" -> values[1].isNotBlank() &&
-                values[2] in setOf("complete", "partial") &&
-                values[3].toLongOrNull() == targets.float32File.length() &&
-                values[4].toLongOrNull() == targets.pcm16File.length()
-            else -> false
-        }
+        return marker.isFile && isCommitted(targets, marker, values)
     }
+
+    private fun isCommitted(targets: PocketDiagnosticTargets, marker: File, values: List<String>): Boolean =
+        values.size == 7 && values[0] == "v3" && values[1].isNotBlank() &&
+            values[2] in setOf("complete", "partial") &&
+            values[3] == targets.float32File.name && values[4] == targets.pcm16File.name &&
+            values[5].toLongOrNull() == targets.float32File.length() &&
+            values[6].toLongOrNull() == targets.pcm16File.length() &&
+            isFloatWav(targets.float32File) && isPcm16Wav(targets.pcm16File) &&
+            isCommittedWavPair(targets)
 
     fun <T : Any> shareUris(files: List<File>, uriForFile: (File) -> T): List<T> {
         require(files.isNotEmpty()) { "No hay WAV del laboratorio para compartir" }
-        require(files.all { it.name in PocketIsolationVariant.entries.map { v -> v.floatFileName } && isFloatWav(it) ||
-            it.name in PocketIsolationVariant.entries.map { v -> v.pcmFileName } && isPcm16Wav(it) }) {
+        require(files.all { it.name.contains("_") && (it.name.endsWith("_f32.wav") && isFloatWav(it) ||
+            it.name.endsWith("_pcm16.wav") && isPcm16Wav(it)) }) {
             "WAV de laboratorio incompleto"
         }
-        val names = PocketIsolationVariant.entries.flatMap { listOf(it.floatFileName, it.pcmFileName) }.toSet()
-        require(files.all { it.name in names } && files.map { it.canonicalPath }.distinct().size == files.size)
+        require(files.map { it.canonicalPath }.distinct().size == files.size)
+        val runIds = files.map { file ->
+            val suffix = if (file.name.endsWith("_f32.wav")) "_f32.wav" else "_pcm16.wav"
+            file.name.removeSuffix(suffix).substringAfterLast('_')
+        }
+        require(runIds.distinct().size == 1 && files.count { it.name.endsWith("_f32.wav") } == 1 &&
+            files.count { it.name.endsWith("_pcm16.wav") } == 1) { "Los WAV deben pertenecer al mismo runId" }
         val uris = files.map(uriForFile)
         require(uris.distinct().size == uris.size) { "Las URI del laboratorio deben ser distintas" }
         return uris
     }
 
-    internal fun marker(targets: PocketDiagnosticTargets, variant: PocketIsolationVariant) =
-        File(targets.float32File.parentFile, ".${variant.name}.ready")
+    internal fun marker(targets: PocketDiagnosticTargets) =
+        File(targets.float32File.parentFile, ".${targets.float32File.name.removeSuffix("_f32.wav")}.ready")
 
     internal fun isCommittedWavPair(targets: PocketDiagnosticTargets): Boolean =
         isFloatWav(targets.float32File) && isPcm16Wav(targets.pcm16File) &&
@@ -164,7 +180,7 @@ internal class PocketIsolationLabCapture private constructor(
     override val stagedTargets: PocketDiagnosticTargets,
     private val marker: File,
     private val markerPartial: File,
-    private val generationId: String
+    val runId: String
 ) : PocketWavCapture {
     override fun publish(): Boolean = publish(partial = false)
 
@@ -174,7 +190,8 @@ internal class PocketIsolationLabCapture private constructor(
         check(stagedTargets.pcm16File.renameTo(targets.pcm16File))
         check(PocketIsolationLabWav.isCommittedWavPair(targets))
         FileOutputStream(markerPartial).use { output ->
-            output.write(("v2\n$generationId\n${if (partial) "partial" else "complete"}\n" +
+            output.write(("v3\n$runId\n${if (partial) "partial" else "complete"}\n" +
+                "${targets.float32File.name}\n${targets.pcm16File.name}\n" +
                 "${targets.float32File.length()}\n${targets.pcm16File.length()}\n")
                 .toByteArray(Charsets.US_ASCII))
             output.fd.sync()
@@ -195,13 +212,13 @@ internal class PocketIsolationLabCapture private constructor(
     }
 
     companion object {
-        fun begin(targets: PocketDiagnosticTargets, variant: PocketIsolationVariant): PocketIsolationLabCapture {
-            require(targets.float32File.name == variant.floatFileName)
-            require(targets.pcm16File.name == variant.pcmFileName)
+        fun begin(targets: PocketDiagnosticTargets, variant: PocketIsolationVariant, runId: String): PocketIsolationLabCapture {
+            require(targets.float32File.name.startsWith(variant.floatFileName.removeSuffix("_f32.wav") + "_${runId}_"))
+            require(targets.pcm16File.name.startsWith(variant.pcmFileName.removeSuffix("_pcm16.wav") + "_${runId}_"))
             val directory = targets.float32File.parentFile?.canonicalFile ?: error("Directorio de laboratorio ausente")
             require(targets.pcm16File.parentFile?.canonicalFile == directory)
             check(directory.mkdirs() || directory.isDirectory)
-            val marker = PocketIsolationLabWav.marker(targets, variant)
+            val marker = PocketIsolationLabWav.marker(targets)
             val markerPartial = File(directory, "${marker.name}.partial")
             val staged = PocketDiagnosticTargets(
                 File(directory, "${targets.float32File.name}.pending"),
@@ -212,7 +229,7 @@ internal class PocketIsolationLabCapture private constructor(
             targets.files().forEach(File::delete)
             staged.files().forEach(File::delete)
             staged.files().forEach { File(it.parentFile, "${it.name}.partial").delete() }
-            return PocketIsolationLabCapture(targets, staged, marker, markerPartial, UUID.randomUUID().toString())
+            return PocketIsolationLabCapture(targets, staged, marker, markerPartial, runId)
         }
     }
 }
