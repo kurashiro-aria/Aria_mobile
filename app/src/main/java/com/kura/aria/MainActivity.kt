@@ -1330,6 +1330,7 @@ class MainActivity : AppCompatActivity() {
                     emotionalDiagnosticsView?.text = emotionalDiagnosticText()
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Throwable) {
+                    lastPocketMetrics = pocketVoice.metrics
                     val message = (error as? PocketVoiceException)?.code?.userMessage
                         ?: "Pocket TTS no está disponible"
                     Log.e("ARIA.PocketVoice", "synthesis_failed=${error.javaClass.simpleName}", error)
@@ -1724,7 +1725,10 @@ class MainActivity : AppCompatActivity() {
                         ExpressionStyle.PLAYFUL
                     ) { value -> runOnUiThread { runtimeState = value; refresh() } }
                 } catch (cancelled: CancellationException) { throw cancelled }
-                catch (error: Throwable) { toast(error.message ?: "Prueba Pocket fallida") }
+                catch (error: Throwable) {
+                    lastPocketMetrics = pocketVoice.metrics
+                    toast(error.message ?: "Prueba Pocket fallida")
+                }
                 finally { refresh() }
             }
         }
@@ -1740,7 +1744,10 @@ class MainActivity : AppCompatActivity() {
                     }
                     toast("WAV diagnóstico generado correctamente")
                 } catch (cancelled: CancellationException) { throw cancelled }
-                catch (error: Throwable) { toast(error.message ?: "Prueba de audio fallida") }
+                catch (error: Throwable) {
+                    lastPocketMetrics = pocketVoice.metrics
+                    toast(error.message ?: "Prueba de audio fallida")
+                }
                 finally { refresh() }
             }
         }
@@ -1912,6 +1919,12 @@ class MainActivity : AppCompatActivity() {
         }
         value.floatStats?.let { append("\nFLOAT32 DC OFFSET: ").append("%.8f".format(it.mean)) }
         append("\nAUDIOTRACK UNDERRUNS: ").append(value.audioUnderruns ?: "—")
+        append("\nDIAGNOSTIC CAPTURE: ").append(when (value.diagnosticCapturePartial) {
+            true -> "PARCIAL (fallo/detención)"
+            false -> if (value.diagnosticWav != null && value.diagnosticFloatWav != null) "COMPLETA"
+                else "WAV NO PUBLICADOS"
+            null -> "NO DISPONIBLE"
+        })
         append("\nWAV PCM16: ").append(if (value.diagnosticWav != null) "OK · pocket_audio_quality.wav" else "—")
         append("\nWAV FLOAT32: ").append(if (value.diagnosticFloatWav != null) "OK · pocket_audio_pre_pcm_f32.wav" else "—")
         value.error?.let { append("\nERROR: ").append(it.name) }

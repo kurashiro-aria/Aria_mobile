@@ -353,6 +353,7 @@ internal class PocketPcm16Pipeline(
     val pcm16Inspector = if (floatWavWriter != null) PocketPcm16Inspector() else null
     val quantizationInspector = if (floatWavWriter != null) PocketQuantizationInspector() else null
     private var diagnosticsActive = wavWriter != null || floatWavWriter != null
+    private var diagnosticsFinished = false
     var playbackStarted = false
         private set
     var writtenSamples = 0L
@@ -407,12 +408,25 @@ internal class PocketPcm16Pipeline(
 
     fun finish() {
         if (!playbackStarted && pending.size() > 0) startPlayback()
-        if (!diagnosticsActive) return
+        finishDiagnostics()
+    }
+
+    /** Finalize only diagnostic files; deliberately does not write to or start AudioTrack. */
+    fun finishDiagnostics(): Boolean {
+        if (diagnosticsFinished) return true
+        if (!diagnosticsActive || inspector.snapshot().sampleCount <= 0L) {
+            abortDiagnostics()
+            return false
+        }
         try {
             wavWriter?.finish()
             floatWavWriter?.finish()
+            diagnosticsFinished = true
+            diagnosticsActive = false
+            return true
         } catch (_: Throwable) {
             abortDiagnostics()
+            return false
         }
     }
 

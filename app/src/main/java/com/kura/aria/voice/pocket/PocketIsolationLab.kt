@@ -119,17 +119,27 @@ internal object PocketIsolationLabWav {
 
     fun isCommitted(targets: PocketDiagnosticTargets, variant: PocketIsolationVariant): Boolean {
         if (targets.float32File.name != variant.floatFileName || targets.pcm16File.name != variant.pcmFileName) return false
-        if (!isWav(targets.float32File) || !isWav(targets.pcm16File)) return false
+        if (!isFloatWav(targets.float32File) || !isPcm16Wav(targets.pcm16File)) return false
         val marker = marker(targets, variant)
         val values = runCatching { marker.readLines(Charsets.US_ASCII) }.getOrNull() ?: return false
-        return marker.isFile && values.size == 4 && values[0] == "v1" && values[1].isNotBlank() &&
-            values[2].toLongOrNull() == targets.float32File.length() &&
-            values[3].toLongOrNull() == targets.pcm16File.length()
+        return marker.isFile && when {
+            values.size == 4 && values[0] == "v1" -> values[1].isNotBlank() &&
+                values[2].toLongOrNull() == targets.float32File.length() &&
+                values[3].toLongOrNull() == targets.pcm16File.length()
+            values.size == 5 && values[0] == "v2" -> values[1].isNotBlank() &&
+                values[2] in setOf("complete", "partial") &&
+                values[3].toLongOrNull() == targets.float32File.length() &&
+                values[4].toLongOrNull() == targets.pcm16File.length()
+            else -> false
+        }
     }
 
     fun <T : Any> shareUris(files: List<File>, uriForFile: (File) -> T): List<T> {
         require(files.isNotEmpty()) { "No hay WAV del laboratorio para compartir" }
-        require(files.all(::isWav)) { "WAV de laboratorio incompleto" }
+        require(files.all { it.name in PocketIsolationVariant.entries.map { v -> v.floatFileName } && isFloatWav(it) ||
+            it.name in PocketIsolationVariant.entries.map { v -> v.pcmFileName } && isPcm16Wav(it) }) {
+            "WAV de laboratorio incompleto"
+        }
         val names = PocketIsolationVariant.entries.flatMap { listOf(it.floatFileName, it.pcmFileName) }.toSet()
         require(files.all { it.name in names } && files.map { it.canonicalPath }.distinct().size == files.size)
         val uris = files.map(uriForFile)
@@ -140,7 +150,13 @@ internal object PocketIsolationLabWav {
     internal fun marker(targets: PocketDiagnosticTargets, variant: PocketIsolationVariant) =
         File(targets.float32File.parentFile, ".${variant.name}.ready")
 
-    private fun isWav(file: File): Boolean = file.isFile && file.length() > HEADER_BYTES
+    internal fun isCommittedWavPair(targets: PocketDiagnosticTargets): Boolean =
+        isFloatWav(targets.float32File) && isPcm16Wav(targets.pcm16File) &&
+            (targets.float32File.length() - HEADER_BYTES) / 4L ==
+            (targets.pcm16File.length() - HEADER_BYTES) / PocketAudioFormat.PCM16_BYTES_PER_SAMPLE
+
+    private fun isFloatWav(file: File): Boolean = PocketDiagnosticWav.isValidFloatWav(file)
+    private fun isPcm16Wav(file: File): Boolean = PocketDiagnosticWav.isValidPcm16Wav(file)
 }
 
 internal class PocketIsolationLabCapture private constructor(
@@ -150,12 +166,16 @@ internal class PocketIsolationLabCapture private constructor(
     private val markerPartial: File,
     private val generationId: String
 ) : PocketWavCapture {
-    override fun publish(): Boolean = try {
-        check(stagedTargets.files().all { it.isFile && it.length() > 44L })
+    override fun publish(): Boolean = publish(partial = false)
+
+    override fun publish(partial: Boolean): Boolean = try {
+        check(PocketIsolationLabWav.isCommittedWavPair(stagedTargets))
         check(stagedTargets.float32File.renameTo(targets.float32File))
         check(stagedTargets.pcm16File.renameTo(targets.pcm16File))
+        check(PocketIsolationLabWav.isCommittedWavPair(targets))
         FileOutputStream(markerPartial).use { output ->
-            output.write("v1\n$generationId\n${targets.float32File.length()}\n${targets.pcm16File.length()}\n"
+            output.write(("v2\n$generationId\n${if (partial) "partial" else "complete"}\n" +
+                "${targets.float32File.length()}\n${targets.pcm16File.length()}\n")
                 .toByteArray(Charsets.US_ASCII))
             output.fd.sync()
         }

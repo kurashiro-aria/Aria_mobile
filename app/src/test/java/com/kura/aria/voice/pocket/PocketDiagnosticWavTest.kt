@@ -98,6 +98,73 @@ class PocketDiagnosticWavTest {
     }
 
     @Test
+    fun playbackFailureAfterAudioFinalizesAndPublishesValidPartialPairWithoutStartingPlayback() {
+        val cache = temporaryFolder.newFolder("cache-partial-playback-failure")
+        val capture = PocketDiagnosticWav.beginCapture(PocketDiagnosticWav.targets(cache))
+        var playCalled = false
+        val pipeline = PocketPcm16Pipeline(
+            prebufferBytes = 2,
+            writer = { _, _, _ -> error("simulated AudioTrack write failure") },
+            onPlaybackStart = { playCalled = true },
+            wavWriter = PocketWavWriter(capture.stagedTargets.pcm16File),
+            floatWavWriter = PocketFloatWavWriter(capture.stagedTargets.float32File)
+        )
+
+        try {
+            pipeline.accept(floatArrayOf(-0.5f, 0.25f))
+            throw AssertionError("simulated playback failure was expected")
+        } catch (_: IllegalStateException) {
+            // The samples are captured before the AudioTrack writer is called.
+        }
+        val floatStats = pipeline.floatInspector!!.snapshot()
+        val pcmStats = pipeline.pcm16Inspector!!.snapshot()
+        assertEquals(2L, floatStats.sampleCount)
+        assertEquals(2L, pcmStats.sampleCount)
+        assertFalse(playCalled)
+        assertTrue(pipeline.finishDiagnostics())
+        assertTrue(capture.publish(partial = true))
+
+        val files = PocketDiagnosticWav.files(cache)
+        assertTrue(PocketDiagnosticWav.areShareable(files))
+        assertEquals("partial", PocketDiagnosticWav.readyMarker(cache).readLines()[2])
+        assertEquals(2L, (files[0].length() - 44L) / 4L)
+        assertEquals(2L, (files[1].length() - 44L) / 2L)
+    }
+
+    @Test
+    fun failureBeforeAudioKeepsZeroSampleMetricsAndPublishesNoWavs() {
+        val cache = temporaryFolder.newFolder("cache-failure-before-audio")
+        val capture = PocketDiagnosticWav.beginCapture(PocketDiagnosticWav.targets(cache))
+        val pipeline = PocketPcm16Pipeline(
+            prebufferBytes = 2,
+            writer = { _, _, length -> length },
+            onPlaybackStart = {},
+            wavWriter = PocketWavWriter(capture.stagedTargets.pcm16File),
+            floatWavWriter = PocketFloatWavWriter(capture.stagedTargets.float32File)
+        )
+
+        assertEquals(0L, pipeline.floatInspector!!.snapshot().sampleCount)
+        assertEquals(0L, pipeline.pcm16Inspector!!.snapshot().sampleCount)
+        assertFalse(pipeline.finishDiagnostics())
+        capture.abort()
+
+        assertFalse(PocketDiagnosticWav.areShareable(PocketDiagnosticWav.files(cache)))
+        assertFalse(PocketDiagnosticWav.files(cache).any { it.exists() })
+    }
+
+    @Test
+    fun invalidOrTruncatedWavHeaderIsNeverPublished() {
+        val cache = temporaryFolder.newFolder("cache-invalid-wav")
+        val capture = PocketDiagnosticWav.beginCapture(PocketDiagnosticWav.targets(cache))
+        writePair(capture, floatArrayOf(0.1f, -0.2f))
+        capture.stagedTargets.pcm16File.writeBytes(byteArrayOf(1, 2, 3))
+
+        assertFalse(capture.publish(partial = true))
+        assertFalse(PocketDiagnosticWav.areShareable(PocketDiagnosticWav.files(cache)))
+        assertFalse(PocketDiagnosticWav.files(cache).any { it.exists() })
+    }
+
+    @Test
     fun cancellationAbortsBothStagedFilesWithoutPublishingEither() {
         val cache = temporaryFolder.newFolder("cache-cancelled")
         val capture = PocketDiagnosticWav.beginCapture(PocketDiagnosticWav.targets(cache))

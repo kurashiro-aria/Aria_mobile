@@ -134,7 +134,27 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         if (labDiagnostic != null) {
             releasePreviousLabAudioTrack(labDiagnostic)
         }
-        val track = createAudioTrack(labDiagnostic)
+        val track = try {
+            createAudioTrack(labDiagnostic)
+        } catch (error: Throwable) {
+            activeCapture?.abort()
+            val code = (error as? PocketVoiceException)?.code ?: PocketVoiceError.AUDIO_FAILED
+            lastMetrics = lastMetrics.copy(
+                audioDurationMs = 0L,
+                pcmStats = PocketPcmInspector().snapshot(),
+                floatStats = activeCapture?.let { PocketFloatInspector().snapshot() },
+                pcm16Stats = activeCapture?.let { PocketPcm16Inspector().snapshot() },
+                conversionStats = activeCapture?.let { PocketQuantizationInspector().snapshot() },
+                diagnosticWav = null,
+                diagnosticFloatWav = null,
+                diagnosticCapturePartial = activeCapture != null,
+                state = "ERROR",
+                error = code
+            )
+            Log.w(TAG, "DIAGNOSTIC_CAPTURE_FAILURE partial=${activeCapture != null} published=false " +
+                "floatSamples=0 pcmSamples=0 error=${code.name}")
+            throw error
+        }
         val labTrackId = if (labDiagnostic != null) nextLabTrackId.getAndIncrement() else null
         if (labDiagnostic != null) {
             labDiagnostic.trackCreated(
@@ -260,7 +280,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 )
             }
         )
-        try {
+        var deferredError: Throwable? = null
+        val result: PocketMetrics? = try {
             val runtime = native ?: throw PocketVoiceException(PocketVoiceError.MODELO_NO_CARGA)
             var callbackError: Throwable? = null
             val ok = runtime.synthesize(text, voice.fileName, NativePocketTts.AudioSink { samples ->
@@ -349,6 +370,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 audioUnderruns = underruns,
                 diagnosticWav = activeCapture?.targets?.pcm16File?.takeIf { diagnosticPublished }?.absolutePath,
                 diagnosticFloatWav = activeCapture?.targets?.float32File?.takeIf { diagnosticPublished }?.absolutePath,
+                diagnosticCapturePartial = if (activeCapture != null) false else null,
                 conditioningMs = nativeMetrics.conditioningMs,
                 callbackCount = nativeMetrics.callbackCount,
                 segmentCount = nativeMetrics.segmentCount,
@@ -378,16 +400,14 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             onState("DETENIDO")
             throw cancelledError
         } catch (error: Throwable) {
-            pipeline.abort()
-            activeCapture?.abort()
+            deferredError = error
             val code = (error as? PocketVoiceException)?.code ?: PocketVoiceError.SYNTHESIS_FAILED
             if (code == PocketVoiceError.AUDIO_FAILED) {
                 labDiagnostic?.trace("AUDIO_FAILED_ORIGIN", "operation=propagated exception=${error.javaClass.simpleName}")
             }
             labDiagnostic?.preserveError(error)
-            lastMetrics = lastMetrics.copy(state = "ERROR", error = code)
             onState("ERROR: ${code.name}")
-            throw if (error is PocketVoiceException) error else PocketVoiceException(code, error)
+            null
         } finally {
             labDiagnostic?.trackStopRequested()
             labDiagnostic?.trace("TRACK_STOP_BEGIN")
@@ -411,6 +431,35 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 pendingLabStopDiagnostic = null
             }
         }
+        deferredError?.let { error ->
+            val code = (error as? PocketVoiceException)?.code ?: PocketVoiceError.SYNTHESIS_FAILED
+            val pcmStats = pipeline.inspector.snapshot()
+            val captureFinalized = pipeline.finishDiagnostics()
+            val diagnosticPublished = activeCapture != null && pcmStats.sampleCount > 0L &&
+                captureFinalized && activeCapture.publish(partial = true)
+            pipeline.abort()
+            if (!diagnosticPublished) activeCapture?.abort()
+            val floatStats = pipeline.floatInspector?.snapshot()
+            val pcm16Stats = pipeline.pcm16Inspector?.snapshot()
+            val diagnosticMetrics = lastMetrics.copy(
+                audioDurationMs = pcmStats.durationMs,
+                pcmStats = pcmStats,
+                floatStats = floatStats,
+                pcm16Stats = pcm16Stats,
+                conversionStats = pipeline.quantizationInspector?.snapshot(),
+                diagnosticWav = activeCapture?.targets?.pcm16File?.takeIf { diagnosticPublished }?.absolutePath,
+                diagnosticFloatWav = activeCapture?.targets?.float32File?.takeIf { diagnosticPublished }?.absolutePath,
+                diagnosticCapturePartial = activeCapture != null,
+                state = "ERROR",
+                error = code
+            )
+            lastMetrics = diagnosticMetrics
+            Log.w(TAG, "DIAGNOSTIC_CAPTURE_FAILURE partial=${diagnosticMetrics.diagnosticCapturePartial} " +
+                "published=$diagnosticPublished floatSamples=${floatStats?.sampleCount ?: 0} " +
+                "pcmSamples=${pcm16Stats?.sampleCount ?: 0} error=${code.name}")
+            throw if (error is PocketVoiceException) error else PocketVoiceException(code, error)
+        }
+        result ?: error("Pocket synthesis completed without a result")
     }
 
     fun stop(labDiagnostic: PocketLabDiagnostic? = null) {

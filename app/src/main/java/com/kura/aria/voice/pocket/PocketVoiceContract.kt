@@ -107,6 +107,8 @@ internal data class PocketMetrics(
     val audioUnderruns: Int? = null,
     val diagnosticWav: String? = null,
     val diagnosticFloatWav: String? = null,
+    /** True when metrics/files describe an inference that ended before normal completion. */
+    val diagnosticCapturePartial: Boolean? = null,
     val conditioningMs: Long? = null,
     val callbackCount: Int? = null,
     val segmentCount: Int? = null,
