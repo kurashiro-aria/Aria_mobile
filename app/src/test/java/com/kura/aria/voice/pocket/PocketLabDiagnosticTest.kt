@@ -33,7 +33,7 @@ class PocketLabDiagnosticTest {
         val diagnostic = PocketLabDiagnostic(PocketIsolationVariant.A_CONTROL)
         diagnostic.callback(4)
         diagnostic.captureCounts(floatSamples = 3, pcm16Samples = 2)
-        diagnostic.writeAttempt(4, 4, 1, 3, cancelled = false)
+        diagnostic.writeAttempt(4, 2, 1, 3, cancelled = false)
 
         val summary = diagnostic.summary()
         assertTrue(summary.contains("callbacks/FLOAT32=MISMATCH"))
