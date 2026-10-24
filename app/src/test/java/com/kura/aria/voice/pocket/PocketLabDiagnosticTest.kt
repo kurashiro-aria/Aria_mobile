@@ -228,8 +228,13 @@ class PocketLabDiagnosticTest {
             mode = 0,
             sampleRate = 24_000,
             channelMask = 4,
-            encoding = 2
+            encoding = 2,
+            volumeControlStream = 3,
+            volumeControlStreamVolume = 7,
+            volumeControlStreamMax = 15
         )
+        diagnostic.routeAtPlay("type=2 address=speaker")
+        diagnostic.routeBeforeStop("type=2 address=speaker")
         val snapshot = diagnostic.snapshot()
         assertEquals(1f, snapshot.audioTrackVolume!!, 0f)
         assertEquals(7, snapshot.streamMusicVolume)
@@ -237,7 +242,12 @@ class PocketLabDiagnosticTest {
         assertEquals(24_000, snapshot.audioSampleRate)
         assertEquals(4, snapshot.audioChannelMask)
         assertEquals(2, snapshot.audioEncoding)
+        assertEquals("type=2 address=speaker", snapshot.routeAtPlay)
+        assertEquals("type=2 address=speaker", snapshot.routeBeforeStop)
+        assertEquals(3, snapshot.volumeControlStream)
         assertTrue(diagnostic.summary().contains("STREAM_MUSIC volume: 7"))
+        assertTrue(diagnostic.summary().contains("Attribute volume stream: 3 · volume=7/15"))
+        assertTrue(diagnostic.summary().contains("Route before stop: type=2 address=speaker"))
         assertTrue(diagnostic.summary().contains("Audio format: 24000 Hz"))
     }
 

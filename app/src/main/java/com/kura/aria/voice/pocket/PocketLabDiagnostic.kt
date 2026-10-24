@@ -127,8 +127,13 @@ internal data class PocketLabDiagnosticSnapshot(
     val failedWriteBeforeUnderrunCount: Int? = null,
     val trackSessionId: Int? = null,
     val routedDevice: String? = null,
+    val routeAtPlay: String? = null,
+    val routeBeforeStop: String? = null,
     val audioTrackVolume: Float? = null,
     val streamMusicVolume: Int? = null,
+    val volumeControlStream: Int? = null,
+    val volumeControlStreamVolume: Int? = null,
+    val volumeControlStreamMax: Int? = null,
     val audioMode: Int? = null,
     val audioSampleRate: Int? = null,
     val audioChannelMask: Int? = null,
@@ -292,12 +297,18 @@ internal class PocketLabDiagnostic(
         channelMask: Int,
         encoding: Int,
         usage: String? = null,
-        contentType: String? = null
+        contentType: String? = null,
+        volumeControlStream: Int? = null,
+        volumeControlStreamVolume: Int? = null,
+        volumeControlStreamMax: Int? = null
     ) {
         update {
             it.copy(
                 audioTrackVolume = trackVolume,
                 streamMusicVolume = musicVolume,
+                volumeControlStream = volumeControlStream,
+                volumeControlStreamVolume = volumeControlStreamVolume,
+                volumeControlStreamMax = volumeControlStreamMax,
                 audioMode = mode,
                 audioSampleRate = sampleRate,
                 audioChannelMask = channelMask,
@@ -314,6 +325,8 @@ internal class PocketLabDiagnostic(
 
     fun captureResult(result: String) { update { it.copy(captureResult = result) } }
     fun drainResult(result: String) { update { it.copy(drainResult = result) } }
+    fun routeAtPlay(route: String?) { update { it.copy(routeAtPlay = route) } }
+    fun routeBeforeStop(route: String?) { update { it.copy(routeBeforeStop = route) } }
     fun playbackFinal(head: Long?, underruns: Int?) {
         update { it.copy(playbackHeadPosition = head, finalUnderruns = underruns) }
     }
@@ -447,8 +460,13 @@ internal class PocketLabDiagnostic(
             value.lastWriteBeforeUnderrunCount?.let { append("Last before underruns: ").append(it).append('\n') }
             value.trackSessionId?.let { append("Session: ").append(it).append('\n') }
             value.routedDevice?.let { append("Route: ").append(it).append('\n') }
+            append("Route while playing: ").append(value.routeAtPlay ?: "—").append('\n')
+            append("Route before stop: ").append(value.routeBeforeStop ?: "—").append('\n')
             value.audioTrackVolume?.let { append("Track volume: ").append(it).append('\n') }
             value.streamMusicVolume?.let { append("STREAM_MUSIC volume: ").append(it).append('\n') }
+            append("Attribute volume stream: ").append(value.volumeControlStream ?: "—")
+                .append(" · volume=").append(value.volumeControlStreamVolume ?: "—")
+                .append('/').append(value.volumeControlStreamMax ?: "—").append('\n')
             append("Audio attributes: usage=").append(value.audioUsage ?: "—")
                 .append(" · contentType=").append(value.audioContentType ?: "—").append('\n')
             value.audioMode?.let { append("Audio mode: ").append(it).append('\n') }

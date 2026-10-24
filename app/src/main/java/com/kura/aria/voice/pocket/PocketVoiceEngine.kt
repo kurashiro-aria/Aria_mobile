@@ -157,6 +157,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         }
         val labTrackId = if (labDiagnostic != null) nextLabTrackId.getAndIncrement() else null
         if (labDiagnostic != null) {
+            val volumeStream = runCatching { track.audioAttributes.volumeControlStream }.getOrNull()
             labDiagnostic.trackCreated(
                 labTrackId!!,
                 track.state,
@@ -173,7 +174,14 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 channelMask = AudioFormat.CHANNEL_OUT_MONO,
                 encoding = AudioFormat.ENCODING_PCM_16BIT,
                 usage = "USAGE_ASSISTANT",
-                contentType = "CONTENT_TYPE_SPEECH"
+                contentType = "CONTENT_TYPE_SPEECH",
+                volumeControlStream = volumeStream,
+                volumeControlStreamVolume = volumeStream?.let { stream ->
+                    runCatching { audioManager?.getStreamVolume(stream) }.getOrNull()
+                },
+                volumeControlStreamMax = volumeStream?.let { stream ->
+                    runCatching { audioManager?.getStreamMaxVolume(stream) }.getOrNull()
+                }
             )
             labDiagnostic.trace(
                 "AUDIO_TRACK_CREATED",
@@ -252,6 +260,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
                 try {
                     track.play()
                     labDiagnostic?.audioPlayOk()
+                    labDiagnostic?.routeAtPlay(trackRoute(track))
+                    labDiagnostic?.trace("ROUTE_WHILE_PLAYING", "route=${trackRoute(track) ?: "—"}")
                     labDiagnostic?.trace("PLAY_END", "state=${track.state} play=${track.playState} head=${trackPlaybackHead(track) ?: "—"}")
                 } catch (error: Throwable) {
                     labDiagnostic?.audioPlayFailed("${error.javaClass.simpleName}: ${error.message ?: "no message"}")
@@ -429,6 +439,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             null
         } finally {
             labDiagnostic?.trackStopRequested()
+            labDiagnostic?.routeBeforeStop(trackRoute(track))
+            labDiagnostic?.trace("ROUTE_BEFORE_STOP", "route=${trackRoute(track) ?: "—"}")
             labDiagnostic?.playbackFinal(trackPlaybackHead(track),
                 (trackUnderruns(track)?.minus(underrunsBefore))?.coerceAtLeast(0))
             labDiagnostic?.trace("TRACK_STOP_BEGIN")
