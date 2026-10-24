@@ -129,6 +129,10 @@ jobs:
           echo "ARIA_SIGNING_KEYSTORE=$signing_path" >> "$GITHUB_ENV"
           echo "ARIA signing SHA256: $actual"
 
+      - name: Compile independent PCM device test
+        if: env.ARIA_BUILD_APK == 'true'
+        run: gradle :app:assembleDebugAndroidTest --stacktrace --console=plain
+
       - name: Build debug APK
         if: env.ARIA_BUILD_APK == 'true'
         env:

@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val ariaVersionName = "0.2.54"
+val ariaVersionName = "0.2.55"
 val cloudEndpoint = providers.gradleProperty("ARIA_CLOUD_ENDPOINT").orElse("https://aria-cloud-gateway.eduardo-rojas-a96.workers.dev").get()
 val cloudClientToken = providers.gradleProperty("ARIA_CLOUD_CLIENT_TOKEN").orElse("").get()
 
@@ -47,7 +47,8 @@ android {
         applicationId = "com.kura.aria"
         minSdk = 33
         targetSdk = 35
-        versionCode = 69
+        versionCode = 70
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionName = ariaVersionName
         resValue("string", "app_name", "ARIA Mobile $ariaVersionName")
         buildConfigField("String", "ARIA_CLOUD_ENDPOINT",
@@ -66,6 +67,8 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("org.apache.commons:commons-compress:1.27.1")

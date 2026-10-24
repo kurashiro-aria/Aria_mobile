@@ -264,6 +264,39 @@ class PocketLabDiagnosticTest {
         assertTrue(snapshot.trace.any { it.name == "DRAIN_END" })
     }
 
+    @Test fun oversizedFifthCallbackStartsPlaybackBeforeTrackCapacityIsFilled() {
+        val callbacks = listOf(1_920, 11_520, 6_000, 1_920, 28_800)
+        for (transport in PocketTransportMode.entries) {
+            val capacity = 96_000
+            var queued = 0
+            var playing = false
+            var bytesAtPlay = -1
+            val sink = ByteArrayOutputStream()
+            val pipeline = PocketPcm16Pipeline(
+                prebufferBytes = 48_000,
+                writer = { bytes, offset, length ->
+                    val accepted = minOf(length, capacity - queued)
+                    if (accepted > 0) {
+                        sink.write(bytes, offset, accepted)
+                        queued += accepted
+                        // A playing track consumes queued frames independently of synthesis.
+                        if (playing) queued = 0
+                    }
+                    accepted
+                },
+                onPlaybackStart = { bytesAtPlay = sink.size(); playing = true },
+                transportMode = transport
+            )
+            callbacks.forEach { pipeline.accept(FloatArray(it) { 0.2f }) }
+            pipeline.finish()
+
+            assertEquals(transport.name, 48_000, bytesAtPlay)
+            assertEquals(transport.name, callbacks.sum() * 2, sink.size())
+            assertEquals(transport.name, callbacks.sum().toLong(), pipeline.writtenSamples)
+            assertTrue(transport.name, pipeline.playbackStarted)
+        }
+    }
+
     @Test fun partialWritesExposeValidRangesAndPreserveEveryByte() {
         val source = ByteArray(10) { it.toByte() }
         val output = ByteArrayOutputStream()

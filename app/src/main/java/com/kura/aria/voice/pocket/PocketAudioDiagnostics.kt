@@ -446,10 +446,17 @@ internal class PocketPcm16Pipeline(
         pending.reset()
         pendingFirstCallback = 0
         pendingLastCallback = 0
-        // AudioTrack is filled before play(), never started empty.
-        write(buffered, sourceStart, sourceEnd)
+        // A decoder callback can push pending well past the one-second threshold.
+        // Writing the entire callback before play() can fill AudioTrack's two-second
+        // buffer: the next blocking write returns zero while playback is still STOPPED.
+        // Enqueue only the intended preroll, then let playback consume the remainder.
+        val prerollSize = minOf(buffered.size, prebufferBytes)
+        write(buffered.copyOfRange(0, prerollSize), sourceStart, sourceEnd)
         onPlaybackStart()
         playbackStarted = true
+        if (prerollSize < buffered.size) {
+            write(buffered.copyOfRange(prerollSize, buffered.size), sourceStart, sourceEnd)
+        }
     }
 
     private fun write(bytes: ByteArray, sourceCallbackStart: Int, sourceCallbackEnd: Int) {

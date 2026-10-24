@@ -81,6 +81,7 @@ import com.kura.aria.voice.pocket.PocketDiagnosticWav
 import com.kura.aria.voice.pocket.PocketIsolationLabWav
 import com.kura.aria.voice.pocket.PocketIsolationVariant
 import com.kura.aria.voice.pocket.PocketTransportMode
+import com.kura.aria.voice.pocket.PocketPcmOutputProbe
 import com.kura.aria.voice.pocket.PocketLabDiagnostic
 import com.kura.aria.voice.pocket.PocketLabStage
 import com.kura.aria.brain.BrainPipeline
@@ -1531,6 +1532,7 @@ class MainActivity : AppCompatActivity() {
         val labA = Button(this).apply { text = "PROBAR A · CONTROL KV ACTUAL / LSD1" }
         val labB = Button(this).apply { text = "PROBAR B · KV SEPARADO / LSD1" }
         val labC = Button(this).apply { text = "PROBAR C · KV SEPARADO / LSD3" }
+        val pcmProbe = Button(this).apply { text = "PROBAR SALIDA PCM SIN POCKET" }
         val transportLabel = TextView(this).apply { text = "Transporte AudioTrack (solo laboratorio)"; setPadding(0, dp(8), 0, 0) }
         val transportSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
@@ -1573,6 +1575,7 @@ class MainActivity : AppCompatActivity() {
         column.addView(labA)
         column.addView(labB)
         column.addView(labC)
+        column.addView(pcmProbe)
         column.addView(transportLabel)
         column.addView(transportSpinner)
         column.addView(shareLab)
@@ -1627,6 +1630,7 @@ class MainActivity : AppCompatActivity() {
             audioDiagnostic.isEnabled = installed && voices.isNotEmpty()
             val labIdle = pocketVoiceJob?.isActive != true && !pocketVoice.isolationLabRunning
             listOf(labA, labB, labC).forEach { it.isEnabled = installed && labIdle }
+            pcmProbe.isEnabled = labIdle
             shareLab.isEnabled = PocketIsolationLabWav.committedFiles(
                 cacheDir, lastPocketLabDiagnostic?.runId
             ).isNotEmpty() && labIdle
@@ -1825,6 +1829,20 @@ class MainActivity : AppCompatActivity() {
         labA.setOnClickListener { runIsolationVariant(PocketIsolationVariant.A_CONTROL) }
         labB.setOnClickListener { runIsolationVariant(PocketIsolationVariant.B_KV_SEPARATE) }
         labC.setOnClickListener { runIsolationVariant(PocketIsolationVariant.C_KV_SEPARATE_LSD3) }
+        pcmProbe.setOnClickListener {
+            if (pocketVoiceJob?.isActive == true || pocketVoice.isolationLabRunning) return@setOnClickListener
+            stopLocalVoice()
+            pocketVoiceJob = uiScope.launch {
+                val result = withContext(Dispatchers.IO) { PocketPcmOutputProbe.run() }
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Salida PCM independiente")
+                    .setMessage(result.summary())
+                    .setPositiveButton("CERRAR", null)
+                    .show()
+                refresh()
+            }
+            refresh()
+        }
         shareLab.setOnClickListener {
             val runDiagnostic = lastPocketLabDiagnostic
             val files = PocketIsolationLabWav.committedFiles(cacheDir, runDiagnostic?.runId)
