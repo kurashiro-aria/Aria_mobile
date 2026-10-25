@@ -98,6 +98,47 @@ class PocketPrePcmDiagnosticTest {
     }
 
     @Test
+    fun firstWavSamplesEqualPrerollAndConsecutiveRunsStartWithTheirOwnFirstSample() {
+        val directory = temporaryFolder.newFolder()
+        val starts = listOf(0.625f, -0.75f)
+        starts.forEachIndexed { run, first ->
+            val samples = FloatArray(50_160) { index ->
+                when {
+                    index == 0 -> first
+                    index < 2_400 -> if (index % 2 == 0) first else -first
+                    else -> 0.125f
+                }
+            }
+            val expected = PocketPcm.floatToPcm16(samples)
+            val sink = ByteArrayOutputStream()
+            var prerollAtPlay = ByteArray(0)
+            val floatFile = File(directory, "run${run}_float.wav")
+            val pcmFile = File(directory, "run${run}_pcm.wav")
+            val pipeline = PocketPcm16Pipeline(
+                writer = { bytes, offset, length -> sink.write(bytes, offset, length); length },
+                onPlaybackStart = { prerollAtPlay = sink.toByteArray() },
+                wavWriter = PocketWavWriter(pcmFile),
+                floatWavWriter = PocketFloatWavWriter(floatFile)
+            )
+            // Match the callbacks that previously filled 96,000 bytes before play().
+            var offset = 0
+            listOf(1_920, 11_520, 6_000, 1_920, 28_800).forEach { count ->
+                pipeline.accept(samples.copyOfRange(offset, offset + count))
+                offset += count
+            }
+            pipeline.finish()
+
+            assertEquals(48_000, prerollAtPlay.size)
+            assertArrayEquals(expected.copyOfRange(0, 48_000), prerollAtPlay)
+            assertArrayEquals(expected, sink.toByteArray())
+            assertArrayEquals(expected, pcmFile.readBytes().copyOfRange(44, pcmFile.length().toInt()))
+            assertEquals(first, ByteBuffer.wrap(floatFile.readBytes(), 44, 4)
+                .order(ByteOrder.LITTLE_ENDIAN).float)
+            assertEquals(samples.size.toLong(), pipeline.writtenSamples)
+        }
+    }
+
+    @Test
     fun pcm16ConversionAndQuantizationRemainWithinExpectedBound() {
         val samples = floatArrayOf(0f, 1f, -1f, 1.2f, -1.2f, 0.12345f, Float.NaN)
         val actual = PocketPcm.floatToPcm16(samples)
