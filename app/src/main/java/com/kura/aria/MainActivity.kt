@@ -1380,7 +1380,9 @@ class MainActivity : AppCompatActivity() {
                     lastPocketMetrics = pocketVoice.speak(
                         spokenText, emotion, expression,
                         replyTargets = evidence?.targets,
-                        onPcmCallback = evidence?.::onCallback
+                        onPcmCallback = evidence?.let { entry ->
+                            { samples: Int -> entry.onCallback(samples) }
+                        }
                     ) { state ->
                         if (state == "REPRODUCIENDO") playedPocketAudio = true
                         Log.i("ARIA.PocketVoice", "state=$state")
