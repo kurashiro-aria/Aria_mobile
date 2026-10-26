@@ -100,7 +100,8 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
         diagnosticCapture: PocketWavCapture? = null,
         runtimeConfig: PocketRuntimeConfig = PocketRuntimeConfig.normal(pack),
         transportMode: PocketTransportMode = PocketTransportMode.CURRENT_WRITES,
-        labDiagnostic: PocketLabDiagnostic? = null
+        labDiagnostic: PocketLabDiagnostic? = null,
+        onPcmCallback: ((Int) -> Unit)? = null
     ): PocketMetrics = withContext(dispatcher) {
         require(text.isNotBlank())
         if (!PocketInstallValidator.hasRequiredFiles(pack))
@@ -299,6 +300,7 @@ internal class PocketVoiceEngine(context: Context) : AutoCloseable {
             val ok = runtime.synthesize(text, voice.fileName, NativePocketTts.AudioSink { samples ->
                 if (cancelled.get() || Thread.currentThread().isInterrupted) return@AudioSink false
                 if (samples.isEmpty()) return@AudioSink true
+                onPcmCallback?.invoke(samples.size)
                 labDiagnostic?.callback(samples.size)
                 runCatching {
                     pipeline.accept(samples)

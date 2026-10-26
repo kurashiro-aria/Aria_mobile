@@ -78,6 +78,7 @@ import com.kura.aria.voice.pocket.PocketVoiceException
 import com.kura.aria.voice.pocket.PocketVoice
 import com.kura.aria.voice.pocket.PocketLabUiRefreshCoalescer
 import com.kura.aria.voice.pocket.PocketDiagnosticWav
+import com.kura.aria.voice.pocket.PocketReplyWavStore
 import com.kura.aria.voice.pocket.PocketIsolationLabWav
 import com.kura.aria.voice.pocket.PocketIsolationVariant
 import com.kura.aria.voice.pocket.PocketTransportMode
@@ -142,6 +143,8 @@ class MainActivity : AppCompatActivity() {
     private var speechOutput: LocalSpeechOutput? = null
     private lateinit var pocketVoice: PocketVoiceController
     private var pocketVoiceJob: Job? = null
+    private lateinit var pocketReplyWavs: PocketReplyWavStore
+    private val replyWavButtons = java.util.IdentityHashMap<TextView, Button>()
     private var pocketInstallJob: Job? = null
     private var pocketDialogRefresh: (() -> Unit)? = null
     private var pocketLabUiRefreshCoalescer: PocketLabUiRefreshCoalescer? = null
@@ -316,6 +319,8 @@ class MainActivity : AppCompatActivity() {
         updateNetworkStatus()
 
         chatHistory = ChatHistory(applicationContext)
+        pocketReplyWavs = PocketReplyWavStore(cacheDir)
+        pocketReplyWavs.cleanup()
         ariaMemory = AriaMemory(applicationContext)
         conversationManager = ConversationManager(applicationContext)
         if (voiceEnabled() && pocketVoice.preferences.engine == LocalVoiceEngine.ANDROID_FALLBACK) startVoice()
@@ -775,7 +780,7 @@ class MainActivity : AppCompatActivity() {
                         ?: "Todavía no tengo recuerdos que me hayas pedido guardar. Puedes decirme: «ARIA, recuerda que…»."
                 }
             } catch (e: Exception) { e.message ?: "No pude modificar la memoria local." }
-            user(message); aria(answer)
+            user(message); val answerView = aria(answer)
             lastEmotion = AriaEmotion.fromReply(answer)
             showPortrait(lastEmotion)
             uiScope.launch(Dispatchers.IO) {
@@ -785,7 +790,7 @@ class MainActivity : AppCompatActivity() {
             lastSpokenReply = answer to lastEmotion
             lastExpressionStyle = AriaEmotion.styleFor(lastEmotion, ExpressionStyle.NATURAL)
             logResolvedExpression(lastEmotion, lastExpressionStyle)
-            if (voiceEnabled()) speakReply(answer, lastEmotion, lastExpressionStyle)
+            if (voiceEnabled()) speakReply(answer, lastEmotion, lastExpressionStyle, answerView)
             if (wakeEnabled()) wakeService(AriaForegroundService.ACTION_WAKE_RESUME)
             return
         }
@@ -800,7 +805,7 @@ class MainActivity : AppCompatActivity() {
         val listeningEmotion = AriaEmotion.fromInteraction(turnMood, turnExpression, message, "")
         if (listeningEmotion != AriaEmotion.NEUTRAL) showPortrait(listeningEmotion)
         else if (message.startsWith("¿") || message.endsWith("?")) showPortrait(AriaEmotion.THINKING)
-        val reply = messageView("ARIA", "Preparando respuesta…"); conversation.addView(reply); scrollToBottom()
+        val reply = messageView("ARIA", "Preparando respuesta…"); conversation.addView(replyRow(reply)); scrollToBottom()
         uiScope.launch {
             try {
                 val preparationStarted = SystemClock.elapsedRealtime()
@@ -859,7 +864,7 @@ class MainActivity : AppCompatActivity() {
                     lastExpressionStyle = AriaEmotion.styleFor(lastEmotion, turnExpression.style)
                     logResolvedExpression(lastEmotion, lastExpressionStyle)
                     if (voiceEnabled() && (voiceInForeground || wakeEnabled()))
-                        speakReply(answer, lastEmotion, lastExpressionStyle)
+                        speakReply(answer, lastEmotion, lastExpressionStyle, reply)
                 }
                 else { generationFailures++; reply.text = "No llegué a completar una respuesta. Prueba con una pregunta más corta."; lastEmotion = AriaEmotion.NEUTRAL; showPortrait(lastEmotion) }
             } catch (e: CancellationException) { throw e }
@@ -970,7 +975,51 @@ class MainActivity : AppCompatActivity() {
         }; return uri.lastPathSegment ?: "modelo.gguf"
     }
 
-    private fun addMessage(who: String, message: String) { conversation.addView(messageView(who, message)); scrollToBottom() }
+    private fun addMessage(who: String, message: String): TextView {
+        val bubble = messageView(who, message)
+        conversation.addView(if (who == "ARIA") replyRow(bubble) else bubble)
+        scrollToBottom()
+        return bubble
+    }
+
+    private fun replyRow(bubble: TextView): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.START
+        addView(bubble)
+        val wav = Button(this@MainActivity).apply {
+            text = "WAV"
+            textSize = 12f
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(dp(10), 0, dp(10), 0)
+            visibility = View.GONE
+            setOnClickListener { (tag as? PocketReplyWavStore.Reply)?.let(::shareReplyWav) }
+        }
+        replyWavButtons[bubble] = wav
+        addView(wav, LinearLayout.LayoutParams(-2, dp(34)).apply {
+            marginStart = dp(8)
+            bottomMargin = dp(6)
+        })
+    }
+
+    private fun shareReplyWav(reply: PocketReplyWavStore.Reply) {
+        val files = runCatching { reply.shareFiles() }.getOrElse {
+            toast("El WAV temporal ya no está disponible")
+            return
+        }
+        val uris = files.map { FileProvider.getUriForFile(this, "$packageName.fileprovider", it) }
+        val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = "*/*"
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+            putExtra(Intent.EXTRA_TEXT, "Respuesta Pocket ${reply.id}")
+            clipData = ClipData.newUri(contentResolver, files.first().name, uris.first()).apply {
+                uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+            }
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { startActivity(Intent.createChooser(intent, "Compartir WAV de esta respuesta")) }
+            .onFailure { toast("No pude compartir el WAV") }
+    }
     private fun messageView(who: String, message: String) = TextView(this).apply {
         val isKura = who == "Kura"
         text = if (isKura) message else ariaMessageText(message)
@@ -1020,7 +1069,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private fun user(message: String) = addMessage("Kura", message)
-    private fun aria(message: String) = addMessage("ARIA", message)
+    private fun aria(message: String): TextView = addMessage("ARIA", message)
     private fun scrollToBottom() { scroll.post { scroll.fullScroll(View.FOCUS_DOWN) } }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     private fun showPortrait(emotion: AriaEmotion) {
@@ -1315,21 +1364,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun speakReply(answer: String, emotion: AriaEmotion,
-                           expression: ExpressionStyle = ExpressionStyle.NATURAL) {
+                           expression: ExpressionStyle = ExpressionStyle.NATURAL,
+                           replyView: TextView? = null) {
         cancelCloudVoicePlayback("new_reply")
         stopLocalVoice()
         val spokenText = com.kura.aria.voice.spokenTextForCloud(answer)
         if (spokenText.isBlank()) return
         if (pocketVoice.preferences.engine == LocalVoiceEngine.POCKET && pocketVoice.installed) {
+            val evidence = replyView?.takeIf { replyWavButtons.containsKey(it) }
+                ?.let { pocketReplyWavs.begin(answer, spokenText) }
             var playedPocketAudio = false
             pocketVoiceJob = uiScope.launch {
+                var evidenceState = PocketReplyWavStore.State.INCOMPLETE
                 try {
-                    lastPocketMetrics = pocketVoice.speak(spokenText, emotion, expression) { state ->
+                    lastPocketMetrics = pocketVoice.speak(
+                        spokenText, emotion, expression,
+                        replyTargets = evidence?.targets,
+                        onPcmCallback = evidence?.::onCallback
+                    ) { state ->
                         if (state == "REPRODUCIENDO") playedPocketAudio = true
                         Log.i("ARIA.PocketVoice", "state=$state")
                     }
+                    evidenceState = PocketReplyWavStore.State.COMPLETE
                     emotionalDiagnosticsView?.text = emotionalDiagnosticText()
-                } catch (cancelled: CancellationException) { throw cancelled }
+                } catch (cancelled: CancellationException) {
+                    evidenceState = PocketReplyWavStore.State.CANCELLED
+                    throw cancelled
+                }
                 catch (error: Throwable) {
                     lastPocketMetrics = pocketVoice.metrics
                     val message = (error as? PocketVoiceException)?.code?.userMessage
@@ -1340,6 +1401,10 @@ class MainActivity : AppCompatActivity() {
                         toast("$message · usando voz Android")
                         speakWithAndroid(spokenText, emotion, expression)
                     } else toast(message)
+                } finally {
+                    if (evidence?.finish(evidenceState) == true) {
+                        replyWavButtons[replyView]?.apply { tag = evidence; visibility = View.VISIBLE }
+                    }
                 }
             }
         } else {

@@ -43,6 +43,8 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
         text: String,
         emotion: AriaEmotion,
         expression: ExpressionStyle,
+        replyTargets: PocketDiagnosticTargets? = null,
+        onPcmCallback: ((Int) -> Unit)? = null,
         onState: (String) -> Unit = {}
     ): PocketMetrics {
         val pack = models.installedPack()
@@ -55,7 +57,8 @@ internal class PocketVoiceController(context: Context) : AutoCloseable {
             emotion,
             expression,
             onState = onState,
-            diagnosticTargets = PocketDiagnosticWav.forNormalChat(appContext.cacheDir)
+            diagnosticTargets = replyTargets ?: PocketDiagnosticWav.forNormalChat(appContext.cacheDir),
+            onPcmCallback = onPcmCallback
         )
     }
 
